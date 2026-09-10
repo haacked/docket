@@ -1,0 +1,21 @@
+# Build output
+/docket
+/dist/
+*.test
+*.out
+coverage.*
+
+# Scratch notes
+.notes/
+
+# Local environment
+.env
+.env.*
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# macOS
+.DS_Store
