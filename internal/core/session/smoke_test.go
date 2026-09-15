@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/haacked/docket/internal/core/clone"
@@ -47,6 +48,10 @@ func TestSmokeAgainstARealPullRequest(t *testing.T) {
 	}
 	t.Logf("prepared in %s", rec.Dir)
 
+	if plan.Tier == tier.Tier1 {
+		assertTier1(t, ctx, svc, rec, ref)
+	}
+
 	if plan.Tier == tier.Tier2 {
 		branch, err := svc.Git.CurrentBranch(ctx, rec.Dir)
 		if err != nil {
@@ -79,6 +84,39 @@ func TestSmokeAgainstARealPullRequest(t *testing.T) {
 		if _, err := os.Stat(rec.Dir); !os.IsNotExist(err) {
 			t.Errorf("the clone at %s survived", rec.Dir)
 		}
+	}
+	if plan.Tier == tier.Tier1 {
+		// cleanup deletes tier-2 clones only. Scratch is shared across reviews, so
+		// losing it to one abandon would take the other records' directory with it.
+		if _, err := os.Stat(svc.Paths.Scratch); err != nil {
+			t.Errorf("abandoning a tier-1 review removed the scratch directory: %v", err)
+		}
+	}
+}
+
+// assertTier1 checks what a fake cannot: that docket supplied no repository of
+// its own, and that the directory it does hand review-code sends review-code
+// looking in repos.conf rather than at a remote of docket's making.
+func assertTier1(t *testing.T, ctx context.Context, svc *Service, rec review.Record, ref pr.Ref) {
+	t.Helper()
+
+	if rec.Dir != svc.Paths.Scratch {
+		t.Errorf("tier-1 review runs in %s, want the scratch directory %s", rec.Dir, svc.Paths.Scratch)
+	}
+	if _, err := os.Stat(svc.Cloner.Dir(ref)); !os.IsNotExist(err) {
+		t.Errorf("docket cloned %s for a repository review-code already knows", svc.Cloner.Dir(ref))
+	}
+
+	// ensureScratch leaves the directory without a remote on purpose. review-code
+	// asks the working directory for its org and repo, and a remote here would
+	// answer with docket's own, which sends it down the in-repo path for the
+	// wrong repository instead of the cross-repo path through repos.conf.
+	res, err := exec.Real{}.Run(ctx, exec.CommandSpec{Path: "git", Args: []string{"remote"}, Dir: rec.Dir})
+	if err != nil {
+		t.Fatalf("git remote in %s: %v", rec.Dir, err)
+	}
+	if got := strings.TrimSpace(res.Stdout); got != "" {
+		t.Errorf("the scratch directory has remote %q, so review-code would read the wrong repository", got)
 	}
 }
 
