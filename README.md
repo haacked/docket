@@ -2,7 +2,7 @@
 
 docket is a terminal app for reviewing pull requests. You paste a PR URL, and docket starts a `claude` or `codex` session that runs the [review-code](https://github.com/haacked/review-code) skill against that PR. Once you submit the review, docket archives the record and deletes whatever it created.
 
-**Status: not yet functional.** This repository holds scaffolding only. Nothing below runs yet.
+**Status: early.** Starting a review in `claude`, reading what the session left on GitHub, and cleaning up after a submitted review are in place. Submitting from docket, reading the notes in the app, and running the review in `codex` are not.
 
 ## The workflow it replaces
 
@@ -26,20 +26,33 @@ docket drives the `claude` and `codex` CLIs under your existing subscription. It
 - Go 1.26, to build
 - git
 - `gh`, authenticated
-- `claude`, `codex`, or both
+- `claude`
 - [review-code](https://github.com/haacked/review-code), installed
 
-## Planned commands
+At startup docket checks that `git`, `gh`, and the engine's binary are on your PATH, so a missing tool fails before you start a review rather than inside one. It makes no network call until it needs one, and an authentication problem surfaces as the agent's own output.
+
+## Commands
 
 ```
 docket                                        open the dashboard
-docket https://github.com/org/repo/pull/123   open the dashboard and start a review of that PR
+docket https://github.com/org/repo/pull/123   open the dashboard with that PR ready to review
+docket --dry-run o/r#123                      say what would happen, start and record nothing
 ```
 
-Planned dashboard keys: `n` new review, `enter` resume, `s` submit, `o` open notes, `x` abandon, `a` show archived records, `r` refresh from GitHub.
+A pull request can be a URL, `org/repo#123`, or a bare number once `default_repo` is set in `config.toml`.
 
-State lives in `~/.docket`, which `DOCKET_HOME` overrides. It holds an append-only `index.jsonl`, `clones/` for shallow clones, `scratch/` for the launch directory, and `config.toml`.
+Dashboard keys: `n` new review, `enter` resume, `x` abandon, `r` refresh the selected record from GitHub, `R` refresh every record, `a` show archived records, `q` quit. `s` to submit and `o` to open the notes are next.
+
+State lives in `~/.docket`, which `DOCKET_HOME` or `--home` overrides. It holds an append-only `index.jsonl`, `clones/` for shallow clones, `scratch/` for the tier-1 launch directory, and `config.toml`. Two docket instances can run at once: every write appends one line while holding a lock, and nothing is rewritten in place.
+
+## Build
+
+```
+go build ./cmd/docket
+```
+
+`go install github.com/haacked/docket/cmd/docket@latest` works once the repository is published.
 
 ## License
 
-MIT
+MIT. See [LICENSE.md](LICENSE.md).
