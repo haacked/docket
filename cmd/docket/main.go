@@ -151,7 +151,7 @@ func requireTools(extra ...string) error {
 	return nil
 }
 
-const usage = `docket runs a pull request review in a claude or codex session.
+const usage = `docket runs a pull request review in a claude session. codex arrives in M2.
 
 Usage:
   docket [flags] [pull request]

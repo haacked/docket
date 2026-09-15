@@ -868,3 +868,54 @@ func TestExplainReportsWithoutProvisioningOrRecording(t *testing.T) {
 		t.Errorf("Explain fetched something: %v", gitc.calls)
 	}
 }
+
+func TestPrepareRefusesTheSamePullRequestInADifferentCase(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude"); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	// GitHub resolves an owner and a repository without case, so this is the same
+	// pull request and the same clone directory.
+	shouted := pr.Ref{Org: strings.ToUpper(unlisted.Org), Repo: strings.ToUpper(unlisted.Repo), Number: unlisted.Number}
+	if _, _, err := svc.Prepare(context.Background(), shouted, "claude"); err == nil {
+		t.Fatal("Prepare opened a second record for the same pull request under a different case")
+	}
+
+	records, err := svc.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Errorf("records = %d, want the one already open", len(records))
+	}
+}
+
+func TestResumeSpecRefusesWhenTheReviewSnapshotCannotRefresh(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := launched(t, svc, unlisted)
+
+	before, err := svc.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// GitHub is unreachable at resume. Keeping the old snapshot would let detection
+	// read a review submitted since the last session as this session's own.
+	ghc.reviewErr = errors.New("dial tcp: lookup api.github.com: no such host")
+
+	if _, _, err := svc.ResumeSpec(context.Background(), rec); err == nil {
+		t.Fatal("ResumeSpec launched with a stale review snapshot")
+	}
+
+	after, err := svc.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) || after[0].StartedAt != before[0].StartedAt {
+		t.Error("a refused resume still recorded a new detection window")
+	}
+}

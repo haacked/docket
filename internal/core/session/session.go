@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/haacked/docket/internal/core/clone"
@@ -113,22 +114,27 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 // a second Prepare is refused while it is open, so the user abandons it with x
 // and starts again with n.
 func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string) (review.Record, Plan, error) {
-	// A second record for the same pull request derives the same clone directory,
-	// so abandoning either one deletes the clone the other is still using.
-	records, err := s.Records()
-	if err != nil {
-		return review.Record{}, Plan{}, err
-	}
-	if i := slices.IndexFunc(records, func(r review.Record) bool {
-		return r.Ref == ref && r.State.Open()
-	}); i >= 0 {
-		return review.Record{}, Plan{}, fmt.Errorf("%s is already open; abandon it first", ref)
-	}
-
 	rec, plan, info, _, err := s.resolve(ctx, ref, engineName)
 	if err != nil {
 		return review.Record{}, Plan{}, err
 	}
+
+	// Two records for one pull request derive the same clone directory, so
+	// abandoning either deletes the clone the other is using. The read and the
+	// append take separate locks, so a second instance can still pass this check
+	// before either appends. The check sits here rather than before resolve to keep
+	// that window off the call to GitHub. Closing it needs a compare-and-append the
+	// store does not have.
+	records, err := s.Records()
+	if err != nil {
+		return review.Record{}, Plan{}, err
+	}
+	if slices.ContainsFunc(records, func(r review.Record) bool {
+		return sameRef(r.Ref, ref) && r.State.Open()
+	}) {
+		return review.Record{}, Plan{}, fmt.Errorf("%s is already open; abandon it first", ref)
+	}
+
 	if err := s.append(rec); err != nil {
 		return rec, plan, err
 	}
@@ -285,9 +291,14 @@ func (s *Service) launch(ctx context.Context, rec review.Record, resume bool) (r
 	rec.State = review.StateReviewing
 	rec.Err = ""
 	if resume {
-		if ids, err := s.priorIDs(ctx, rec.Ref); err == nil {
-			rec.PriorReviewIDs = ids
+		// A stale snapshot is worse than a refused resume. Keeping the old list
+		// would leave out a review submitted since the last session. Detection
+		// would then read that review as this session's own and archive against it.
+		ids, err := s.priorIDs(ctx, rec.Ref)
+		if err != nil {
+			return rec, spec, fmt.Errorf("refresh the submitted reviews for %s: %w", rec.Ref, err)
 		}
+		rec.PriorReviewIDs = ids
 	}
 
 	if err := s.append(rec); err != nil {
@@ -323,6 +334,13 @@ func (s *Service) Refresh(ctx context.Context, rec review.Record) (review.Record
 	// detect writes a new Err through recordErr when this attempt fails too.
 	rec.Err = ""
 	return s.detect(ctx, rec)
+}
+
+// sameRef reports whether two references name one pull request. GitHub compares an
+// owner and a repository name without case, so o/r#7 and O/R#7 are one review and
+// one clone directory.
+func sameRef(a, b pr.Ref) bool {
+	return a.Number == b.Number && strings.EqualFold(a.Org, b.Org) && strings.EqualFold(a.Repo, b.Repo)
 }
 
 // detectable reports whether a record has a session to measure GitHub against. A
