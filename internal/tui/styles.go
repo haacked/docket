@@ -3,7 +3,11 @@ package tui
 import "charm.land/lipgloss/v2"
 
 // styles are docket's colors and spacing. Colors are ANSI indexes so they follow
-// whatever palette the user's terminal already uses.
+// whatever palette the user's terminal already uses. Secondary text asks for
+// faint instead of ANSI 8. A theme may set that slot as close to its background
+// as it likes, and many set it too close to read. Faint dims the foreground the
+// terminal is already using, and a terminal that ignores it renders full
+// contrast rather than nothing.
 type styles struct {
 	Title    lipgloss.Style
 	Group    lipgloss.Style
@@ -30,9 +34,9 @@ func newStyles() styles {
 		Group:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("4")),
 		Row:      lipgloss.NewStyle(),
 		Selected: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3")),
-		Dim:      lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
+		Dim:      lipgloss.NewStyle().Faint(true),
 		Err:      lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
-		Footer:   lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
+		Footer:   lipgloss.NewStyle().Faint(true),
 		Label:    lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
 	}
 }
