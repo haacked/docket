@@ -9,6 +9,17 @@ import (
 	"github.com/haacked/docket/internal/core/review"
 )
 
+// Paths are the installed locations an engine needs to build a command. They are
+// configuration with defaults, so no engine names one of them itself. config
+// owns the layout behind them.
+type Paths struct {
+	// Grant are the directories the agent must be able to write to, beyond the
+	// one it runs in.
+	Grant []string
+	// CodexSessions is where codex records a session.
+	CodexSessions string
+}
+
 // Engine launches and resumes a review session.
 type Engine interface {
 	// Name is the value stored on the record.
@@ -19,10 +30,15 @@ type Engine interface {
 	// agent assigns its own.
 	NewSessionID() string
 	// Start begins a review of rec's pull request.
-	Start(rec review.Record, reviewCodeDir string) exec.CommandSpec
+	Start(rec review.Record, paths Paths) exec.CommandSpec
 	// Resume reopens the conversation Start left behind. It reports false when
 	// the record carries no id to resume, so the caller starts fresh instead.
-	Resume(rec review.Record, reviewCodeDir string) (exec.CommandSpec, bool)
+	Resume(rec review.Record, paths Paths) (exec.CommandSpec, bool)
+	// CaptureSessionID recovers the id of the session the record just ran, for
+	// an agent that assigns its own rather than taking one on the command line.
+	// It returns "" when there is nothing to capture, which is not an error: an
+	// engine that mints its own ids up front never has anything to find.
+	CaptureSessionID(rec review.Record, paths Paths) (string, error)
 }
 
 // For returns the engine with the given name.
@@ -30,8 +46,8 @@ func For(name string) (Engine, error) {
 	switch name {
 	case Claude{}.Name():
 		return Claude{}, nil
-	case "codex":
-		return nil, fmt.Errorf("the codex engine is not wired up yet")
+	case Codex{}.Name():
+		return Codex{}, nil
 	case "":
 		return nil, fmt.Errorf("no engine given")
 	default:
@@ -40,4 +56,4 @@ func For(name string) (Engine, error) {
 }
 
 // Names lists the engines docket can launch.
-func Names() []string { return []string{Claude{}.Name()} }
+func Names() []string { return []string{Claude{}.Name(), Codex{}.Name()} }

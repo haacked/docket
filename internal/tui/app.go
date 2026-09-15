@@ -23,6 +23,8 @@ import (
 	"github.com/haacked/docket/internal/tui/msg"
 	"github.com/haacked/docket/internal/tui/screens/dashboard"
 	"github.com/haacked/docket/internal/tui/screens/newreview"
+	"github.com/haacked/docket/internal/tui/screens/notes"
+	"github.com/haacked/docket/internal/tui/screens/submit"
 )
 
 // App is the root model.
@@ -35,6 +37,8 @@ type App struct {
 	screen msg.Screen
 	dash   dashboard.Model
 	newrev newreview.Model
+	sub    submit.Model
+	notes  notes.Model
 
 	width  int
 	height int
@@ -64,6 +68,8 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 			cfg.DefaultEngine,
 			cfg.DefaultRepo,
 		),
+		sub:   submit.New(submit.Styles{Label: s.Label, Dim: s.Dim, Selected: s.Selected}),
+		notes: notes.New(notes.Styles{Label: s.Label, Dim: s.Dim}),
 	}
 	if initialInput != "" {
 		app.screen = msg.NewReview
@@ -86,6 +92,13 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = message.Width, message.Height
 		a.dash.Width = message.Width
+		// Only the pane on screen is refitted. Re-wrapping a long review costs
+		// tens of milliseconds. A drag-resize sends a stream of these messages,
+		// and one follows every return from a child process. Opening the notes
+		// refits them, so a resize the pane sat out is not missed.
+		if a.screen == msg.Notes {
+			a.notes = a.notes.SetSize(message.Width, a.notesHeight())
+		}
 		return a, nil
 
 	case tea.KeyPressMsg:
@@ -133,6 +146,68 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case msg.RefreshRecords:
 		return a.refreshRecords(message)
 
+	case msg.OpenSubmit:
+		rec, ok := a.record(message.ID)
+		if !ok {
+			return a, nil
+		}
+		if !rec.Submittable() {
+			a.status = fmt.Sprintf("%s is %s; only a drafted review can be submitted", rec.Ref, rec.State)
+			return a, nil
+		}
+		a.sub = a.sub.For(rec, review.SubmitEventsFor(rec.Author, a.login()))
+		a.screen = msg.Submit
+		a.err = nil
+		return a, nil
+
+	case msg.SubmitReview:
+		rec, ok := a.record(message.ID)
+		if !ok {
+			return a, nil
+		}
+		if a.dryRun {
+			a.sub = a.sub.ClearBusy()
+			a.status = fmt.Sprintf("Would submit review %d on %s as %s", rec.ReviewID, rec.Ref, message.Event)
+			return a, nil
+		}
+		return a, a.submitReview(rec, message.Event, message.Body)
+
+	case msg.OpenNotes:
+		rec, ok := a.record(message.ID)
+		if !ok {
+			return a, nil
+		}
+		// Aim the pane at the record before the file is read, so the header is
+		// this record's rather than the last one's until the load lands. Both
+		// calls are cheap here: there is no markdown to wrap yet.
+		a.notes = a.notes.SetNotes(rec, "", false).SetSize(a.width, a.notesHeight())
+		a.screen = msg.Notes
+		a.err = nil
+		return a, a.loadNotes(rec)
+
+	case msg.EditNotes:
+		rec, ok := a.record(message.ID)
+		if !ok {
+			return a, nil
+		}
+		if a.dryRun {
+			a.status = "Would open " + rec.NotesPath + " in $EDITOR"
+			return a, nil
+		}
+		return a, a.editNotes(rec)
+
+	case notesLoadedMsg:
+		a.notes = a.notes.SetNotes(message.record, message.markdown, message.missing)
+		return a, nil
+
+	case editorExitedMsg:
+		if message.err != nil {
+			a.err = message.err
+		}
+		// The editor can leave the terminal dirty on its way out, so repaint
+		// before anything else draws.
+		return a, tea.Batch(tea.ClearScreen, a.loadNotes(message.record))
+
 	case recordsLoadedMsg:
 		a.dash = a.dash.SetRecords(message.records)
 		return a, nil
@@ -154,6 +229,11 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case detectedMsg:
 		delete(a.dash.Busy, message.record.ID)
 		a.status = describe(message.record)
+		// A submit that worked has nothing left on its screen to look at.
+		if message.submitted {
+			a.screen = msg.Dashboard
+			a.sub = a.sub.ClearBusy()
+		}
 		return a, a.loadRecords()
 
 	case statusMsg:
@@ -165,6 +245,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.err = message.err
 		a.dash.Busy = map[string]string{}
 		a.newrev = a.newrev.ClearBusy()
+		a.sub = a.sub.ClearBusy()
 		return a, a.loadRecords()
 	}
 
@@ -210,6 +291,10 @@ func (a App) routeToScreen(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch a.screen {
 	case msg.NewReview:
 		a.newrev, cmd = a.newrev.Update(message)
+	case msg.Submit:
+		a.sub, cmd = a.sub.Update(message)
+	case msg.Notes:
+		a.notes, cmd = a.notes.Update(message)
 	default:
 		a.dash, cmd = a.dash.Update(message)
 	}
@@ -223,6 +308,9 @@ func (a App) handoff(launch launchMsg) (tea.Model, tea.Cmd) {
 	cmd.Dir = launch.spec.Dir
 	cmd.Env = launch.spec.Env(os.Environ())
 	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if launch.editor {
+			return editorExitedMsg{record: launch.record, err: err}
+		}
 		return childExitedMsg{record: launch.record, err: err}
 	})
 }
@@ -238,6 +326,10 @@ func (a App) View() tea.View {
 	switch a.screen {
 	case msg.NewReview:
 		b.WriteString(a.newrev.View())
+	case msg.Submit:
+		b.WriteString(a.sub.View())
+	case msg.Notes:
+		b.WriteString(a.notes.View() + "\n")
 	default:
 		b.WriteString(a.dash.View() + "\n")
 	}
@@ -254,6 +346,17 @@ func (a App) View() tea.View {
 	view.MouseMode = tea.MouseModeNone
 	view.WindowTitle = "docket"
 	return view
+}
+
+// login is the user a pull request's author is compared against. The service
+// caches it the first time anything reads GitHub. The copy taken at startup is
+// empty until then, so the service's is the one that is current. The root is
+// built without a service in tests, which is what the fallback is for.
+func (a App) login() string {
+	if a.svc != nil {
+		return a.svc.Cfg.GitHubUser
+	}
+	return a.cfg.GitHubUser
 }
 
 func (a App) record(id string) (review.Record, bool) {
@@ -316,6 +419,47 @@ func (a App) afterExit(rec review.Record, childErr error) tea.Cmd {
 func (a App) abandon(rec review.Record) tea.Cmd {
 	svc := a.svc
 	return detected(func() (review.Record, error) { return svc.Abandon(rec) })
+}
+
+func (a App) submitReview(rec review.Record, event, body string) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		updated, err := svc.Submit(context.Background(), rec, event, body)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		return detectedMsg{record: updated, submitted: true}
+	}
+}
+
+func (a App) loadNotes(rec review.Record) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		markdown, missing, err := svc.Notes(rec)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		return notesLoadedMsg{record: rec, markdown: markdown, missing: missing}
+	}
+}
+
+// editNotes hands the terminal to $EDITOR the same way a review session gets it.
+func (a App) editNotes(rec review.Record) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		spec, err := svc.EditNotesSpec(rec)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		return launchMsg{record: rec, spec: spec, editor: true}
+	}
+}
+
+// notesHeight is the room the notes pane gets: the window less the title, the
+// record header, the status line, and the footer. It is never cached, because a
+// WindowSizeMsg follows every return from a child process.
+func (a App) notesHeight() int {
+	return max(a.height-9, 1)
 }
 
 func (a App) prepare(input, engineName string) tea.Cmd {

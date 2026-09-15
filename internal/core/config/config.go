@@ -15,15 +15,21 @@ import (
 // default, not a constant docket depends on.
 const DefaultReviewCodeDir = "~/.agents/skills/review-code"
 
+// DefaultCodexSessionsDir is where codex records a session. docket reads it to
+// recover the id of a session it just ran, because interactive codex takes no
+// session id on the command line.
+const DefaultCodexSessionsDir = "~/.codex/sessions"
+
 // EngineClaude is the engine docket uses when config.toml names none.
 const EngineClaude = "claude"
 
 // Config is config.toml.
 type Config struct {
-	ReviewCodeDir string `toml:"review_code_dir"`
-	DefaultEngine string `toml:"default_engine"`
-	GitHubUser    string `toml:"github_user"`
-	DefaultRepo   string `toml:"default_repo"`
+	ReviewCodeDir    string `toml:"review_code_dir"`
+	CodexSessionsDir string `toml:"codex_sessions_dir"`
+	DefaultEngine    string `toml:"default_engine"`
+	GitHubUser       string `toml:"github_user"`
+	DefaultRepo      string `toml:"default_repo"`
 }
 
 // Paths are the files and directories under DOCKET_HOME.
@@ -82,23 +88,30 @@ func (p Paths) CloneDir(org, repo string, number int) string {
 // Load reads config.toml and fills in defaults. A missing file is not an error.
 func Load(path string) (Config, error) {
 	cfg := Config{
-		ReviewCodeDir: DefaultReviewCodeDir,
-		DefaultEngine: EngineClaude,
+		ReviewCodeDir:    DefaultReviewCodeDir,
+		CodexSessionsDir: DefaultCodexSessionsDir,
+		DefaultEngine:    EngineClaude,
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			cfg.ReviewCodeDir = ExpandHome(cfg.ReviewCodeDir)
-			return cfg, nil
+			return expand(cfg), nil
 		}
 		return cfg, fmt.Errorf("read %s: %w", path, err)
 	}
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse %s: %w", path, err)
 	}
+	return expand(cfg), nil
+}
+
+// expand fills in the defaults a config.toml left out and resolves the ~ in
+// every path, so nothing downstream has to.
+func expand(cfg Config) Config {
 	cfg.ReviewCodeDir = ExpandHome(cmp.Or(cfg.ReviewCodeDir, DefaultReviewCodeDir))
+	cfg.CodexSessionsDir = ExpandHome(cmp.Or(cfg.CodexSessionsDir, DefaultCodexSessionsDir))
 	cfg.DefaultEngine = cmp.Or(cfg.DefaultEngine, EngineClaude)
-	return cfg, nil
+	return cfg
 }
 
 // Save writes config.toml. docket calls it to cache the GitHub login.
@@ -128,9 +141,21 @@ func (c Config) ReposConfPath() string {
 	return filepath.Join(c.ReviewCodeDir, "repos.conf")
 }
 
+// The directories review-code keeps under its installed skill.
+func (c Config) ReviewsDir() string   { return filepath.Join(c.ReviewCodeDir, ".reviews") }
+func (c Config) WorktreesDir() string { return filepath.Join(c.ReviewCodeDir, ".worktrees") }
+func (c Config) SessionsDir() string  { return filepath.Join(c.ReviewCodeDir, ".sessions") }
+
+// AgentDirs are the directories an agent has to be able to write to, beyond the
+// one it runs in. review-code keeps its notes, worktrees, and session state
+// outside the working root, and codex sandboxes writes to that root.
+func (c Config) AgentDirs() []string {
+	return []string{c.SessionsDir(), c.WorktreesDir(), c.ReviewsDir()}
+}
+
 // NotesPath is where review-code writes the review for a pull request.
 func (c Config) NotesPath(org, repo string, number int) string {
-	return filepath.Join(c.ReviewCodeDir, ".reviews", org, repo, fmt.Sprintf("pr-%d.md", number))
+	return filepath.Join(c.ReviewsDir(), org, repo, fmt.Sprintf("pr-%d.md", number))
 }
 
 // WorktreeDir is where review-code provisions its tier-1 worktree. docket
@@ -138,7 +163,7 @@ func (c Config) NotesPath(org, repo string, number int) string {
 // when it builds this path, so docket does too: a mixed-case ref otherwise names
 // a directory that is not there on a case-sensitive filesystem.
 func (c Config) WorktreeDir(org, repo string, number int) string {
-	return filepath.Join(c.ReviewCodeDir, ".worktrees", strings.ToLower(org), strings.ToLower(repo), fmt.Sprintf("pr-%d", number))
+	return filepath.Join(c.WorktreesDir(), strings.ToLower(org), strings.ToLower(repo), fmt.Sprintf("pr-%d", number))
 }
 
 // ExpandHome turns a leading ~ into the home directory.

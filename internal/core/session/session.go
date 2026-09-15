@@ -72,6 +72,13 @@ func (s *Service) newID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
+func (s *Service) enginePaths() engine.Paths {
+	return engine.Paths{
+		Grant:         s.Cfg.AgentDirs(),
+		CodexSessions: s.Cfg.CodexSessionsDir,
+	}
+}
+
 // Records lists every record, newest first, with open ones ahead of closed ones.
 func (s *Service) Records() ([]review.Record, error) {
 	records, err := s.Store.Load()
@@ -219,7 +226,7 @@ func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string) (P
 	if err != nil {
 		return Plan{}, exec.CommandSpec{}, err
 	}
-	return plan, eng.Start(rec, s.Cfg.ReviewCodeDir), nil
+	return plan, eng.Start(rec, s.enginePaths()), nil
 }
 
 // ensureScratch keeps the tier-1 launch directory a git repository with no
@@ -268,14 +275,14 @@ func (s *Service) specFor(rec review.Record, resume bool) (review.Record, exec.C
 	}
 
 	if resume {
-		if spec, ok := eng.Resume(rec, s.Cfg.ReviewCodeDir); ok {
+		if spec, ok := eng.Resume(rec, s.enginePaths()); ok {
 			return rec, spec, nil
 		}
 	}
 	if rec.SessionID == "" {
 		rec.SessionID = eng.NewSessionID()
 	}
-	return rec, eng.Start(rec, s.Cfg.ReviewCodeDir), nil
+	return rec, eng.Start(rec, s.enginePaths()), nil
 }
 
 func (s *Service) launch(ctx context.Context, rec review.Record, resume bool) (review.Record, exec.CommandSpec, error) {
@@ -321,6 +328,61 @@ func (s *Service) ExplainResume(rec review.Record) (exec.CommandSpec, error) {
 func (s *Service) AfterExit(ctx context.Context, rec review.Record, childErr error) (review.Record, error) {
 	if childErr != nil {
 		rec.Err = childErr.Error()
+	}
+	rec = s.captureSessionID(rec)
+	return s.detect(ctx, rec)
+}
+
+// captureSessionID stores the id of the session that just ran, for an engine
+// that names its own. It runs after every exit rather than only the first,
+// because resuming writes a further session and the record has to name the
+// newest one to resume again.
+//
+// A capture that finds nothing leaves the record alone. Losing the id costs a
+// resume, which specFor already handles by starting fresh, so it is not worth
+// failing the detection that follows.
+func (s *Service) captureSessionID(rec review.Record) review.Record {
+	eng, err := engine.For(rec.Engine)
+	if err != nil {
+		return rec
+	}
+	id, err := eng.CaptureSessionID(rec, s.enginePaths())
+	if err != nil {
+		rec.Err = err.Error()
+		return rec
+	}
+	if id != "" {
+		rec.SessionID = id
+	}
+	return rec
+}
+
+// Submit turns the session's pending review into a submitted one and closes the
+// record. It reads the outcome back off GitHub rather than assuming it. The
+// submitted review is no longer pending, which is what Decide reads as this
+// session's submission, so archiving and the tier-2 cleanup run through the path
+// detection already uses.
+func (s *Service) Submit(ctx context.Context, rec review.Record, event, body string) (review.Record, error) {
+	if !slices.Contains(review.SubmitEvents, event) {
+		return rec, fmt.Errorf("%q is not a review event; use one of %s", event, strings.Join(review.SubmitEvents, ", "))
+	}
+	if !rec.Submittable() {
+		return rec, fmt.Errorf("%s is %s with no pending review to submit", rec.Ref, rec.State)
+	}
+
+	// The screen offers the same list, but it reads a login the service owns and
+	// a fresh install has not cached one yet. Asking for it here is what makes
+	// the refusal certain.
+	me, err := s.Login(ctx)
+	if err != nil {
+		return s.recordErr(rec, err)
+	}
+	if !slices.Contains(review.SubmitEventsFor(rec.Author, me), event) {
+		return rec, fmt.Errorf("GitHub refuses an approval of your own pull request; submit %s as %s instead", rec.Ref, review.EventComment)
+	}
+
+	if err := s.GH.SubmitReview(ctx, rec.Ref, rec.ReviewID, event, body); err != nil {
+		return s.recordErr(rec, err)
 	}
 	return s.detect(ctx, rec)
 }
@@ -379,6 +441,52 @@ func (s *Service) detect(ctx context.Context, rec review.Record) (review.Record,
 		return rec, err
 	}
 	return s.Archive(rec)
+}
+
+// Notes reads the review review-code wrote for a record. A file that is not
+// there reports missing rather than failing: review-code writes it during the
+// session, so a record that has not reached one yet simply has no notes.
+func (s *Service) Notes(rec review.Record) (string, bool, error) {
+	if rec.NotesPath == "" {
+		return "", true, nil
+	}
+	data, err := os.ReadFile(rec.NotesPath)
+	if os.IsNotExist(err) {
+		return "", true, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read notes for %s: %w", rec.Ref, err)
+	}
+	return string(data), false, nil
+}
+
+// EditNotesSpec is the command that opens a record's notes in the user's editor.
+func (s *Service) EditNotesSpec(rec review.Record) (exec.CommandSpec, error) {
+	if rec.NotesPath == "" {
+		return exec.CommandSpec{}, fmt.Errorf("%s has no notes path", rec.Ref)
+	}
+	return EditorSpec(os.Getenv("EDITOR"), rec.NotesPath), nil
+}
+
+// DefaultEditor opens the notes when the environment names no editor. vi is on
+// every machine docket runs on.
+const DefaultEditor = "vi"
+
+// EditorSpec builds the command that opens path in editor, which is $EDITOR and
+// may carry arguments of its own, as "code --wait" does.
+//
+// The spec names no directory. The path is absolute, and the notes file may not
+// exist yet. Pointing the child at its parent would fail to start the editor on
+// exactly the record that has no notes to read.
+func EditorSpec(editor, path string) exec.CommandSpec {
+	fields := strings.Fields(editor)
+	if len(fields) == 0 {
+		fields = []string{DefaultEditor}
+	}
+	return exec.CommandSpec{
+		Path: fields[0],
+		Args: append(slices.Clone(fields[1:]), path),
+	}
 }
 
 // Archive cleans up what docket created and closes the record. It leaves

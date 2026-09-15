@@ -22,6 +22,13 @@ const (
 	StateUnreviewed State = "unreviewed"
 )
 
+// Submittable reports whether the record has a pending review to submit. The
+// dashboard gates the submit key on it and the service refuses anything else, so
+// the rule is stated once.
+func (r Record) Submittable() bool {
+	return r.State == StateDrafted && r.ReviewID != 0
+}
+
 // Open reports whether the record still wants the user's attention.
 func (s State) Open() bool {
 	switch s {

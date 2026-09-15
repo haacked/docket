@@ -11,16 +11,16 @@ internal/core/reposconf/    Parse, Resolve                                      
 internal/core/tier/         Decide                                                 pure
 internal/core/review/       Record, Event, State, Fold, Decide                     pure
 internal/core/index/        Store: JSONL append under flock, Load, Compact (Watch in M4)
-internal/core/config/       config.toml, DOCKET_HOME paths, review_code_dir
+internal/core/config/       config.toml, DOCKET_HOME paths, review_code_dir, codex_sessions_dir
 internal/core/exec/         Runner: Real, Fake
-internal/core/engine/       Engine interface; claude.go implements it, codex arrives in M2
+internal/core/engine/       Engine interface and Paths; claude.go and codex.go implement it
 internal/core/gh/           GitHub interface; shells to `gh api`
 internal/core/git/          Git interface; shells to `git`
 internal/core/clone/        the tier-2 clone sequence
-internal/core/session/      Service: Prepare, LaunchSpec, AfterExit, Abandon, Refresh (Submit in M2)
+internal/core/session/      Service: Prepare, LaunchSpec, AfterExit, Submit, Notes, Abandon, Refresh
 internal/tui/               root model, its own messages, keymap, styles; the only package that runs a CommandSpec
 internal/tui/msg/           the intents the screens send up to the root
-internal/tui/screens/       dashboard, newreview; notes and submit arrive in M2
+internal/tui/screens/       dashboard, newreview, submit, notes
 ```
 
 `internal/tui/msg` holds only the intents a screen sends up, and it imports nothing
@@ -49,8 +49,10 @@ These were verified while planning and shape the design. Don't rediscover them.
 - **review-code detects the repo from the working directory** (`~/.agents/skills/review-code/scripts/review-orchestrator.sh`, `handle_pr_review`). If the cwd is a git repo whose `gh repo view` owner/name matches the PR's org/repo, it takes the in-repo path: when `git branch --show-current` equals the PR's `headRefName`, agents read files directly (fast path); otherwise it fetches `pull/N/head` into `refs/review/pr-N` and agents read through `git show` (middle case). If the cwd is not that repo, it takes the cross-repo path: look up `org/repo` in `~/.agents/skills/review-code/repos.conf` (`helpers/repos-config.sh`, `resolve_local_clone`: case-insensitive key, tilde expansion, path must be a git repo), then `pr-worktree.sh provision` makes a blobless fetch and a detached worktree under `~/.agents/skills/review-code/.worktrees/<org>/<repo>/pr-<N>`, torn down at session end by `session-hooks/review-code-cleanup.sh`. No repos.conf entry means a diff-only review.
 - **Review notes** live at `~/.agents/skills/review-code/.reviews/<org>/<repo>/pr-<N>.md` (`helpers/config-helpers.sh`, `get_review_root`). They persist independently of any worktree or clone, so docket records the path and never moves the file.
 - **Submission is always explicit.** review-code's `create-draft-review.sh` posts a review with no `event`, which GitHub stores as `PENDING` with `submitted_at: null`. Submitting is `POST /repos/{o}/{r}/pulls/{n}/reviews/{id}/events` with `APPROVE`, `COMMENT`, or `REQUEST_CHANGES`. `~/.dotfiles/bin/pr-review.sh` (`fetch_pending_reviews`, `cmd_submit`) is the logic docket ports, except that docket paginates and that script does not.
-- **CLI facts** (Claude Code 2.1.268, codex-cli 0.150.1): `claude [prompt]` starts an interactive session with the prompt as the first message; `--session-id <uuid>` sets the id; `-r/--resume <id>` resumes; `-c/--continue` resumes the most recent conversation in the cwd; `--bg` starts a background session and prints its id; `-p/--print` is headless. `codex [prompt]` is interactive, `-C <dir>` sets the cwd, `codex resume <id>` resumes, `codex exec` is headless, and the skill is invoked as `$review-code`. Launched from inside a Claude session, codex needs `env -u CLAUDECODE -u CLAUDE_CONFIG_DIR`.
-- Interactive `codex` has no session-id flag. `CaptureSessionID` scans `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` for files with mtime at or after `StartedAt` and reads the first line, matching `session_meta.payload.cwd` against the record's directory.
+- **CLI facts** (Claude Code 2.1.268, codex-cli 0.150.1): `claude [prompt]` starts an interactive session with the prompt as the first message; `--session-id <uuid>` sets the id; `-r/--resume <id>` resumes; `-c/--continue` resumes the most recent conversation in the cwd; `--bg` starts a background session and prints its id; `-p/--print` is headless. `codex [prompt]` is interactive, `codex exec` is headless, and the skill is invoked as `$review-code`. `-C/--cd <dir>` and `--add-dir <dir>` are accepted by plain `codex`, `codex exec`, and `codex resume` alike (verified on 0.150.1), so resuming keeps the same working root and writable directories as the start. Launched from inside a Claude session, codex needs `env -u CLAUDECODE -u CLAUDE_CONFIG_DIR`.
+- Interactive `codex` has no session-id flag. `CaptureSessionID` scans `<codex_sessions_dir>/YYYY/MM/DD/rollout-*.jsonl` and reads the first line, which is a `session_meta` object. It matches `payload.cwd` against the record's directory, with both sides run through `EvalSymlinks` because codex records the resolved path. It filters on `payload.timestamp`, not the file's mtime: a rollout is appended to for as long as the session runs, so its mtime is the end of the session, not the start.
+- The rollout path's date directories and filename timestamp are **local** time while `payload.timestamp` is UTC, so `scanDays` builds its candidate directories in local time.
+- A `session_meta` payload carries both `id` and `session_id`. On a fresh session they are equal. A resumed session writes a new rollout whose `id` is its own and whose `session_id` is the thread it continues. Which of the two `codex resume` accepts after a resume is **unverified**: the check needs a working `codex` CLI, and the installed 0.150.1 is too old for this account's models (`gpt-6-astra` wants a newer CLI, and 0.150.1 cannot fall back to a model a ChatGPT account may use). docket sidesteps the question by storing `payload.id` of the newest matching rollout and re-capturing after **every** exit, which is correct under either answer as long as a rollout is resumable by its own id. Verify it when the CLI is upgraded.
 - The installed skill directory is a copy produced by `~/dev/haacked/review-code/install.sh`. The source is `github.com/haacked/review-code`.
 - Supacode has no "tab without a worktree" primitive, so docket runs in any terminal and does not talk to Supacode.
 
@@ -78,4 +80,8 @@ That is how to check the one thing fakes cannot: that the clone sequence really 
 
 ## Where the milestones stand
 
-M1 is in: the dashboard, the new review screen, the claude engine, post-session detection, archive with tier-2 cleanup, abandon, refresh, and `--dry-run`. Still to come: M2 (the submit screen, the notes viewer, codex with session id capture), M3 (background reviews), M4 (index watching, keymap help, install docs). Startup already compacts the log when it carries more than five events per record.
+M1 is in: the dashboard, the new review screen, the claude engine, post-session detection, archive with tier-2 cleanup, abandon, refresh, and `--dry-run`.
+
+M2 is in: the submit screen (`s`), the notes viewer (`v`, with `e` for `$EDITOR`), and the codex engine with session id capture. `Submit` posts the event and then re-reads GitHub through the same `detect` the rest of the app uses, so archiving and the tier-2 cleanup have one code path rather than two. The submit screen leaves `APPROVE` out when the record's author is the signed-in user, because GitHub answers 422 to approving your own pull request.
+
+Still to come: M3 (background reviews), M4 (index watching, keymap help, install docs). Startup already compacts the log when it carries more than five events per record.

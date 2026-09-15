@@ -32,8 +32,25 @@ type fakeGH struct {
 	infoErr   error
 	reviews   []review.GHReview
 	reviewErr error
-	submitted []string
+	submitted []submitCall
+	submitErr error
 	logins    int
+}
+
+// submitCall is one POST to the reviews events endpoint.
+type submitCall struct {
+	ref   pr.Ref
+	id    int64
+	event string
+	body  string
+}
+
+// ghStates maps a submission event to the state GitHub then reports the review
+// in, which is what detection reads back.
+var ghStates = map[string]string{
+	review.EventApprove:        "APPROVED",
+	review.EventComment:        "COMMENTED",
+	review.EventRequestChanges: "CHANGES_REQUESTED",
 }
 
 func (f *fakeGH) Login(context.Context) (string, error) {
@@ -47,9 +64,21 @@ func (f *fakeGH) Reviews(context.Context, pr.Ref) ([]review.GHReview, error) {
 	return f.reviews, f.reviewErr
 }
 
-func (f *fakeGH) SubmitReview(_ context.Context, _ pr.Ref, id int64, event, _ string) error {
-	f.submitted = append(f.submitted, event)
-	_ = id
+// SubmitReview records the call and, on success, leaves the review the way
+// GitHub does: no longer pending, with the time it was submitted.
+func (f *fakeGH) SubmitReview(_ context.Context, ref pr.Ref, id int64, event, body string) error {
+	f.submitted = append(f.submitted, submitCall{ref: ref, id: id, event: event, body: body})
+	if f.submitErr != nil {
+		return f.submitErr
+	}
+	for i := range f.reviews {
+		if f.reviews[i].ID != id {
+			continue
+		}
+		at := start.Add(time.Minute)
+		f.reviews[i].State = ghStates[event]
+		f.reviews[i].SubmittedAt = &at
+	}
 	return nil
 }
 
