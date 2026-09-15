@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	osexec "os/exec"
 	"slices"
@@ -103,7 +104,9 @@ func (Real) Run(ctx context.Context, spec CommandSpec) (Result, error) {
 }
 
 // Fake records calls and replays canned results. It looks a result up by the
-// first key that appears anywhere in the rendered command line.
+// lexically first key that appears anywhere in the rendered command line. Map
+// iteration is randomized, so the keys are sorted before matching: two keys that
+// both match one command line would otherwise pick a winner per run.
 type Fake struct {
 	Calls   []CommandSpec
 	Results map[string]Result
@@ -114,14 +117,14 @@ type Fake struct {
 func (f *Fake) Run(_ context.Context, spec CommandSpec) (Result, error) {
 	f.Calls = append(f.Calls, spec)
 	line := spec.String()
-	for key, err := range f.Errs {
+	for _, key := range slices.Sorted(maps.Keys(f.Errs)) {
 		if strings.Contains(line, key) {
-			return f.Results[key], err
+			return f.Results[key], f.Errs[key]
 		}
 	}
-	for key, res := range f.Results {
+	for _, key := range slices.Sorted(maps.Keys(f.Results)) {
 		if strings.Contains(line, key) {
-			return res, nil
+			return f.Results[key], nil
 		}
 	}
 	return f.Default, nil

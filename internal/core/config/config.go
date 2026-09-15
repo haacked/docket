@@ -134,9 +134,11 @@ func (c Config) NotesPath(org, repo string, number int) string {
 }
 
 // WorktreeDir is where review-code provisions its tier-1 worktree. docket
-// reports it and never deletes it.
+// reports it and never deletes it. review-code lowercases the org and the repo
+// when it builds this path, so docket does too: a mixed-case ref otherwise names
+// a directory that is not there on a case-sensitive filesystem.
 func (c Config) WorktreeDir(org, repo string, number int) string {
-	return filepath.Join(c.ReviewCodeDir, ".worktrees", org, repo, fmt.Sprintf("pr-%d", number))
+	return filepath.Join(c.ReviewCodeDir, ".worktrees", strings.ToLower(org), strings.ToLower(repo), fmt.Sprintf("pr-%d", number))
 }
 
 // ExpandHome turns a leading ~ into the home directory.

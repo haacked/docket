@@ -3,6 +3,8 @@ package review_test
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,5 +60,21 @@ func TestFoldClearsFieldsASnapshotZeroes(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got[0], cleared) {
 		t.Errorf("a snapshot that zeroes every field folded to %+v, want %+v", got[0], cleared)
+	}
+}
+
+// TestRecordFieldsAreNeverOmitEmpty asserts the tags directly, so a field added
+// later is covered whether or not someone remembers to set it in the literal
+// above. Tier is the field that showed why: it is absent from that literal, so
+// tagging it omitempty left TestFoldClearsFieldsASnapshotZeroes green while a
+// snapshot meant to clear it kept the stale value.
+func TestRecordFieldsAreNeverOmitEmpty(t *testing.T) {
+	typ := reflect.TypeOf(review.Record{})
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		tag := field.Tag.Get("json")
+		if slices.Contains(strings.Split(tag, ",")[1:], "omitempty") {
+			t.Errorf("Record.%s is tagged omitempty, so a snapshot that clears it drops the key and Fold keeps the stale value", field.Name)
+		}
 	}
 }

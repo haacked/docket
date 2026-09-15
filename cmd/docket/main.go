@@ -47,8 +47,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := paths.EnsureDirs(); err != nil {
-		return err
+	if !opts.dryRun {
+		if err := paths.EnsureDirs(); err != nil {
+			return err
+		}
 	}
 
 	cfg, err := config.Load(paths.Config)
@@ -67,8 +69,12 @@ func run() error {
 	}
 
 	store := index.New(paths.Index, paths.Lock)
-	if _, err := store.CompactIfNeeded(); err != nil {
-		return err
+	// Compaction rewrites the log, which is the one thing a dry run must not do.
+	// It runs here rather than in internal/tui, so the flag is read here too.
+	if !opts.dryRun {
+		if _, err := store.CompactIfNeeded(); err != nil {
+			return err
+		}
 	}
 
 	runner := exec.Real{}
@@ -157,6 +163,6 @@ field filled.
 Flags:
   --engine <name>   agent to run the review in (default from config.toml)
   --home <dir>      docket's state directory (default $DOCKET_HOME or ~/.docket)
-  --dry-run         report the commands that would run, change nothing
+  --dry-run         report the commands that would run, start and record nothing
   -h, --help        show this help
 `

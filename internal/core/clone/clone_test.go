@@ -16,13 +16,15 @@ import (
 // fakeGit records the commands a clone would run and keeps just enough state for
 // the checks the clone makes afterwards.
 type fakeGit struct {
-	calls      []string
-	branch     map[string]string
-	files      map[string]bool
-	failAt     string
-	repos      map[string]bool
-	emptyDir   bool
-	checkedOut string
+	calls       []string
+	branch      map[string]string
+	files       map[string]bool
+	failAt      string
+	repos       map[string]bool
+	emptyDir    bool
+	checkedOut  string
+	fetchBranch string
+	resetRef    string
 }
 
 func newFakeGit() *fakeGit {
@@ -61,7 +63,7 @@ func (f *fakeGit) FetchPR(_ context.Context, dir, _ string, _ int, branch string
 		return err
 	}
 	f.files[dir] = true
-	_ = branch
+	f.fetchBranch = branch
 	return nil
 }
 
@@ -74,7 +76,10 @@ func (f *fakeGit) Checkout(_ context.Context, dir, branch string) error {
 	return nil
 }
 
-func (f *fakeGit) ResetHard(_ context.Context, _, _ string) error { return f.record("reset") }
+func (f *fakeGit) ResetHard(_ context.Context, _, ref string) error {
+	f.resetRef = ref
+	return f.record("reset")
+}
 
 func (f *fakeGit) CurrentBranch(_ context.Context, dir string) (string, error) {
 	if err := f.record("current-branch"); err != nil {
@@ -207,8 +212,36 @@ func TestEnsureRefreshesACloneAlreadyOnTheHeadBranch(t *testing.T) {
 	if strings.Contains(strings.Join(g.calls, ","), "init") {
 		t.Errorf("an existing clone was rebuilt: %v", g.calls)
 	}
+	if !strings.Contains(strings.Join(g.calls, ","), "fetch") {
+		t.Errorf("an existing clone was not fetched: %v", g.calls)
+	}
 	if !strings.Contains(strings.Join(g.calls, ","), "reset") {
 		t.Errorf("an existing clone was not reset: %v", g.calls)
+	}
+	if g.fetchBranch != "" {
+		t.Errorf("fetched into branch %q, want FETCH_HEAD: git refuses to fetch into a checked-out branch", g.fetchBranch)
+	}
+	if g.resetRef != "FETCH_HEAD" {
+		t.Errorf("reset to %q, want FETCH_HEAD", g.resetRef)
+	}
+}
+
+func TestEnsureRebuildsACloneOnAnotherBranch(t *testing.T) {
+	cloner, g, paths := setup(t)
+	final := paths.CloneDir("haacked", "docket", 7)
+	if err := os.MkdirAll(final, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g.repos[final] = true
+	g.branch[final] = "stale"
+	g.files[final] = true
+
+	if _, err := cloner.Ensure(context.Background(), ref, info("topic")); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	if !strings.Contains(strings.Join(g.calls, ","), "init") {
+		t.Errorf("a clone on another branch was not rebuilt: %v", g.calls)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -108,8 +109,22 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 // Prepare resolves the pull request, works out the tier, provisions the
 // directory the session will run in, and snapshots the reviews that already
 // exist. The record is written before provisioning, so a clone that fails leaves
-// a row the user can retry.
+// a row carrying the reason. Nothing re-provisions that row: resume does not, and
+// a second Prepare is refused while it is open, so the user abandons it with x
+// and starts again with n.
 func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string) (review.Record, Plan, error) {
+	// A second record for the same pull request derives the same clone directory,
+	// so abandoning either one deletes the clone the other is still using.
+	records, err := s.Records()
+	if err != nil {
+		return review.Record{}, Plan{}, err
+	}
+	if i := slices.IndexFunc(records, func(r review.Record) bool {
+		return r.Ref == ref && r.State.Open()
+	}); i >= 0 {
+		return review.Record{}, Plan{}, fmt.Errorf("%s is already open; abandon it first", ref)
+	}
+
 	rec, plan, info, _, err := s.resolve(ctx, ref, engineName)
 	if err != nil {
 		return review.Record{}, Plan{}, err
@@ -205,7 +220,10 @@ func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string) (P
 // remote. review-code then reads the org and repo as unknown and takes its
 // cross-repo path, and interactive codex still sees a git repository.
 func (s *Service) ensureScratch(ctx context.Context) error {
-	if s.Git.IsRepo(ctx, s.Paths.Scratch) {
+	// Ask for this directory's own repository rather than git's, because
+	// `rev-parse --git-dir` walks up to an ancestor. A scratch directory inside a
+	// checkout would otherwise hand review-code that checkout's remote.
+	if _, err := os.Stat(filepath.Join(s.Paths.Scratch, ".git")); err == nil {
 		return nil
 	}
 	if err := s.Git.Init(ctx, s.Paths.Scratch); err != nil {
@@ -227,7 +245,11 @@ func (s *Service) ResumeSpec(ctx context.Context, rec review.Record) (review.Rec
 	return s.launch(ctx, rec, true)
 }
 
-func (s *Service) launch(ctx context.Context, rec review.Record, resume bool) (review.Record, exec.CommandSpec, error) {
+// specFor is the command a launch would run, and the record it would run it
+// against. It writes nothing, so the dry run and the real launch both go through
+// it and cannot drift apart. It returns the record because falling back to a
+// fresh start mints a session id the caller has to keep.
+func (s *Service) specFor(rec review.Record, resume bool) (review.Record, exec.CommandSpec, error) {
 	eng, err := engine.For(rec.Engine)
 	if err != nil {
 		return rec, exec.CommandSpec{}, err
@@ -239,15 +261,21 @@ func (s *Service) launch(ctx context.Context, rec review.Record, resume bool) (r
 		return rec, exec.CommandSpec{}, fmt.Errorf("%s is gone; start the review again", rec.Dir)
 	}
 
-	spec, ok := exec.CommandSpec{}, false
 	if resume {
-		spec, ok = eng.Resume(rec, s.Cfg.ReviewCodeDir)
-	}
-	if !ok {
-		if rec.SessionID == "" {
-			rec.SessionID = eng.NewSessionID()
+		if spec, ok := eng.Resume(rec, s.Cfg.ReviewCodeDir); ok {
+			return rec, spec, nil
 		}
-		spec = eng.Start(rec, s.Cfg.ReviewCodeDir)
+	}
+	if rec.SessionID == "" {
+		rec.SessionID = eng.NewSessionID()
+	}
+	return rec, eng.Start(rec, s.Cfg.ReviewCodeDir), nil
+}
+
+func (s *Service) launch(ctx context.Context, rec review.Record, resume bool) (review.Record, exec.CommandSpec, error) {
+	rec, spec, err := s.specFor(rec, resume)
+	if err != nil {
+		return rec, exec.CommandSpec{}, err
 	}
 
 	// Every launch opens a new detection window. A resume also re-snapshots the
@@ -269,16 +297,11 @@ func (s *Service) launch(ctx context.Context, rec review.Record, resume bool) (r
 }
 
 // ExplainResume is the command a resume would run, without recording anything. A
-// dry run needs to report it, and reporting is all it may do.
+// dry run needs to report it, and reporting is all it may do. The record specFor
+// returns is discarded, which is what keeps a minted session id off the log.
 func (s *Service) ExplainResume(rec review.Record) (exec.CommandSpec, error) {
-	eng, err := engine.For(rec.Engine)
-	if err != nil {
-		return exec.CommandSpec{}, err
-	}
-	if spec, ok := eng.Resume(rec, s.Cfg.ReviewCodeDir); ok {
-		return spec, nil
-	}
-	return eng.Start(rec, s.Cfg.ReviewCodeDir), nil
+	_, spec, err := s.specFor(rec, true)
+	return spec, err
 }
 
 // AfterExit reads what the finished session left on GitHub. It runs whatever the
@@ -293,7 +316,25 @@ func (s *Service) AfterExit(ctx context.Context, rec review.Record, childErr err
 
 // Refresh re-reads GitHub for a record whose session is over.
 func (s *Service) Refresh(ctx context.Context, rec review.Record) (review.Record, error) {
+	if !detectable(rec) {
+		return rec, fmt.Errorf("%s is %s, so there is no session to read GitHub against", rec.Ref, rec.State)
+	}
+	// The user asked for a fresh read, so drop what the last attempt recorded.
+	// detect writes a new Err through recordErr when this attempt fails too.
+	rec.Err = ""
 	return s.detect(ctx, rec)
+}
+
+// detectable reports whether a record has a session to measure GitHub against. A
+// record that never launched carries a zero StartedAt and no PriorReviewIDs, and
+// Decide then reads any earlier review of mine as this session's submission.
+func detectable(rec review.Record) bool {
+	switch rec.State {
+	case review.StateReviewing, review.StateDrafted, review.StateSubmitted, review.StateUnreviewed:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) detect(ctx context.Context, rec review.Record) (review.Record, error) {
@@ -353,9 +394,10 @@ func (s *Service) cleanup(rec review.Record) error {
 	return s.Cloner.Remove(rec.Dir)
 }
 
-// Reconcile re-runs detection on records left mid-session. docket was the parent
-// of every interactive session, so a record still reviewing at startup has no
-// live child.
+// Reconcile re-runs detection on records left mid-session. It assumes this is the
+// only docket instance. Another instance's session is still running against a
+// record that reads as reviewing here, and finding that review submitted archives
+// it, which deletes the clone that session is working in.
 func (s *Service) Reconcile(ctx context.Context) ([]review.Record, error) {
 	return s.detectWhere(ctx, func(rec review.Record) bool {
 		return rec.State == review.StateReviewing && rec.Mode == review.ModeInteractive
@@ -365,19 +407,12 @@ func (s *Service) Reconcile(ctx context.Context) ([]review.Record, error) {
 // RefreshAll re-reads GitHub for every record whose session is over, which is
 // what the dashboard's refresh-everything key asks for.
 func (s *Service) RefreshAll(ctx context.Context) ([]review.Record, error) {
-	return s.detectWhere(ctx, func(rec review.Record) bool {
-		switch rec.State {
-		case review.StateReviewing, review.StateDrafted, review.StateUnreviewed:
-			return true
-		default:
-			return false
-		}
-	})
+	return s.detectWhere(ctx, detectable)
 }
 
 // detectWhere re-reads GitHub for the records that match. A record whose
-// detection fails keeps its stored state, so one unreachable pull request does
-// not cost the user the rest of the list.
+// detection fails carries the error detect recorded on it, so one unreachable
+// pull request does not cost the user the rest of the list.
 func (s *Service) detectWhere(ctx context.Context, match func(review.Record) bool) ([]review.Record, error) {
 	records, err := s.Records()
 	if err != nil {
@@ -387,9 +422,11 @@ func (s *Service) detectWhere(ctx context.Context, match func(review.Record) boo
 		if !match(rec) {
 			continue
 		}
-		if updated, err := s.detect(ctx, rec); err == nil {
-			records[i] = updated
-		}
+		rec.Err = ""
+		// detect returns the record with its error already recorded, so taking it
+		// either way is what puts that error on the row.
+		updated, _ := s.detect(ctx, rec)
+		records[i] = updated
 	}
 	return records, nil
 }

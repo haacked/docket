@@ -124,6 +124,9 @@ func (c *Cloner) verify(ctx context.Context, dir, branch string) error {
 	return nil
 }
 
+// refresh reuses a clone already sitting on the head branch. Any failure returns
+// false, so Ensure rebuilds from scratch. A cause that persists surfaces as the
+// rebuild's own error.
 func (c *Cloner) refresh(ctx context.Context, dir string, ref pr.Ref, branch string) (bool, error) {
 	if !c.Git.IsRepo(ctx, dir) {
 		return false, nil
@@ -132,10 +135,13 @@ func (c *Cloner) refresh(ctx context.Context, dir string, ref pr.Ref, branch str
 	if err != nil || current != branch {
 		return false, nil
 	}
-	if err := c.Git.FetchPR(ctx, dir, "origin", ref.Number, branch, Depth); err != nil {
+	// The destination branch is checked out here, and git refuses to fetch into a
+	// checked-out branch, so the head lands in FETCH_HEAD and the reset moves the
+	// branch to it.
+	if err := c.Git.FetchPR(ctx, dir, "origin", ref.Number, "", Depth); err != nil {
 		return false, nil
 	}
-	if err := c.Git.ResetHard(ctx, dir, branch); err != nil {
+	if err := c.Git.ResetHard(ctx, dir, "FETCH_HEAD"); err != nil {
 		return false, nil
 	}
 	if err := c.verify(ctx, dir, branch); err != nil {

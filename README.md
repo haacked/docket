@@ -36,7 +36,7 @@ At startup docket checks that `git`, `gh`, and the engine's binary are on your P
 ```
 docket                                        open the dashboard
 docket https://github.com/org/repo/pull/123   open the dashboard with that PR ready to review
-docket --dry-run o/r#123                      say what would happen, change nothing
+docket --dry-run o/r#123                      say what would happen, start and record nothing
 ```
 
 A pull request can be a URL, `org/repo#123`, or a bare number once `default_repo` is set in `config.toml`.

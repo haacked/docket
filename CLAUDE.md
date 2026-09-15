@@ -10,14 +10,14 @@ internal/core/pr/           Ref{Org,Repo,Number}, ParseRef                      
 internal/core/reposconf/    Parse, Resolve                                         pure, filesystem via callback
 internal/core/tier/         Decide                                                 pure
 internal/core/review/       Record, Event, State, Fold, Decide                     pure
-internal/core/index/        Store: JSONL append under flock, Load, Compact, Watch
+internal/core/index/        Store: JSONL append under flock, Load, Compact (Watch in M4)
 internal/core/config/       config.toml, DOCKET_HOME paths, review_code_dir
-internal/core/exec/         Runner: Real, DryRun, Fake
+internal/core/exec/         Runner: Real, Fake
 internal/core/engine/       Engine interface; claude.go implements it, codex arrives in M2
 internal/core/gh/           GitHub interface; shells to `gh api`
 internal/core/git/          Git interface; shells to `git`
 internal/core/clone/        the tier-2 clone sequence
-internal/core/session/      Service: Prepare, LaunchSpec, AfterExit, Submit, Abandon, Refresh
+internal/core/session/      Service: Prepare, LaunchSpec, AfterExit, Abandon, Refresh (Submit in M2)
 internal/tui/               root model, its own messages, keymap, styles; the only package that runs a CommandSpec
 internal/tui/msg/           the intents the screens send up to the root
 internal/tui/screens/       dashboard, newreview; notes and submit arrive in M2
@@ -35,12 +35,12 @@ Dependency direction is `tui -> session -> {engine, gh, git, index, clone, tier,
 ## Rules
 
 - Nothing under `internal/core` imports Charm or `internal/tui`. `internal/tui/deps_test.go` asserts this with `go list -deps`.
-- Only `internal/tui` touches `os/exec`. Core returns `exec.CommandSpec{Path, Args, Dir, Unset}` and the TUI runs it.
+- `os/exec` is called in three places only: `internal/core/exec`'s `Real` runner, which runs the commands that need nothing but their output; `internal/tui`, which runs the one command that needs the terminal; and `cmd/docket` for the `LookPath` check at startup. Every other core package builds an `exec.CommandSpec{Path, Args, Dir, Unset}` and hands it over. `deps_test.go` asserts this by reading direct imports, because `go list -deps` reports `os/exec` for every core package: they all reach it transitively through `internal/core/exec`.
 - Core packages reach the filesystem, git, and GitHub through interfaces, so tests use fakes instead of a real repo or network.
 - Installed `review-code` paths are configuration with defaults, never hardcoded constants.
 - docket never uses an Anthropic or OpenAI API key. It drives the `claude` and `codex` CLIs under the user's subscription.
 - Pin exact versions of the Charm modules in go.mod. The v2 import paths are `charm.land/...`, not `github.com/charmbracelet/...`.
-- A dry run is stopped in `internal/tui`, not in a runner. Most of what a dry run must not do is a write to the index or the filesystem, so no `exec.Runner` ever sees it. `session.Explain` and `session.ExplainResume` build what would run without recording anything, and the root model reports that instead of acting.
+- A dry run is stopped in `internal/tui`, not in a runner. Most of what a dry run must not do is a write to the index or the filesystem, so no `exec.Runner` ever sees it. `session.Explain` and `session.ExplainResume` build what would run without recording anything, and the root model reports that instead of acting. `cmd/docket` is the one exception: `EnsureDirs` and `CompactIfNeeded` run before the TUI exists, so they read the flag themselves. Reading the index still creates the home directory and the lock file, because `Store.lock` opens it with `O_CREATE` on the shared path too, so a dry run records nothing rather than writing nothing.
 
 ## Verified facts about review-code
 

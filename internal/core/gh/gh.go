@@ -42,11 +42,12 @@ type CLI struct {
 
 func New(runner exec.Runner) *CLI { return &CLI{Runner: runner, Path: "gh"} }
 
+func (c *CLI) run(ctx context.Context, args ...string) (exec.Result, error) {
+	return c.Runner.Run(ctx, exec.CommandSpec{Path: cmp.Or(c.Path, "gh"), Args: args})
+}
+
 func (c *CLI) Login(ctx context.Context) (string, error) {
-	res, err := c.Runner.Run(ctx, exec.CommandSpec{
-		Path: cmp.Or(c.Path, "gh"),
-		Args: []string{"api", "user", "--jq", ".login"},
-	})
+	res, err := c.run(ctx, "api", "user", "--jq", ".login")
 	if err != nil {
 		return "", fmt.Errorf("gh api user: %w", err)
 	}
@@ -58,14 +59,11 @@ func (c *CLI) Login(ctx context.Context) (string, error) {
 }
 
 func (c *CLI) PR(ctx context.Context, ref pr.Ref) (PRInfo, error) {
-	res, err := c.Runner.Run(ctx, exec.CommandSpec{
-		Path: cmp.Or(c.Path, "gh"),
-		Args: []string{
-			"pr", "view", strconv.Itoa(ref.Number),
-			"--repo", ref.Slug(),
-			"--json", "number,title,author,headRefName",
-		},
-	})
+	res, err := c.run(ctx,
+		"pr", "view", strconv.Itoa(ref.Number),
+		"--repo", ref.Slug(),
+		"--json", "number,title,author,headRefName",
+	)
 	if err != nil {
 		return PRInfo{}, fmt.Errorf("gh pr view %s: %w", ref, err)
 	}
@@ -82,13 +80,10 @@ func (c *CLI) PR(ctx context.Context, ref pr.Ref) (PRInfo, error) {
 // Reviews lists every review on the pull request. --slurp wraps the pages in an
 // outer array, so the result is a list of pages to flatten.
 func (c *CLI) Reviews(ctx context.Context, ref pr.Ref) ([]review.GHReview, error) {
-	res, err := c.Runner.Run(ctx, exec.CommandSpec{
-		Path: cmp.Or(c.Path, "gh"),
-		Args: []string{
-			"api", "--paginate", "--slurp",
-			fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", ref.Org, ref.Repo, ref.Number),
-		},
-	})
+	res, err := c.run(ctx,
+		"api", "--paginate", "--slurp",
+		fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", ref.Org, ref.Repo, ref.Number),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("gh api reviews for %s: %w", ref, err)
 	}
@@ -115,7 +110,7 @@ func (c *CLI) SubmitReview(ctx context.Context, ref pr.Ref, reviewID int64, even
 	if body != "" {
 		args = append(args, "-f", "body="+body)
 	}
-	if _, err := c.Runner.Run(ctx, exec.CommandSpec{Path: cmp.Or(c.Path, "gh"), Args: args}); err != nil {
+	if _, err := c.run(ctx, args...); err != nil {
 		return fmt.Errorf("submit review %d on %s: %w", reviewID, ref, err)
 	}
 	return nil

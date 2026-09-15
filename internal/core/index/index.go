@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/haacked/docket/internal/core/review"
@@ -119,6 +120,9 @@ func (s *Store) Compact() error {
 	if err != nil {
 		return err
 	}
+	if i := slices.IndexFunc(events, func(e review.Event) bool { return !review.KnownEvent(e) }); i >= 0 {
+		return fmt.Errorf("event type %q is not one this docket knows; compacting would delete it", events[i].Type)
+	}
 	return s.compactLocked(review.Fold(events))
 }
 
@@ -134,6 +138,12 @@ func (s *Store) CompactIfNeeded() (bool, error) {
 	events, err := s.readEvents()
 	if err != nil {
 		return false, err
+	}
+	// A log carrying an event this build does not know belongs to a newer docket.
+	// Rewriting it from the fold would delete that event, so leave the file alone
+	// and let the newer binary compact it. The log grows meanwhile.
+	if slices.ContainsFunc(events, func(e review.Event) bool { return !review.KnownEvent(e) }) {
+		return false, nil
 	}
 	records := review.Fold(events)
 	if len(records) == 0 || len(events) <= CompactRatio*len(records) {

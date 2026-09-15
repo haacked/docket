@@ -25,13 +25,6 @@ import (
 	"github.com/haacked/docket/internal/tui/screens/newreview"
 )
 
-type screenID int
-
-const (
-	screenDashboard screenID = iota
-	screenNewReview
-)
-
 // App is the root model.
 type App struct {
 	svc    *session.Service
@@ -39,7 +32,7 @@ type App struct {
 	styles styles
 	dryRun bool
 
-	screen screenID
+	screen msg.Screen
 	dash   dashboard.Model
 	newrev newreview.Model
 
@@ -73,7 +66,7 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 		),
 	}
 	if initialInput != "" {
-		app.screen = screenNewReview
+		app.screen = msg.NewReview
 		app.newrev = app.newrev.SetValue(initialInput)
 	}
 	return app
@@ -102,8 +95,8 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a.routeToScreen(message)
 
 	case msg.Goto:
-		a.screen = screenID(message.Screen)
-		if a.screen == screenNewReview {
+		a.screen = message.Screen
+		if a.screen == msg.NewReview {
 			a.newrev = a.newrev.Reset()
 		}
 		a.err = nil
@@ -145,7 +138,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case preparedMsg:
-		a.screen = screenDashboard
+		a.screen = msg.Dashboard
 		a.status = message.plan.Description()
 		return a, a.launch(message.record, false)
 
@@ -164,7 +157,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.loadRecords()
 
 	case statusMsg:
-		a.screen = screenDashboard
+		a.screen = msg.Dashboard
 		a.status = message.text
 		return a, nil
 
@@ -205,7 +198,7 @@ func (a App) globalKey(key tea.KeyPressMsg) (bool, App, tea.Cmd) {
 	case "ctrl+c":
 		return true, a, tea.Quit
 	case "q":
-		if a.screen == screenDashboard {
+		if a.screen == msg.Dashboard {
 			return true, a, tea.Quit
 		}
 	}
@@ -215,7 +208,7 @@ func (a App) globalKey(key tea.KeyPressMsg) (bool, App, tea.Cmd) {
 func (a App) routeToScreen(message tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch a.screen {
-	case screenNewReview:
+	case msg.NewReview:
 		a.newrev, cmd = a.newrev.Update(message)
 	default:
 		a.dash, cmd = a.dash.Update(message)
@@ -243,7 +236,7 @@ func (a App) View() tea.View {
 	b.WriteString("\n\n")
 
 	switch a.screen {
-	case screenNewReview:
+	case msg.NewReview:
 		b.WriteString(a.newrev.View())
 	default:
 		b.WriteString(a.dash.View() + "\n")

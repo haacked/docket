@@ -35,6 +35,9 @@ var groups = []struct {
 }{
 	{Title: "Reviewing", States: []review.State{review.StateReviewing, review.StatePreparing}},
 	{Title: "Drafted", States: []review.State{review.StateDrafted}},
+	// A submitted record is one whose archiving did not finish. Listing it keeps
+	// it selectable, so a refresh retries the archive.
+	{Title: "Submitted", States: []review.State{review.StateSubmitted}},
 	{Title: "Unreviewed", States: []review.State{review.StateUnreviewed}},
 	{Title: "Archived", States: []review.State{review.StateArchived, review.StateAbandoned}, Closed: true},
 }
@@ -53,11 +56,20 @@ func New(styles Styles) Model {
 	return Model{Styles: styles, Busy: map[string]string{}}
 }
 
-// SetRecords replaces the list and keeps the cursor on a row that exists. The
+// SetRecords replaces the list and keeps the cursor on the record it was on. The
 // cursor ranges over the visible rows, which is fewer than the records whenever
-// archived ones are hidden.
+// archived ones are hidden, and detection reorders those rows by moving a record
+// between groups. Following the record rather than the position is what stops a
+// background refresh from sliding a different review under an unconfirmed x.
 func (m Model) SetRecords(records []review.Record) Model {
+	selected, had := m.Selected()
 	m.Records = records
+	if had {
+		if i := slices.IndexFunc(m.rows(), func(r review.Record) bool { return r.ID == selected.ID }); i >= 0 {
+			m.Cursor = i
+			return m
+		}
+	}
 	return m.clampCursor()
 }
 
@@ -221,9 +233,15 @@ func (m Model) width() int {
 
 func (m Model) titleWidth() int { return max(20, m.width()-34) }
 
+// truncate counts runes, not bytes. width is a column budget, and a pull request
+// title carrying an accent or an emoji otherwise gets cut inside a character.
 func truncate(s string, width int) string {
-	if width <= 1 || len(s) <= width {
+	if width <= 1 {
 		return s
 	}
-	return s[:width-1] + "…"
+	r := []rune(s)
+	if len(r) <= width {
+		return s
+	}
+	return string(r[:width-1]) + "…"
 }

@@ -26,6 +26,28 @@ func TestFetchPRAsksForJustThePullRequestHead(t *testing.T) {
 			t.Errorf("command %s is missing %q", line, want)
 		}
 	}
+
+	reset := strings.Index(line, "credential.helper= ")
+	helper := strings.Index(line, "credential.helper=!gh")
+	if reset < 0 || reset > helper {
+		t.Errorf("command %s does not reset credential.helper before setting it, so an existing helper still runs first", line)
+	}
+}
+
+func TestFetchPRLeavesTheHeadInFetchHeadWhenNoBranchIsNamed(t *testing.T) {
+	fake := &exec.Fake{}
+
+	if err := New(fake).FetchPR(context.Background(), "/tmp/clone", "origin", 7, "", 1); err != nil {
+		t.Fatalf("FetchPR: %v", err)
+	}
+
+	line := fake.Lines()[0]
+	if !strings.Contains(line, "origin pull/7/head") {
+		t.Errorf("command %s does not fetch the head without a destination ref", line)
+	}
+	if strings.Contains(line, "refs/heads/") {
+		t.Errorf("command %s names a destination branch; git refuses to fetch into a checked-out branch", line)
+	}
 }
 
 func TestFetchPRLeavesOutTheDepthWhenItIsNotLimited(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -357,6 +358,21 @@ func TestAfterExitArchivesAndDeletesTheCloneOnSubmission(t *testing.T) {
 	if _, err := os.Stat(done.NotesPath); err == nil {
 		t.Error("docket should not create the notes file itself")
 	}
+	if done.SubmittedAt == nil || !done.SubmittedAt.Equal(at) {
+		t.Errorf("submitted at %v, want the time GitHub reported (%v)", done.SubmittedAt, at)
+	}
+	if done.ArchivedAt == nil {
+		t.Error("the record carries no archived time")
+	}
+
+	// The archived event has to reach the log, not just the returned record.
+	stored, err := svc.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored[0].State != review.StateArchived {
+		t.Errorf("the stored record is %q, want archived", stored[0].State)
+	}
 }
 
 func TestAfterExitKeepsTheCloneWhenOnlyADraftExists(t *testing.T) {
@@ -573,6 +589,22 @@ func TestExplainResumeFallsBackToAFreshReview(t *testing.T) {
 	if !strings.Contains(spec.String(), "/review-code "+rec.URL+" --draft") {
 		t.Errorf("spec = %s, want a fresh review", spec)
 	}
+	// A real fallback mints a session id, so the reported command must carry one
+	// too, or the dry run describes a command that is not the one that would run.
+	if !strings.Contains(spec.String(), "--session-id ") {
+		t.Errorf("spec = %s, want the session id a real fallback would mint", spec)
+	}
+}
+
+func TestExplainResumeSaysSoWhenTheCloneIsGone(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := launched(t, svc, unlisted)
+	rec.Dir = filepath.Join(t.TempDir(), "deleted")
+
+	if _, err := svc.ExplainResume(rec); err == nil {
+		t.Error("ExplainResume reported a command for a clone that is gone, which a real resume would refuse")
+	}
 }
 
 func TestRefreshAllReReadsEveryRecordWhoseSessionIsOver(t *testing.T) {
@@ -630,5 +662,209 @@ func TestReconcileLeavesSettledRecordsAlone(t *testing.T) {
 	}
 	if records[0].State != review.StateDrafted {
 		t.Errorf("state = %q, want the drafted record left as it was", records[0].State)
+	}
+}
+
+// TestRefreshRefusesARecordThatNeverStartedASession guards the false-submission
+// bug: a record left in preparing has a zero StartedAt and no PriorReviewIDs, so
+// Decide reads any earlier review of mine on that pull request as this session's
+// and Archive then deletes the clone and closes the row.
+func TestRefreshRefusesARecordThatNeverStartedASession(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	gitc := newFakeGit()
+	gitc.failAt = "fetch"
+	svc, _ := newService(t, ghc, gitc)
+
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude"); err == nil {
+		t.Fatal("Prepare succeeded, want the fetch failure")
+	}
+	records, err := svc.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stuck := records[0]
+
+	// A review the user left on this pull request weeks before docket ran.
+	old := start.Add(-30 * 24 * time.Hour)
+	ghc.reviews = []review.GHReview{
+		{ID: 42, User: review.GHUser{Login: "haacked"}, State: "APPROVED", SubmittedAt: &old},
+	}
+
+	got, err := svc.Refresh(context.Background(), stuck)
+	if err == nil {
+		t.Error("Refresh detected against a record with no session, want it refused")
+	}
+	if got.State != review.StatePreparing {
+		t.Errorf("state = %q, want it left at preparing", got.State)
+	}
+
+	after, err := svc.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after[0].State != review.StatePreparing {
+		t.Errorf("the stored record is %q, want preparing: an old review was read as this session's submission", after[0].State)
+	}
+	if after[0].ReviewID != 0 {
+		t.Errorf("review id = %d, want none: review 42 predates this record", after[0].ReviewID)
+	}
+}
+
+// TestRefreshAllRetriesARecordStuckAtSubmitted covers the record whose archiving
+// did not finish. It is invisible to the user unless the dashboard lists it and
+// the refresh predicate matches it.
+func TestRefreshAllRetriesARecordStuckAtSubmitted(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := launched(t, svc, unlisted)
+
+	at := start.Add(3 * time.Minute)
+	ghc.reviews = []review.GHReview{
+		{ID: 9, User: review.GHUser{Login: "haacked"}, State: "APPROVED", SubmittedAt: &at},
+	}
+	rec.State = review.StateSubmitted
+	if err := svc.append(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := svc.RefreshAll(context.Background())
+	if err != nil {
+		t.Fatalf("RefreshAll: %v", err)
+	}
+	if records[0].State != review.StateArchived {
+		t.Errorf("state = %q, want RefreshAll to retry the archive", records[0].State)
+	}
+}
+
+func TestPrepareRefusesAPullRequestThatIsAlreadyOpen(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, paths := newService(t, ghc, newFakeGit())
+
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude"); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude"); err == nil {
+		t.Fatal("Prepare made a second record for a pull request already open; abandoning either deletes the clone the other uses")
+	}
+
+	records, err := svc.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Errorf("records = %d, want the one already open", len(records))
+	}
+	if _, err := os.Stat(paths.CloneDir("haacked", "docket", 7)); err != nil {
+		t.Errorf("the first review's clone is gone: %v", err)
+	}
+}
+
+func TestPrepareAllowsAReviewAfterTheEarlierOneClosed(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+
+	first, _, err := svc.Prepare(context.Background(), unlisted, "claude")
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if _, err := svc.Abandon(first); err != nil {
+		t.Fatalf("Abandon: %v", err)
+	}
+
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude"); err != nil {
+		t.Errorf("Prepare refused a pull request whose earlier review was abandoned: %v", err)
+	}
+}
+
+func TestResumeSpecReopensTheStoredSessionAndOpensANewWindow(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := launched(t, svc, unlisted)
+
+	// A review the user submitted between the first session and this resume.
+	between := start.Add(time.Hour)
+	ghc.reviews = []review.GHReview{
+		{ID: 77, User: review.GHUser{Login: "haacked"}, State: "APPROVED", SubmittedAt: &between},
+	}
+	svc.Now = func() time.Time { return start.Add(2 * time.Hour) }
+
+	resumed, spec, err := svc.ResumeSpec(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("ResumeSpec: %v", err)
+	}
+
+	if !strings.Contains(spec.String(), "--resume "+rec.SessionID) {
+		t.Errorf("spec = %s, want it to resume the stored session", spec)
+	}
+	if resumed.State != review.StateReviewing {
+		t.Errorf("state = %q, want reviewing", resumed.State)
+	}
+	if !resumed.StartedAt.Equal(start.Add(2 * time.Hour)) {
+		t.Errorf("started at %v, want the resume's own clock: the detection window has to move or an older submission archives the record", resumed.StartedAt)
+	}
+	// The re-snapshot is what stops review 77 reading as this session's work.
+	if !slices.Contains(resumed.PriorReviewIDs, int64(77)) {
+		t.Errorf("prior review ids = %v, want the review submitted since the last session", resumed.PriorReviewIDs)
+	}
+
+	stored, err := svc.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored[0].State != review.StateReviewing {
+		t.Errorf("the stored record is %q, want the session recorded before the command ran", stored[0].State)
+	}
+}
+
+func TestResumeSpecStartsFreshWhenThereIsNoSessionToResume(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := launched(t, svc, unlisted)
+	rec.SessionID = ""
+
+	resumed, spec, err := svc.ResumeSpec(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("ResumeSpec: %v", err)
+	}
+	if !strings.Contains(spec.String(), "/review-code "+rec.URL+" --draft") {
+		t.Errorf("spec = %s, want a fresh review", spec)
+	}
+	if resumed.SessionID == "" {
+		t.Error("the fallback did not keep the session id it minted, so the next resume has nothing to reopen")
+	}
+	if !strings.Contains(spec.String(), resumed.SessionID) {
+		t.Errorf("spec = %s, want it to carry the minted session id %q", spec, resumed.SessionID)
+	}
+}
+
+func TestExplainReportsWithoutProvisioningOrRecording(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	gitc := newFakeGit()
+	svc, paths := newService(t, ghc, gitc)
+
+	plan, spec, err := svc.Explain(context.Background(), unlisted, "claude")
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	if plan.Tier != tier.Tier2 {
+		t.Errorf("tier = %v, want tier2", plan.Tier)
+	}
+	if !strings.Contains(spec.String(), "/review-code "+unlisted.URL()+" --draft") {
+		t.Errorf("spec = %s, want the command a real start would run", spec)
+	}
+
+	records, err := svc.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Errorf("Explain recorded %d records, want none", len(records))
+	}
+	if _, err := os.Stat(paths.CloneDir("haacked", "docket", 7)); !os.IsNotExist(err) {
+		t.Error("Explain provisioned a clone")
+	}
+	if strings.Contains(strings.Join(gitc.calls, ","), "fetch") {
+		t.Errorf("Explain fetched something: %v", gitc.calls)
 	}
 }

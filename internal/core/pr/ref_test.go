@@ -122,6 +122,14 @@ func TestParseRefRejectsInvalidInput(t *testing.T) {
 		{name: "bare number without default repo", input: "12"},
 		{name: "bare zero with default repo", input: "0", defaultRepo: "acme/tool"},
 		{name: "bare negative number with default repo", input: "-5", defaultRepo: "acme/tool"},
+		// The org and the repo become path segments under the clones directory, so
+		// these keep git init and the fetch from running outside it.
+		{name: "parent directory as the repo", input: "acme/..#1"},
+		{name: "parent directory as the org", input: "https://github.com/../tool/pull/1"},
+		{name: "current directory as the repo", input: "acme/.#1"},
+		{name: "org starting with a dash", input: "-x/tool#1"},
+		{name: "repo starting with a dash", input: "acme/-tool#1"},
+		{name: "path separator inside the repo", input: "acme/a/b#1"},
 	}
 
 	for _, tt := range tests {

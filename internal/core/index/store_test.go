@@ -343,3 +343,76 @@ func TestCompactedIndexAcceptsFurtherAppends(t *testing.T) {
 		t.Errorf("Load() after appending past a compaction = %+v, want %+v", got, want)
 	}
 }
+
+func TestCompactIfNeededLeavesALogAtTheThresholdAlone(t *testing.T) {
+	path := indexPath(t)
+	store := newStore(t, path)
+	at := indexBase
+	for range index.CompactRatio {
+		appendAll(t, store, ev("rec-1", "drafted", at, map[string]any{"title": "Review"}))
+		at = at.Add(time.Minute)
+	}
+	before := readLines(t, path)
+
+	compacted, err := store.CompactIfNeeded()
+	if err != nil {
+		t.Fatalf("CompactIfNeeded() returned error %v", err)
+	}
+	if compacted {
+		t.Errorf("CompactIfNeeded() compacted a log of %d events for 1 record, want it left alone at the %d threshold", len(before), index.CompactRatio)
+	}
+	if got := readLines(t, path); len(got) != len(before) {
+		t.Errorf("the index holds %d lines, want the %d it started with", len(got), len(before))
+	}
+}
+
+func TestCompactIfNeededCompactsOnePastTheThreshold(t *testing.T) {
+	path := indexPath(t)
+	store := newStore(t, path)
+	at := indexBase
+	for range index.CompactRatio + 1 {
+		appendAll(t, store, ev("rec-1", "drafted", at, map[string]any{"title": "Review"}))
+		at = at.Add(time.Minute)
+	}
+
+	compacted, err := store.CompactIfNeeded()
+	if err != nil {
+		t.Fatalf("CompactIfNeeded() returned error %v", err)
+	}
+	if !compacted {
+		t.Errorf("CompactIfNeeded() left a log of %d events for 1 record alone, want it compacted past the %d threshold", index.CompactRatio+1, index.CompactRatio)
+	}
+	if got := readJSONLines(t, path); len(got) != 1 {
+		t.Errorf("the index holds %d lines after compaction, want 1 snapshot per record", len(got))
+	}
+}
+
+func TestCompactionRefusesALogHoldingAnEventTypeThisBuildDoesNotKnow(t *testing.T) {
+	path := indexPath(t)
+	store := newStore(t, path)
+	at := indexBase
+	appendAll(t, store, ev("rec-1", "started", at, map[string]any{"title": "Review"}))
+	appendAll(t, store, ev("rec-2", "backgrounded", at.Add(time.Minute), map[string]any{"title": "From a newer docket"}))
+	for i := range index.CompactRatio * 2 {
+		appendAll(t, store, ev("rec-1", "drafted", at.Add(time.Duration(i+2)*time.Minute), map[string]any{"title": "Review"}))
+	}
+	before := readLines(t, path)
+
+	compacted, err := store.CompactIfNeeded()
+	if err != nil {
+		t.Fatalf("CompactIfNeeded() returned error %v", err)
+	}
+	if compacted {
+		t.Error("CompactIfNeeded() rewrote a log carrying an unknown event type, which deletes that event")
+	}
+	if got := readLines(t, path); !slices.Equal(got, before) {
+		t.Errorf("the index changed: %d lines, want the %d it started with", len(got), len(before))
+	}
+
+	if err := store.Compact(); err == nil {
+		t.Error("Compact() rewrote a log carrying an unknown event type, want an error naming it")
+	}
+	if got := readLines(t, path); !slices.Equal(got, before) {
+		t.Error("Compact() changed the index after refusing")
+	}
+}

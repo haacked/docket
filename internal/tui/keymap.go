@@ -1,11 +1,15 @@
 package tui
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/haacked/docket/internal/tui/msg"
+)
 
 // helpFor is the footer line for a screen.
-func helpFor(screen screenID, showArchived bool) string {
+func helpFor(screen msg.Screen, showArchived bool) string {
 	switch screen {
-	case screenNewReview:
+	case msg.NewReview:
 		return join("enter start", "tab engine", "esc back", "ctrl+c quit")
 	default:
 		archived := "a show archived"

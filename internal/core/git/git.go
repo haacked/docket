@@ -74,19 +74,27 @@ func (c *CLI) SymbolicRef(ctx context.Context, dir, name, target string) error {
 	return c.write(ctx, dir, "symbolic-ref", name, target)
 }
 
-// FetchPR fetches the pull request head into a local branch named branch. The
-// credential helper covers private repositories without a git credential setup
-// of its own.
+// FetchPR fetches the pull request head into a local branch named branch. An
+// empty branch leaves the head in FETCH_HEAD, which is what a caller wants when
+// the destination branch is already checked out: git refuses to fetch into a
+// checked-out branch. The empty credential.helper resets the list, because `-c`
+// appends to a multi-valued config rather than replacing it, and git does not
+// try the next helper after one fails.
 func (c *CLI) FetchPR(ctx context.Context, dir, remote string, number int, branch string, depth int) error {
 	args := []string{
 		"-C", dir,
+		"-c", "credential.helper=",
 		"-c", "credential.helper=!gh auth git-credential",
 		"fetch",
 	}
 	if depth > 0 {
 		args = append(args, "--depth", strconv.Itoa(depth))
 	}
-	args = append(args, remote, fmt.Sprintf("+pull/%d/head:refs/heads/%s", number, branch))
+	refspec := fmt.Sprintf("pull/%d/head", number)
+	if branch != "" {
+		refspec = fmt.Sprintf("+pull/%d/head:refs/heads/%s", number, branch)
+	}
+	args = append(args, remote, refspec)
 	if _, err := c.run(ctx, args...); err != nil {
 		return fmt.Errorf("git fetch pull/%d/head: %w", number, err)
 	}

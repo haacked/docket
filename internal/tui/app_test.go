@@ -80,7 +80,7 @@ func TestStatusReturnsToTheDashboard(t *testing.T) {
 	next, _ = next.(App).Update(statusMsg{text: "Would run: claude"})
 	a = next.(App)
 
-	if a.screen != screenDashboard {
+	if a.screen != msg.Dashboard {
 		t.Error("a status message should land back on the dashboard")
 	}
 	if !strings.Contains(a.View().Content, "Would run: claude") {

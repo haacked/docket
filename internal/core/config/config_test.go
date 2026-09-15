@@ -132,3 +132,31 @@ func TestReviewCodePaths(t *testing.T) {
 		t.Errorf("worktree = %q, want %q", cfg.WorktreeDir("haacked", "docket", 7), want)
 	}
 }
+
+func TestNewPathsMakesARelativeHomeAbsolute(t *testing.T) {
+	paths, err := NewPaths("relative/dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(paths.Home) {
+		t.Errorf("home = %q, want an absolute path: the index stores clone paths, and a relative home resolves against whatever directory docket started in", paths.Home)
+	}
+	if !strings.HasSuffix(paths.Home, filepath.Join("relative", "dir")) {
+		t.Errorf("home = %q, want it to end in the directory that was asked for", paths.Home)
+	}
+}
+
+func TestNewPathsExpandsALeadingTilde(t *testing.T) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+
+	paths, err := NewPaths("~/docket-home")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(userHome, "docket-home"); paths.Home != want {
+		t.Errorf("home = %q, want %q", paths.Home, want)
+	}
+}

@@ -47,6 +47,18 @@ var stateEvents = map[State]string{
 	StateUnreviewed: EventUnreviewed,
 }
 
+// KnownEvent reports whether Fold understands this event's type. Compaction asks,
+// because it rewrites the log from what Fold produced: an event Fold skipped is
+// gone from disk afterwards. An event with no ID never reaches a record, so it
+// does not count as unknown and cannot disable compaction on its own.
+func KnownEvent(e Event) bool {
+	if e.ID == "" {
+		return true
+	}
+	_, ok := eventStates[e.Type]
+	return ok
+}
+
 // Fold replays the log into one record per ID, in order of first appearance. An
 // event sets only the fields it carries, so later events leave the rest intact.
 // docket's own events carry the whole record, which makes each one a replacement.
