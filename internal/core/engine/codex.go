@@ -48,14 +48,23 @@ func (Codex) Resume(rec review.Record, paths Paths) (exec.CommandSpec, bool) {
 // codexDirs is the working root plus the directories the session writes to
 // outside it. A relative grant would name a directory under codex's own
 // workspace, so only absolute ones are passed.
+//
+// The sandbox is named alongside them because codex ignores every --add-dir
+// under its default permissions, reporting that the effective permissions allow
+// no additional writable roots. review-code writes its notes and its worktrees
+// outside the working root, so the grants are inert without this and each of
+// those writes stops for approval.
 func codexDirs(dir string, paths Paths) []string {
-	args := []string{"-C", dir}
+	grants := make([]string, 0, 2*len(paths.Grant))
 	for _, grant := range paths.Grant {
 		if filepath.IsAbs(grant) {
-			args = append(args, "--add-dir", grant)
+			grants = append(grants, "--add-dir", grant)
 		}
 	}
-	return args
+	if len(grants) == 0 {
+		return []string{"-C", dir}
+	}
+	return append([]string{"-C", dir, "--sandbox", "workspace-write"}, grants...)
 }
 
 // sessionMeta is the first line of a codex rollout file.

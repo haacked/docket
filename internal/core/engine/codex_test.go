@@ -165,6 +165,43 @@ func TestCodexStartGrantsNothingWhenThereIsNothingToGrant(t *testing.T) {
 	}
 }
 
+// codex ignores every --add-dir under its default permissions, so a grant
+// without the sandbox that admits it is inert and review-code's notes writes
+// stop for approval instead.
+func TestCodexGrantsComeWithTheSandboxThatAdmitsThem(t *testing.T) {
+	rec := codexRecord("/tmp/clone", time.Now())
+
+	for name, line := range map[string]string{
+		"start":  Codex{}.Start(rec, Paths{Grant: grants}).String(),
+		"resume": resumeLine(t, rec, Paths{Grant: grants}),
+	} {
+		if !strings.Contains(line, "--sandbox workspace-write") {
+			t.Errorf("%s = %s, want the sandbox that lets --add-dir take effect", name, line)
+		}
+	}
+}
+
+// Naming the sandbox widens what codex may write, so it is only named when
+// there is a grant that needs it.
+func TestCodexNamesNoSandboxWithNothingToGrant(t *testing.T) {
+	rec := codexRecord("/tmp/clone", time.Now())
+
+	if line := (Codex{}).Start(rec, Paths{}).String(); strings.Contains(line, "--sandbox") {
+		t.Errorf("command = %s, want no sandbox widened when nothing is granted", line)
+	}
+}
+
+func resumeLine(t *testing.T, rec review.Record, paths Paths) string {
+	t.Helper()
+
+	rec.SessionID = "01998e2c-0000-7000-8000-000000000001"
+	spec, ok := Codex{}.Resume(rec, paths)
+	if !ok {
+		t.Fatal("Resume refused a record with a session id")
+	}
+	return spec.String()
+}
+
 // A relative grant names a directory inside codex's own workspace rather than
 // the one meant, which is what an unset review-code directory would produce.
 func TestCodexStartGrantsOnlyAbsoluteDirectories(t *testing.T) {
