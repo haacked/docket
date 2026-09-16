@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func record() review.Record {
 }
 
 func TestStartRunsTheReviewAsADraftInTheRecordsDirectory(t *testing.T) {
-	spec := Claude{}.Start(record(), "/opt/review-code")
+	spec := Claude{}.Start(record(), Paths{Grant: grants})
 
 	if spec.Path != "claude" {
 		t.Errorf("path = %q", spec.Path)
@@ -45,7 +46,7 @@ func TestStartWithoutAnIdStillRunsTheReview(t *testing.T) {
 	rec := record()
 	rec.SessionID = ""
 
-	line := Claude{}.Start(rec, "").String()
+	line := Claude{}.Start(rec, Paths{}).String()
 	if strings.Contains(line, "--session-id") {
 		t.Errorf("command = %s, want no empty session id", line)
 	}
@@ -55,7 +56,7 @@ func TestStartWithoutAnIdStillRunsTheReview(t *testing.T) {
 }
 
 func TestResumeReopensTheStoredSession(t *testing.T) {
-	spec, ok := Claude{}.Resume(record(), "")
+	spec, ok := Claude{}.Resume(record(), Paths{})
 	if !ok {
 		t.Fatal("Resume refused a record with a session id")
 	}
@@ -69,7 +70,7 @@ func TestResumeRefusesARecordWithNoSession(t *testing.T) {
 	rec.SessionID = ""
 
 	eng := Claude{}
-	if _, ok := eng.Resume(rec, ""); ok {
+	if _, ok := eng.Resume(rec, Paths{}); ok {
 		t.Error("Resume accepted a record with no session to resume")
 	}
 }
@@ -82,16 +83,18 @@ func TestNewSessionIDIsFreshEveryTime(t *testing.T) {
 	}
 }
 
-func TestForKnowsClaudeAndSaysWhatItDoesNot(t *testing.T) {
-	if _, err := For("claude"); err != nil {
-		t.Errorf("For(claude): %v", err)
+func TestForKnowsTheEnginesAndSaysWhatItDoesNot(t *testing.T) {
+	for _, name := range []string{"claude", "codex"} {
+		if _, err := For(name); err != nil {
+			t.Errorf("For(%q): %v", name, err)
+		}
 	}
-	for _, name := range []string{"", "codex", "aider"} {
+	for _, name := range []string{"", "aider"} {
 		if _, err := For(name); err == nil {
 			t.Errorf("For(%q) succeeded, want an error", name)
 		}
 	}
-	if names := Names(); len(names) != 1 || names[0] != "claude" {
-		t.Errorf("Names() = %v, want just claude while codex is unwired", names)
+	if names := Names(); !slices.Equal(names, []string{"claude", "codex"}) {
+		t.Errorf("Names() = %v", names)
 	}
 }

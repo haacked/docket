@@ -11,6 +11,8 @@ type Screen int
 const (
 	Dashboard Screen = iota
 	NewReview
+	Submit
+	Notes
 )
 
 // Goto switches screens.
@@ -31,6 +33,22 @@ type Abandon struct{ ID string }
 // RefreshRecords re-reads GitHub. An empty ID means every record whose session is
 // over.
 type RefreshRecords struct{ ID string }
+
+// OpenSubmit asks for the submit screen for a record.
+type OpenSubmit struct{ ID string }
+
+// SubmitReview submits the record's pending review.
+type SubmitReview struct {
+	ID    string
+	Event string
+	Body  string
+}
+
+// OpenNotes asks for the notes review-code wrote for a record.
+type OpenNotes struct{ ID string }
+
+// EditNotes opens those notes in the user's editor.
+type EditNotes struct{ ID string }
 
 // Send wraps a message as the command that delivers it.
 func Send(message tea.Msg) tea.Cmd {

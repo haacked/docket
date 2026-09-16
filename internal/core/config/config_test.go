@@ -105,7 +105,13 @@ func TestLoadReadsTheFileAndFillsTheGaps(t *testing.T) {
 
 func TestSaveThenLoadRoundTrips(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	want := Config{ReviewCodeDir: "/opt/review-code", DefaultEngine: "codex", GitHubUser: "haacked", DefaultRepo: "haacked/docket"}
+	want := Config{
+		ReviewCodeDir:    "/opt/review-code",
+		CodexSessionsDir: "/opt/codex/sessions",
+		DefaultEngine:    "codex",
+		GitHubUser:       "haacked",
+		DefaultRepo:      "haacked/docket",
+	}
 
 	if err := Save(path, want); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -159,4 +165,39 @@ func TestNewPathsExpandsALeadingTilde(t *testing.T) {
 	if want := filepath.Join(userHome, "docket-home"); paths.Home != want {
 		t.Errorf("home = %q, want %q", paths.Home, want)
 	}
+}
+
+// docket reads the codex sessions directory to recover the id of a session it
+// just ran. It is the user's own, so it is configuration with a default rather
+// than a path docket knows.
+func TestTheCodexSessionsDirectoryIsConfiguration(t *testing.T) {
+	t.Run("the default when config.toml names none", func(t *testing.T) {
+		cfg, err := Load(filepath.Join(t.TempDir(), "config.toml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+
+		if strings.HasPrefix(cfg.CodexSessionsDir, "~") {
+			t.Errorf("codex_sessions_dir = %q, want the tilde expanded", cfg.CodexSessionsDir)
+		}
+		if !strings.HasSuffix(cfg.CodexSessionsDir, filepath.Join(".codex", "sessions")) {
+			t.Errorf("codex_sessions_dir = %q, want codex's installed path", cfg.CodexSessionsDir)
+		}
+	})
+
+	t.Run("the file wins", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte("codex_sessions_dir = \"/opt/codex/sessions\"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+
+		if cfg.CodexSessionsDir != "/opt/codex/sessions" {
+			t.Errorf("codex_sessions_dir = %q, want the configured path", cfg.CodexSessionsDir)
+		}
+	})
 }

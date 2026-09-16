@@ -18,7 +18,7 @@ func (Claude) Binary() string { return "claude" }
 
 func (Claude) NewSessionID() string { return uuid.NewString() }
 
-func (Claude) Start(rec review.Record, _ string) exec.CommandSpec {
+func (Claude) Start(rec review.Record, _ Paths) exec.CommandSpec {
 	args := []string{}
 	if rec.SessionID != "" {
 		args = append(args, "--session-id", rec.SessionID)
@@ -27,7 +27,7 @@ func (Claude) Start(rec review.Record, _ string) exec.CommandSpec {
 	return exec.CommandSpec{Path: "claude", Args: args, Dir: rec.Dir}
 }
 
-func (Claude) Resume(rec review.Record, _ string) (exec.CommandSpec, bool) {
+func (Claude) Resume(rec review.Record, _ Paths) (exec.CommandSpec, bool) {
 	if rec.SessionID == "" {
 		return exec.CommandSpec{}, false
 	}
@@ -37,3 +37,7 @@ func (Claude) Resume(rec review.Record, _ string) (exec.CommandSpec, bool) {
 		Dir:  rec.Dir,
 	}, true
 }
+
+// CaptureSessionID has nothing to find. NewSessionID already minted the id and
+// Start passed it to claude.
+func (Claude) CaptureSessionID(review.Record, Paths) (string, error) { return "", nil }

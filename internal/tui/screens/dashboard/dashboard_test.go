@@ -83,6 +83,8 @@ func TestKeysEmitIntents(t *testing.T) {
 		{"abandon", key("x"), msg.Abandon{ID: "a"}},
 		{"refresh one", key("r"), msg.RefreshRecords{ID: "a"}},
 		{"refresh all", key("R"), msg.RefreshRecords{}},
+		{"submit", key("s"), msg.OpenSubmit{ID: "a"}},
+		{"notes", key("v"), msg.OpenNotes{ID: "a"}},
 	}
 
 	for _, tc := range tests {
@@ -98,10 +100,15 @@ func TestKeysEmitIntents(t *testing.T) {
 	}
 }
 
+// Every key that names the selected record has nothing to name on an empty
+// dashboard.
 func TestNoRecordsMeansNoIntent(t *testing.T) {
 	m := New(Styles{})
-	if _, cmd := m.Update(named(tea.KeyEnter)); cmd != nil {
-		t.Errorf("enter with no records produced %#v", cmd())
+
+	for _, press := range []tea.KeyPressMsg{named(tea.KeyEnter), key("x"), key("s"), key("v"), key("r")} {
+		if _, cmd := m.Update(press); cmd != nil {
+			t.Errorf("%s with no records produced %#v", press, cmd())
+		}
 	}
 }
 

@@ -19,10 +19,13 @@ type preparedMsg struct {
 	plan   session.Plan
 }
 
-// launchMsg hands the root the command to run on the terminal.
+// launchMsg hands the root the command to run on the terminal. An editor is the
+// other thing docket gives the terminal to. Its exit ends in a re-read of the
+// notes rather than in detection.
 type launchMsg struct {
 	record review.Record
 	spec   exec.CommandSpec
+	editor bool
 }
 
 // childExitedMsg reports that the agent session ended, whatever its exit status.
@@ -31,8 +34,28 @@ type childExitedMsg struct {
 	err    error
 }
 
-// detectedMsg carries the record after docket read GitHub for it.
-type detectedMsg struct{ record review.Record }
+// detectedMsg carries the record after docket read GitHub for it. submitted
+// marks the detection that follows a submission. The submit screen is still
+// showing when that one arrives, so the root switches to the dashboard and
+// clears the screen's busy marker.
+type detectedMsg struct {
+	record    review.Record
+	submitted bool
+}
+
+// notesLoadedMsg carries the review review-code wrote. A missing file is not an
+// error, so it travels as a flag rather than an errMsg.
+type notesLoadedMsg struct {
+	record   review.Record
+	markdown string
+	missing  bool
+}
+
+// editorExitedMsg reports that $EDITOR closed, so the notes are worth re-reading.
+type editorExitedMsg struct {
+	record review.Record
+	err    error
+}
 
 // statusMsg is a line for the footer.
 type statusMsg struct{ text string }

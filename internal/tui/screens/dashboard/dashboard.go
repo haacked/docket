@@ -123,6 +123,14 @@ func (m Model) handleKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		if rec, ok := m.Selected(); ok {
 			return m, msg.Send(msg.Abandon{ID: rec.ID})
 		}
+	case "s":
+		if rec, ok := m.Selected(); ok {
+			return m, msg.Send(msg.OpenSubmit{ID: rec.ID})
+		}
+	case "v":
+		if rec, ok := m.Selected(); ok {
+			return m, msg.Send(msg.OpenNotes{ID: rec.ID})
+		}
 	case "r":
 		if rec, ok := m.Selected(); ok {
 			return m, msg.Send(msg.RefreshRecords{ID: rec.ID})

@@ -2,7 +2,7 @@
 
 docket is a terminal app for reviewing pull requests. You paste a PR URL, and docket starts a `claude` or `codex` session that runs the [review-code](https://github.com/haacked/review-code) skill against that PR. Once you submit the review, docket archives the record and deletes whatever it created.
 
-**Status: early.** Starting a review in `claude`, reading what the session left on GitHub, and cleaning up after a submitted review are in place. Submitting from docket, reading the notes in the app, and running the review in `codex` are not.
+**Status: early.** Starting a review in `claude` or `codex`, reading what the session left on GitHub, submitting the review, reading the notes in the app, and cleaning up after a submitted review are in place. Running a review in the background is not.
 
 ## The workflow it replaces
 
@@ -41,7 +41,9 @@ docket --dry-run o/r#123                      say what would happen, start and r
 
 A pull request can be a URL, `org/repo#123`, or a bare number once `default_repo` is set in `config.toml`.
 
-Dashboard keys: `n` new review, `enter` resume, `x` abandon, `r` refresh the selected record from GitHub, `R` refresh every record, `a` show archived records, `q` quit. `s` to submit and `o` to open the notes are next.
+Dashboard keys: `n` new review, `enter` resume, `s` submit a drafted review, `v` view the notes, `x` abandon, `r` refresh the selected record from GitHub, `R` refresh every record, `a` show archived records, `q` quit.
+
+On the submit screen, `tab` picks the event and `ctrl+s` submits. Approving is not offered on your own pull request, because GitHub refuses it. On the notes screen, `e` opens the file in `$EDITOR`. The notes follow your terminal's background, and `GLAMOUR_STYLE` overrides that with any glamour style name, such as `light`, `dracula`, or `notty`.
 
 State lives in `~/.docket`, which `DOCKET_HOME` or `--home` overrides. It holds an append-only `index.jsonl`, `clones/` for shallow clones, `scratch/` for the tier-1 launch directory, and `config.toml`. Two docket instances can run at once: every write appends one line while holding a lock, and nothing is rewritten in place.
 

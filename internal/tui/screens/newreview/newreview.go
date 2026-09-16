@@ -4,8 +4,6 @@
 package newreview
 
 import (
-	"fmt"
-	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -14,6 +12,7 @@ import (
 
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/tui/msg"
+	"github.com/haacked/docket/internal/tui/screens/choice"
 )
 
 type Styles struct {
@@ -76,7 +75,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		case "esc":
 			return m, msg.Send(msg.Goto{Screen: msg.Dashboard})
 		case "tab":
-			m.Engine = nextEngine(m.Engines, m.Engine)
+			m.Engine = choice.Next(m.Engines, m.Engine)
 			return m, nil
 		case "enter":
 			if m.Busy != "" {
@@ -116,30 +115,9 @@ func (m Model) View() string {
 		b.WriteString(m.Styles.Dim.Render("A URL, org/repo#123, or a bare number with a default repo set.") + "\n")
 	}
 
-	b.WriteString("\n" + m.Styles.Label.Render("Engine") + " " + m.engineLine() + "\n")
+	b.WriteString("\n" + m.Styles.Label.Render("Engine") + " " + choice.Line(m.Engines, m.Engine, lipgloss.Style{}, m.Styles.Dim) + "\n")
 	if m.Busy != "" {
 		b.WriteString("\n" + m.Styles.Dim.Render(m.Busy+"…") + "\n")
 	}
 	return b.String()
-}
-
-func (m Model) engineLine() string {
-	parts := make([]string, 0, len(m.Engines))
-	for _, name := range m.Engines {
-		if name == m.Engine {
-			parts = append(parts, fmt.Sprintf("[%s]", name))
-			continue
-		}
-		parts = append(parts, m.Styles.Dim.Render(" "+name+" "))
-	}
-	return strings.Join(parts, " ")
-}
-
-// nextEngine cycles through the engines. slices.Index returns -1 for an engine
-// that is not listed, which lands on the first one.
-func nextEngine(engines []string, current string) string {
-	if len(engines) == 0 {
-		return current
-	}
-	return engines[(slices.Index(engines, current)+1)%len(engines)]
 }
