@@ -29,6 +29,25 @@ func (r Record) Submittable() bool {
 	return r.State == StateDrafted && r.ReviewID != 0
 }
 
+// BackgroundRunning reports whether the record is a background session docket
+// should still be asking the agent about. The service polls on it and the UI
+// keeps its tick alive on it, so the rule is stated once: if the two disagreed,
+// docket would either poll forever over nothing or stop watching a live review.
+//
+// The id has to be there. A start that failed before reporting one leaves a
+// record that reads as running with no session behind it.
+func (r Record) BackgroundRunning() bool {
+	return r.Mode == ModeBackground && r.State == StateReviewing && r.BGID != ""
+}
+
+// HasBackgroundSession reports whether an agent is holding a session for this
+// record, whatever state the review reached. Stopping asks this rather than
+// BackgroundRunning: the agent keeps holding a session after the review it ran
+// is finished, so a record cleaned up once it was drafted still has one to end.
+func (r Record) HasBackgroundSession() bool {
+	return r.Mode == ModeBackground && r.BGID != ""
+}
+
 // Open reports whether the record still wants the user's attention.
 func (s State) Open() bool {
 	switch s {
@@ -39,7 +58,7 @@ func (s State) Open() bool {
 	}
 }
 
-// Mode is how the session runs. Background mode arrives in M3.
+// Mode is how the session runs.
 type Mode string
 
 const (

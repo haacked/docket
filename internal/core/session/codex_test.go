@@ -47,7 +47,7 @@ func writeRollout(t *testing.T, sessionsDir, id, cwd string, at time.Time) {
 func launchedInCodex(t *testing.T, svc *Service, ref pr.Ref) review.Record {
 	t.Helper()
 
-	rec, _, err := svc.Prepare(context.Background(), ref, "codex")
+	rec, _, err := svc.Prepare(context.Background(), ref, "codex", review.ModeInteractive)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

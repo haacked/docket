@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/haacked/docket/internal/core/config"
+	"github.com/haacked/docket/internal/core/engine"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/tier"
@@ -223,5 +224,174 @@ func TestADryRunSaysSoInTheUI(t *testing.T) {
 	}
 	if view := app().View(); strings.Contains(view.Content, "dry run") {
 		t.Error("a live run should not claim to be a dry run")
+	}
+}
+
+func backgroundRecord(state review.State) review.Record {
+	return review.Record{
+		ID:    "rec-1",
+		Ref:   pr.Ref{Org: "haacked", Repo: "docket", Number: 7},
+		Mode:  review.ModeBackground,
+		BGID:  "6d681a76",
+		State: state,
+	}
+}
+
+// polled applies one poll result and reports whether the root armed another
+// tick. The tick is the whole loop: without it the dashboard never notices a
+// background review finishing.
+func polled(t *testing.T, records []review.Record) (App, bool) {
+	t.Helper()
+	next, cmd := app().Update(bgPolledMsg{records: records, notes: map[string]string{}})
+	return next.(App), cmd != nil
+}
+
+func TestThePollKeepsTickingWhileAReviewIsRunning(t *testing.T) {
+	_, armed := polled(t, []review.Record{backgroundRecord(review.StateReviewing)})
+	if !armed {
+		t.Error("a running background review did not arm the next tick")
+	}
+}
+
+// An idle docket runs no subprocesses. The tick stops when the last background
+// review is over and starts again when one is launched.
+func TestThePollStopsOnceNothingIsRunning(t *testing.T) {
+	for _, state := range []review.State{review.StateDrafted, review.StateArchived, review.StateUnreviewed} {
+		if _, armed := polled(t, []review.Record{backgroundRecord(state)}); armed {
+			t.Errorf("a %s review kept the poll ticking", state)
+		}
+	}
+	if _, armed := polled(t, nil); armed {
+		t.Error("an empty dashboard kept the poll ticking")
+	}
+}
+
+func TestAnInteractiveReviewIsNeverPolled(t *testing.T) {
+	rec := backgroundRecord(review.StateReviewing)
+	rec.Mode = review.ModeInteractive
+
+	if _, armed := polled(t, []review.Record{rec}); armed {
+		t.Error("an interactive review armed a background tick")
+	}
+}
+
+func TestAPollPutsWhatTheSessionIsDoingOnTheRow(t *testing.T) {
+	next, _ := app().Update(bgPolledMsg{
+		records: []review.Record{backgroundRecord(review.StateReviewing)},
+		notes:   map[string]string{"rec-1": "working busy"},
+	})
+	if got := next.(App).dash.Background["rec-1"]; got != "working busy" {
+		t.Errorf("the row carries %q", got)
+	}
+}
+
+// A listing that failed says nothing about the records, so they stay as they
+// are and the tick that is already armed asks again.
+func TestAFailedPollKeepsTheRecordsAndTheTick(t *testing.T) {
+	first, cmd := app().Update(bgPolledMsg{records: []review.Record{backgroundRecord(review.StateReviewing)}})
+	if cmd == nil {
+		t.Fatal("the first poll armed no tick")
+	}
+	next, _ := first.(App).Update(bgPolledMsg{err: errTest})
+	after := next.(App)
+
+	if after.err == nil {
+		t.Error("a failed poll said nothing to the user")
+	}
+	if len(after.dash.Records) != 1 {
+		t.Errorf("a failed poll dropped the records: %+v", after.dash.Records)
+	}
+	if !after.polling {
+		t.Error("a failed poll dropped the tick")
+	}
+}
+
+// Several things ask for a poll: startup, a start, a record that went back to
+// running, and the tick itself. Arming a tick per answer would leave every one
+// of those chains re-arming itself, and each tick costs a subprocess and a full
+// read of the index.
+func TestPollsShareOneTickChain(t *testing.T) {
+	running := []review.Record{backgroundRecord(review.StateReviewing)}
+
+	first, cmd := app().Update(bgPolledMsg{records: running})
+	if cmd == nil {
+		t.Fatal("the first poll armed no tick")
+	}
+	if _, second := first.(App).Update(bgPolledMsg{records: running}); second != nil {
+		t.Error("a second poll forked another tick chain")
+	}
+}
+
+// The chain is released as the tick fires, so the poll it asks for arms the
+// next one. Releasing it anywhere else would end the chain after one tick.
+func TestTheTickHandsTheChainOn(t *testing.T) {
+	running := []review.Record{backgroundRecord(review.StateReviewing)}
+	armed, _ := app().Update(bgPolledMsg{records: running})
+
+	ticked, cmd := armed.(App).Update(bgTickMsg{})
+	if cmd == nil {
+		t.Fatal("the tick asked for no poll")
+	}
+	if ticked.(App).polling {
+		t.Error("the tick did not release the chain")
+	}
+	if _, next := ticked.(App).Update(bgPolledMsg{records: running}); next == nil {
+		t.Error("the poll after a tick armed no tick, so the chain stopped")
+	}
+}
+
+// Leaving a session that is still working puts the record back to running.
+// Nothing else would start watching it again, so the detection that follows the
+// exit has to.
+func TestLeavingAWorkingSessionStartsWatchingItAgain(t *testing.T) {
+	_, cmd := app().Update(detectedMsg{record: backgroundRecord(review.StateReviewing)})
+	if cmd == nil {
+		t.Error("a record that went back to running armed no poll")
+	}
+}
+
+func TestNotesForJoinsWhatTheAgentReported(t *testing.T) {
+	notes := notesFor(map[string]engine.BGStatus{
+		"a": {State: "working", Activity: "busy"},
+		"b": {State: "done"},
+		"c": {},
+	})
+	if notes["a"] != "working busy" {
+		t.Errorf("a = %q", notes["a"])
+	}
+	if notes["b"] != "done" {
+		t.Errorf("b = %q, want no trailing separator", notes["b"])
+	}
+	if notes["c"] != "" {
+		t.Errorf("c = %q, want nothing when the agent said nothing", notes["c"])
+	}
+}
+
+var errTest = &stringErr{"claude is not on PATH"}
+
+// A start that failed before reporting an id leaves a row that reads as running
+// with no session behind it. Ticking over it forever is the thing to avoid.
+func TestAReviewThatNeverStartedDoesNotKeepThePollTicking(t *testing.T) {
+	rec := backgroundRecord(review.StateReviewing)
+	rec.BGID = ""
+
+	if _, armed := polled(t, []review.Record{rec}); armed {
+		t.Error("a review with no session armed the next tick")
+	}
+}
+
+// The poll is the one thing that runs on a timer rather than on a keystroke, so
+// an error it left behind would sit over every status line until the user
+// happened to change screens.
+func TestAPollThatWorksClearsTheLastFailure(t *testing.T) {
+	running := []review.Record{backgroundRecord(review.StateReviewing)}
+	failed, _ := app().Update(bgPolledMsg{err: errTest})
+	if failed.(App).err == nil {
+		t.Fatal("a failed poll said nothing to the user")
+	}
+
+	next, _ := failed.(App).Update(bgPolledMsg{records: running})
+	if next.(App).err != nil {
+		t.Errorf("the error survived a poll that worked: %v", next.(App).err)
 	}
 }

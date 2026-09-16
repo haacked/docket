@@ -10,7 +10,7 @@ import (
 func helpFor(screen msg.Screen, showArchived bool) string {
 	switch screen {
 	case msg.NewReview:
-		return join("enter start", "tab engine", "esc back", "ctrl+c quit")
+		return join("enter start", "tab engine", "ctrl+b background", "esc back", "ctrl+c quit")
 	case msg.Submit:
 		return join("ctrl+s submit", "tab event", "esc back", "ctrl+c quit")
 	case msg.Notes:

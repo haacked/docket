@@ -33,6 +33,10 @@ type Service struct {
 	GH     gh.GitHub
 	Git    git.Git
 	Cloner *clone.Cloner
+	// Runner runs the commands that need nothing but their output. The session
+	// a user works in is not one of them: internal/tui hands that to the
+	// terminal. A background agent is driven entirely through here.
+	Runner exec.Runner
 	Now    func() time.Time
 	NewID  func() string
 }
@@ -120,8 +124,8 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 // a row carrying the reason. Nothing re-provisions that row: resume does not, and
 // a second Prepare is refused while it is open, so the user abandons it with x
 // and starts again with n.
-func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string) (review.Record, Plan, error) {
-	rec, plan, info, _, err := s.resolve(ctx, ref, engineName)
+func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode) (review.Record, Plan, error) {
+	rec, plan, info, _, err := s.resolve(ctx, ref, engineName, mode)
 	if err != nil {
 		return review.Record{}, Plan{}, err
 	}
@@ -173,7 +177,7 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string) (r
 
 // resolve works out everything about a review that reads nothing but GitHub and
 // repos.conf. Prepare goes on to provision and record. Explain stops here.
-func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string) (review.Record, Plan, gh.PRInfo, engine.Engine, error) {
+func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode) (review.Record, Plan, gh.PRInfo, engine.Engine, error) {
 	eng, err := engine.For(engineName)
 	if err != nil {
 		return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
@@ -209,9 +213,9 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string) (r
 		Author:    info.Author.Login,
 		Engine:    eng.Name(),
 		Tier:      decided,
-		Mode:      review.ModeInteractive,
+		Mode:      mode,
 		Dir:       plan.Dir,
-		SessionID: eng.NewSessionID(),
+		SessionID: startingSessionID(eng, mode),
 		State:     review.StatePreparing,
 		NotesPath: plan.NotesPath,
 	}
@@ -221,10 +225,17 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string) (r
 // Explain says what a review would do without doing any of it. A dry run must not
 // provision. A check that reads what provisioning would have written then tells
 // the user nothing, so Explain stops before both.
-func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string) (Plan, exec.CommandSpec, error) {
-	rec, plan, _, eng, err := s.resolve(ctx, ref, engineName)
+func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode) (Plan, exec.CommandSpec, error) {
+	rec, plan, _, eng, err := s.resolve(ctx, ref, engineName, mode)
 	if err != nil {
 		return Plan{}, exec.CommandSpec{}, err
+	}
+	if mode == review.ModeBackground {
+		bg, ok := eng.(engine.BackgroundEngine)
+		if !ok {
+			return Plan{}, exec.CommandSpec{}, fmt.Errorf("%s cannot run a review in the background", engineName)
+		}
+		return plan, bg.StartBackground(rec, s.enginePaths()), nil
 	}
 	return plan, eng.Start(rec, s.enginePaths()), nil
 }
@@ -267,11 +278,8 @@ func (s *Service) specFor(rec review.Record, resume bool) (review.Record, exec.C
 	if err != nil {
 		return rec, exec.CommandSpec{}, err
 	}
-	if rec.Dir == "" {
-		return rec, exec.CommandSpec{}, fmt.Errorf("record %s has no directory to run in", rec.ID)
-	}
-	if info, err := os.Stat(rec.Dir); err != nil || !info.IsDir() {
-		return rec, exec.CommandSpec{}, fmt.Errorf("%s is gone; start the review again", rec.Dir)
+	if err := checkDir(rec); err != nil {
+		return rec, exec.CommandSpec{}, err
 	}
 
 	if resume {
@@ -328,6 +336,9 @@ func (s *Service) ExplainResume(rec review.Record) (exec.CommandSpec, error) {
 func (s *Service) AfterExit(ctx context.Context, rec review.Record, childErr error) (review.Record, error) {
 	if childErr != nil {
 		rec.Err = childErr.Error()
+	}
+	if rec.Mode == review.ModeBackground {
+		return s.afterBackgroundExit(ctx, rec)
 	}
 	rec = s.captureSessionID(rec)
 	return s.detect(ctx, rec)
@@ -422,29 +433,62 @@ func detectable(rec review.Record) bool {
 }
 
 func (s *Service) detect(ctx context.Context, rec review.Record) (review.Record, error) {
-	me, err := s.Login(ctx)
+	decided, reviews, err := s.decide(ctx, rec)
 	if err != nil {
 		return s.recordErr(rec, err)
 	}
+	return s.record(ctx, decided, reviews)
+}
+
+// decide reads GitHub and works out where the review stands, writing nothing.
+func (s *Service) decide(ctx context.Context, rec review.Record) (review.Record, []review.GHReview, error) {
+	me, err := s.Login(ctx)
+	if err != nil {
+		return rec, nil, err
+	}
 	reviews, err := s.GH.Reviews(ctx, rec.Ref)
 	if err != nil {
-		return s.recordErr(rec, err)
+		return rec, nil, err
 	}
 
 	state, reviewID := review.Decide(reviews, me, rec.StartedAt, rec.PriorReviewIDs)
 	rec.State = state
 	rec.ReviewID = reviewID
 	rec.NotesPath = s.Cfg.NotesPath(rec.Ref.Org, rec.Ref.Repo, rec.Ref.Number)
+	return rec, reviews, nil
+}
 
-	if state != review.StateSubmitted {
+// record writes what decide worked out, and archives a review that went in.
+func (s *Service) record(ctx context.Context, rec review.Record, reviews []review.GHReview) (review.Record, error) {
+	if rec.State != review.StateSubmitted {
 		return rec, s.append(rec)
 	}
-
-	rec.SubmittedAt = submittedAt(reviews, reviewID, s.now())
+	rec.SubmittedAt = submittedAt(reviews, rec.ReviewID, s.now())
 	if err := s.append(rec); err != nil {
 		return rec, err
 	}
-	return s.Archive(rec)
+	return s.Archive(ctx, rec)
+}
+
+// detectPolled reads GitHub for a record the poll found finished.
+//
+// A failure is kept on the record rather than written to the index. The poll
+// comes back every few seconds and the record stays running until GitHub
+// answers, so recording each failure would append the same event for as long as
+// GitHub is unreachable. Nothing is lost: PollBackground hands these records
+// straight to the screen, so the row still carries the error, and the next poll
+// tries again.
+func (s *Service) detectPolled(ctx context.Context, rec review.Record) review.Record {
+	decided, reviews, err := s.decide(ctx, rec)
+	if err != nil {
+		rec.Err = err.Error()
+		return rec
+	}
+	saved, err := s.record(ctx, decided, reviews)
+	if err != nil {
+		saved.Err = err.Error()
+	}
+	return saved
 }
 
 // Notes reads the review review-code wrote for a record. A file that is not
@@ -498,7 +542,14 @@ func EditorSpec(editor, path string) exec.CommandSpec {
 
 // Archive cleans up what docket created and closes the record. It leaves
 // review-code's notes file alone, because that is the part worth keeping.
-func (s *Service) Archive(rec review.Record) (review.Record, error) {
+//
+// It ends the agent session first, for the same reason Abandon does. Submitting
+// is the ordinary end of a background review, and the agent goes on holding the
+// session it ran until something stops it. Left alone, one session would be held
+// per review, and for tier 2 the cleanup below would delete the very directory
+// that session is working in.
+func (s *Service) Archive(ctx context.Context, rec review.Record) (review.Record, error) {
+	rec = s.stopBackground(ctx, rec)
 	if err := s.cleanup(rec); err != nil {
 		return s.recordErr(rec, err)
 	}
@@ -509,7 +560,8 @@ func (s *Service) Archive(rec review.Record) (review.Record, error) {
 }
 
 // Abandon drops a review the user is done with. The record stays in the index.
-func (s *Service) Abandon(rec review.Record) (review.Record, error) {
+func (s *Service) Abandon(ctx context.Context, rec review.Record) (review.Record, error) {
+	rec = s.stopBackground(ctx, rec)
 	if err := s.cleanup(rec); err != nil {
 		return s.recordErr(rec, err)
 	}
@@ -613,4 +665,30 @@ func submittedAt(reviews []review.GHReview, id int64, fallback time.Time) *time.
 		}
 	}
 	return &fallback
+}
+
+// checkDir refuses a record whose working directory is not there. The clone
+// behind a tier-2 review can be deleted from outside docket, and an agent
+// started in a directory that is gone fails in its own way rather than docket's.
+func checkDir(rec review.Record) error {
+	if rec.Dir == "" {
+		return fmt.Errorf("record %s has no directory to run in", rec.ID)
+	}
+	if info, err := os.Stat(rec.Dir); err != nil || !info.IsDir() {
+		return fmt.Errorf("%s is gone; start the review again", rec.Dir)
+	}
+	return nil
+}
+
+// startingSessionID is the id a new record carries before it launches.
+//
+// A background session has none. claude refuses the --session-id a background
+// start passes and mints its own, so an id minted here would name a session that
+// never existed and a later resume would fail on it. The first poll fills the
+// record in from what the agent reports.
+func startingSessionID(eng engine.Engine, mode review.Mode) string {
+	if mode == review.ModeBackground {
+		return ""
+	}
+	return eng.NewSessionID()
 }

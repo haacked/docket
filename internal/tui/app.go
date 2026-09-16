@@ -11,6 +11,7 @@ import (
 	osexec "os/exec"
 	"slices"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -44,6 +45,10 @@ type App struct {
 	height int
 	status string
 	err    error
+	// polling means a tick is outstanding. Several things ask for a poll, and
+	// without this each answer would arm a tick of its own and every one of them
+	// would re-arm itself forever.
+	polling bool
 }
 
 // New builds the root model. A non-empty initialInput opens the new review screen
@@ -65,6 +70,7 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 		newrev: newreview.New(
 			newreview.Styles{Label: s.Label, Dim: s.Dim, Err: s.Err},
 			engine.Names(),
+			engine.BackgroundNames(),
 			cfg.DefaultEngine,
 			cfg.DefaultRepo,
 		),
@@ -87,7 +93,17 @@ func (a App) Init() tea.Cmd {
 	if a.dryRun {
 		return tea.Batch(a.loadRecords(), requestBackground)
 	}
-	return tea.Batch(a.loadRecords(), a.reconcile(), requestBackground)
+	// A background session outlives the docket that started it, so startup asks
+	// the agent about them straight away rather than waiting out the first tick.
+	//
+	// The two run in order because both read the whole index and both detect.
+	// Side by side, whichever finished last would draw, and that is the one that
+	// read the index before the other wrote to it.
+	return tea.Batch(
+		a.loadRecords(),
+		tea.Sequence(a.reconcile(), a.pollBackground()),
+		requestBackground,
+	)
 }
 
 func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -124,14 +140,21 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msg.StartReview:
 		if a.dryRun {
-			return a, a.explainStart(message.Input, message.Engine)
+			return a, a.explainStart(message.Input, message.Engine, message.Background)
 		}
-		return a, a.prepare(message.Input, message.Engine)
+		return a, a.prepare(message.Input, message.Engine, message.Background)
 
 	case msg.Resume:
 		rec, ok := a.record(message.ID)
 		if !ok {
 			return a, nil
+		}
+		// A background session is held by the agent, which refuses a plain
+		// resume while it holds one and says to attach instead. The check comes
+		// before the dry run so both report the same command. Reading the
+		// agent's listing is a read, which is all a dry run is allowed.
+		if rec.HasBackgroundSession() {
+			return a, a.openBackground(rec, a.dryRun)
 		}
 		if a.dryRun {
 			return a, a.explainResume(rec)
@@ -227,6 +250,9 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case preparedMsg:
 		a.screen = msg.Dashboard
 		a.status = message.plan.Description()
+		if message.record.Mode == review.ModeBackground {
+			return a, a.startBackground(message.record)
+		}
 		return a, a.launch(message.record, false)
 
 	case launchMsg:
@@ -238,6 +264,15 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// before anything else draws.
 		return a, tea.Batch(tea.ClearScreen, a.afterExit(message.record, message.err))
 
+	case bgTickMsg:
+		// Cleared as the tick fires rather than where a chain ends, so the poll
+		// this tick asks for is free to arm the next one.
+		a.polling = false
+		return a, a.pollBackground()
+
+	case bgPolledMsg:
+		return a.applyPoll(message)
+
 	case detectedMsg:
 		delete(a.dash.Busy, message.record.ID)
 		a.status = describe(message.record)
@@ -245,6 +280,11 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.submitted {
 			a.screen = msg.Dashboard
 			a.sub = a.sub.ClearBusy()
+		}
+		// Leaving a background session that is still working puts the record back
+		// to running, and nothing else would start watching it again.
+		if message.record.BackgroundRunning() {
+			return a, tea.Batch(a.loadRecords(), a.pollBackground())
 		}
 		return a, a.loadRecords()
 
@@ -430,7 +470,7 @@ func (a App) afterExit(rec review.Record, childErr error) tea.Cmd {
 
 func (a App) abandon(rec review.Record) tea.Cmd {
 	svc := a.svc
-	return detected(func() (review.Record, error) { return svc.Abandon(rec) })
+	return detected(func() (review.Record, error) { return svc.Abandon(context.Background(), rec) })
 }
 
 func (a App) submitReview(rec review.Record, event, body string) tea.Cmd {
@@ -479,7 +519,7 @@ func (a App) notesHeight() int {
 	return max(a.height-notesChrome, 1)
 }
 
-func (a App) prepare(input, engineName string) tea.Cmd {
+func (a App) prepare(input, engineName string, background bool) tea.Cmd {
 	svc, defaultRepo := a.svc, a.cfg.DefaultRepo
 	return func() tea.Msg {
 		ref, err := pr.ParseRef(input, defaultRepo)
@@ -496,7 +536,7 @@ func (a App) prepare(input, engineName string) tea.Cmd {
 		if _, err := osexec.LookPath(eng.Binary()); err != nil {
 			return errMsg{err: fmt.Errorf("%s is not on your PATH", eng.Binary())}
 		}
-		rec, plan, err := svc.Prepare(context.Background(), ref, engineName)
+		rec, plan, err := svc.Prepare(context.Background(), ref, engineName, modeFor(background))
 		if err != nil {
 			return errMsg{err: err}
 		}
@@ -521,14 +561,14 @@ func (a App) launch(rec review.Record, resume bool) tea.Cmd {
 
 // explainStart is the dry-run counterpart of prepare. It reports the tier and the
 // command that would launch, and writes nothing.
-func (a App) explainStart(input, engineName string) tea.Cmd {
+func (a App) explainStart(input, engineName string, background bool) tea.Cmd {
 	svc, defaultRepo := a.svc, a.cfg.DefaultRepo
 	return func() tea.Msg {
 		ref, err := pr.ParseRef(input, defaultRepo)
 		if err != nil {
 			return errMsg{err: err}
 		}
-		plan, spec, err := svc.Explain(context.Background(), ref, engineName)
+		plan, spec, err := svc.Explain(context.Background(), ref, engineName, modeFor(background))
 		if err != nil {
 			return errMsg{err: err}
 		}
@@ -575,4 +615,88 @@ func describe(rec review.Record) string {
 func Run(app App) error {
 	_, err := tea.NewProgram(app).Run()
 	return err
+}
+
+// modeFor turns the screen's choice into the mode a record carries.
+func modeFor(background bool) review.Mode {
+	if background {
+		return review.ModeBackground
+	}
+	return review.ModeInteractive
+}
+
+// bgInterval is how often docket asks the agent about its running sessions. A
+// review takes minutes, so this is about how soon the dashboard notices rather
+// than about catching the moment it ends.
+const bgInterval = 15 * time.Second
+
+// applyPoll redraws from a poll and arms the next one. The tick is re-armed here
+// rather than on a timer of its own, so an idle docket runs no subprocesses: the
+// poll stops when nothing is running and starts again when something is.
+func (a App) applyPoll(polled bgPolledMsg) (tea.Model, tea.Cmd) {
+	// A poll that worked clears what a failed one said. The poll is the one
+	// thing here that runs on a timer rather than on a keystroke, so an error it
+	// left behind would sit over every status line until the user happened to
+	// change screens.
+	a.err = polled.err
+	if polled.records != nil {
+		a.dash = a.dash.SetRecords(polled.records)
+		a.dash.Background = polled.notes
+	}
+	if !a.watching() || a.polling {
+		return a, nil
+	}
+	a.polling = true
+	return a, tea.Tick(bgInterval, func(time.Time) tea.Msg { return bgTickMsg{} })
+}
+
+// watching reports whether any record is a background session still running.
+func (a App) watching() bool {
+	return slices.ContainsFunc(a.dash.Records, review.Record.BackgroundRunning)
+}
+
+func (a App) pollBackground() tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		records, statuses, err := svc.PollBackground(context.Background())
+		return bgPolledMsg{records: records, notes: notesFor(statuses), err: err}
+	}
+}
+
+// notesFor renders each status for the dashboard, which holds no engine to ask.
+// The activity is what says a session is waiting at a permission prompt rather
+// than working, so both go on the row.
+func notesFor(statuses map[string]engine.BGStatus) map[string]string {
+	notes := make(map[string]string, len(statuses))
+	for id, status := range statuses {
+		notes[id] = strings.TrimSpace(status.State + " " + status.Activity)
+	}
+	return notes
+}
+
+// startBackground launches a review that runs without the terminal, then polls
+// at once so the row shows what the session is doing rather than nothing.
+func (a App) startBackground(rec review.Record) tea.Cmd {
+	svc := a.svc
+	started := detected(func() (review.Record, error) {
+		return svc.StartBackground(context.Background(), rec)
+	})
+	return tea.Sequence(started, a.pollBackground())
+}
+
+// openBackground puts a running session on the terminal. Which command does that
+// depends on whether the agent still holds the session, so the service reads its
+// status before building the spec.
+func (a App) openBackground(rec review.Record, explain bool) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		spec, err := svc.OpenBackgroundSpec(context.Background(), rec)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		if explain {
+			return statusMsg{text: "Would run: " + spec.String()}
+		}
+		return launchMsg{record: rec, spec: spec}
+	}
 }

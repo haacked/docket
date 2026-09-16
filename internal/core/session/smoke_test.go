@@ -35,14 +35,14 @@ func TestSmokeAgainstARealPullRequest(t *testing.T) {
 	svc := realService(t)
 	ctx := context.Background()
 
-	plan, spec, err := svc.Explain(ctx, ref, "claude")
+	plan, spec, err := svc.Explain(ctx, ref, "claude", review.ModeInteractive)
 	if err != nil {
 		t.Fatalf("Explain: %v", err)
 	}
 	t.Logf("%s is %s: %s", ref, plan.Tier, plan.Description())
 	t.Logf("would run: %s", spec)
 
-	rec, _, err := svc.Prepare(ctx, ref, "claude")
+	rec, _, err := svc.Prepare(ctx, ref, "claude", review.ModeInteractive)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestSmokeAgainstARealPullRequest(t *testing.T) {
 		}
 	}
 
-	done, err := svc.Abandon(rec)
+	done, err := svc.Abandon(context.Background(), rec)
 	if err != nil {
 		t.Fatalf("Abandon: %v", err)
 	}
