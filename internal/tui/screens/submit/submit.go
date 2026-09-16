@@ -15,6 +15,7 @@ import (
 
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/tui/msg"
+	"github.com/haacked/docket/internal/tui/screens/choice"
 )
 
 type Styles struct {
@@ -70,7 +71,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		case "esc":
 			return m, msg.Send(msg.Goto{Screen: msg.Dashboard})
 		case "tab":
-			m.Event = next(m.Events, m.Event)
+			m.Event = choice.Next(m.Events, m.Event)
 			return m, nil
 		// The body is a textarea, where enter is a newline. Submitting is its own
 		// key so a multi-line summary stays possible.
@@ -96,7 +97,7 @@ func (m Model) View() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s  %s\n\n", m.Styles.Label.Render("Submit"), m.Record.Ref, cmp.Or(m.Record.Title, m.Record.URL))
 
-	b.WriteString(m.Styles.Label.Render("Event") + " " + m.eventLine() + "\n")
+	b.WriteString(m.Styles.Label.Render("Event") + " " + choice.Line(m.Events, m.Event, m.Styles.Selected, m.Styles.Dim) + "\n")
 	if !slices.Contains(m.Events, review.EventApprove) {
 		b.WriteString(m.Styles.Dim.Render("GitHub refuses an approval of your own pull request, so approve is not offered.") + "\n")
 	}
@@ -108,25 +109,4 @@ func (m Model) View() string {
 		b.WriteString("\n" + m.Styles.Dim.Render(m.Busy+"…") + "\n")
 	}
 	return b.String()
-}
-
-func (m Model) eventLine() string {
-	parts := make([]string, 0, len(m.Events))
-	for _, event := range m.Events {
-		if event == m.Event {
-			parts = append(parts, m.Styles.Selected.Render("["+event+"]"))
-			continue
-		}
-		parts = append(parts, m.Styles.Dim.Render(" "+event+" "))
-	}
-	return strings.Join(parts, " ")
-}
-
-// next cycles through the events. slices.Index returns -1 for an event that is
-// not listed, which lands on the first one.
-func next(events []string, current string) string {
-	if len(events) == 0 {
-		return current
-	}
-	return events[(slices.Index(events, current)+1)%len(events)]
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
+	"github.com/haacked/docket/internal/core/session"
 	"github.com/haacked/docket/internal/core/tier"
 	"github.com/haacked/docket/internal/tui/msg"
 )
@@ -31,8 +32,14 @@ func draftedRecord() review.Record {
 	}
 }
 
+// liveApp holds a real service so the root reads the login the way production
+// does. Service.Login caches into Cfg on the first GitHub read, and the startup
+// copy the root also holds stays empty on an install whose config.toml names no
+// user, so the service's copy is the one that is current. None of these tests
+// runs a command, so a service with nothing but its config is enough.
 func liveApp(records ...review.Record) App {
-	a := New(nil, config.Config{DefaultEngine: "claude", GitHubUser: "haacked"}, "", false)
+	cfg := config.Config{DefaultEngine: "claude", GitHubUser: "haacked"}
+	a := New(&session.Service{Cfg: cfg}, config.Config{DefaultEngine: "claude"}, "", false)
 	a.dash = a.dash.SetRecords(records)
 	return a
 }
@@ -117,6 +124,35 @@ func TestADryRunSubmitsNothingAndOpensNoEditor(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Pressing v opens the pane on the record before the file has been read, so the
+// header is this record's rather than the last one's while the load is in
+// flight. The markdown arrives separately.
+func TestOpeningTheNotesAimsThePaneThenShowsTheFile(t *testing.T) {
+	rec := draftedRecord()
+	a := liveApp(rec)
+
+	next, cmd := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	next, cmd = next.(App).Update(msg.OpenNotes{ID: rec.ID})
+	a = next.(App)
+
+	if cmd == nil {
+		t.Fatal("opening the notes read nothing")
+	}
+	if a.screen != msg.Notes {
+		t.Fatalf("screen = %v, want the notes screen", a.screen)
+	}
+	content := a.View().Content
+	if !strings.Contains(content, "haacked/docket#7") || !strings.Contains(content, rec.NotesPath) {
+		t.Errorf("the pane does not name the record before the file lands:\n%s", content)
+	}
+
+	next, _ = a.Update(notesLoadedMsg{record: rec, markdown: "The compaction drops its lock partway through.\n"})
+
+	if content := next.(App).View().Content; !strings.Contains(content, "compaction") {
+		t.Errorf("the loaded notes are not shown:\n%s", content)
 	}
 }
 

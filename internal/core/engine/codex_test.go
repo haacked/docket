@@ -180,6 +180,26 @@ func TestCodexStartGrantsOnlyAbsoluteDirectories(t *testing.T) {
 	}
 }
 
+// codex records the directory it resolved, while the record carries the spelling
+// docket built. On macOS the two differ whenever the clone or DOCKET_HOME sits
+// under /tmp or /var. A capture that misses is silent. The next resume then
+// opens a fresh codex session instead of the conversation.
+func TestCaptureSessionIDMatchesThroughASymlinkedDirectory(t *testing.T) {
+	sessions, real := t.TempDir(), t.TempDir()
+	link := filepath.Join(t.TempDir(), "clone")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("this filesystem has no symlinks: %v", err)
+	}
+
+	startedAt := time.Now().Add(-10 * time.Minute)
+	// codex writes the resolved path; the record holds the link.
+	writeRollout(t, sessions, "01998e2c-0000-7000-8000-0000000000aa", real, startedAt.Add(time.Second))
+
+	if got := capture(t, sessions, codexRecord(link, startedAt)); got != "01998e2c-0000-7000-8000-0000000000aa" {
+		t.Errorf("id = %q, want the session found through the link", got)
+	}
+}
+
 func TestCaptureSessionIDFindsTheSessionThatRanInTheRecordsDirectory(t *testing.T) {
 	sessions, dir := t.TempDir(), t.TempDir()
 	startedAt := time.Now().Add(-10 * time.Minute)
@@ -204,15 +224,20 @@ func TestCaptureSessionIDIgnoresSessionsThatAreNotThisReview(t *testing.T) {
 
 // Resuming writes a further rollout for the same directory, so the newest match
 // is the conversation as it now stands.
-func TestCaptureSessionIDTakesTheNewestMatch(t *testing.T) {
+// review-code runs each of its reviewers through `codex exec` from inside the
+// session, passing no working directory, so every reviewer writes a rollout in
+// this same directory with a later timestamp. docket's own session is the first
+// one after the launch. Taking the newest would hand back a reviewer's thread,
+// which codex refuses to resume through its parent.
+func TestCaptureSessionIDTakesTheFirstSessionAfterTheLaunch(t *testing.T) {
 	sessions, dir := t.TempDir(), t.TempDir()
 	startedAt := time.Now().Add(-time.Hour)
 
-	writeRollout(t, sessions, "first", dir, startedAt.Add(time.Minute))
-	writeRollout(t, sessions, "second", dir, startedAt.Add(30*time.Minute))
+	writeRollout(t, sessions, "docket-session", dir, startedAt.Add(time.Minute))
+	writeRollout(t, sessions, "reviewer-subagent", dir, startedAt.Add(30*time.Minute))
 
-	if got := capture(t, sessions, codexRecord(dir, startedAt)); got != "second" {
-		t.Errorf("id = %q, want the newest session", got)
+	if got := capture(t, sessions, codexRecord(dir, startedAt)); got != "docket-session" {
+		t.Errorf("id = %q, want the session docket launched rather than a reviewer's", got)
 	}
 }
 
@@ -230,7 +255,10 @@ func TestCaptureSessionIDFindsASessionFiledUnderAnEarlierDay(t *testing.T) {
 	}
 }
 
-func TestScanDaysCoversTheLocalDaysFromTheStartUntilToday(t *testing.T) {
+// codex files a rollout under the local date the session began, and the record
+// is stamped immediately before the launch, so those are the only two days that
+// can hold it. The second covers a launch that crosses midnight.
+func TestScanDaysCoversTheStartDayAndTheOneAfterIt(t *testing.T) {
 	const layout = "2006/01/02"
 	startedAt := time.Now().Add(-48 * time.Hour)
 
@@ -238,13 +266,12 @@ func TestScanDaysCoversTheLocalDaysFromTheStartUntilToday(t *testing.T) {
 
 	// The paths are named for local dates, so the list has to be built in local
 	// time or it names a directory codex never wrote.
-	for _, want := range []string{
+	want := []string{
 		startedAt.Local().Format(layout),
-		time.Now().Local().Format(layout),
-	} {
-		if !slices.Contains(days, want) {
-			t.Errorf("days = %v, want %s among them", days, want)
-		}
+		startedAt.Local().AddDate(0, 0, 1).Format(layout),
+	}
+	if !slices.Equal(days, want) {
+		t.Errorf("days = %v, want %v", days, want)
 	}
 }
 

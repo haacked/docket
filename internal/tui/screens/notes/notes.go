@@ -6,11 +6,13 @@ package notes
 import (
 	"cmp"
 	"fmt"
+	"os"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
+	"charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 
 	"github.com/haacked/docket/internal/core/review"
@@ -34,10 +36,24 @@ type Model struct {
 	// that does not change the width re-renders nothing. It is a record of what
 	// was drawn, not a cached terminal size.
 	renderedAt int
+	dark       bool
 }
 
+// New starts the pane on the dark palette. A terminal that never answers Bubble
+// Tea's background-color request keeps it, which is the assumption a terminal
+// tool is safest making.
 func New(styles Styles) Model {
-	return Model{Styles: styles, Viewport: viewport.New()}
+	return Model{Styles: styles, Viewport: viewport.New(), dark: true}
+}
+
+// SetDark picks the palette the notes render in, from the background color the
+// terminal reported.
+func (m Model) SetDark(dark bool) Model {
+	if dark == m.dark {
+		return m
+	}
+	m.dark = dark
+	return m.render()
 }
 
 // SetNotes aims the screen at one record's notes. missing says review-code has
@@ -75,18 +91,29 @@ func (m Model) render() Model {
 		// the frame between the keypress and the load. Nothing to wrap yet.
 		m.Viewport.SetContent("")
 	default:
-		m.Viewport.SetContent(renderMarkdown(m.Markdown, m.Viewport.Width()))
+		m.Viewport.SetContent(renderMarkdown(m.Markdown, m.Viewport.Width(), m.dark))
 	}
 	return m
 }
 
-func renderMarkdown(markdown string, width int) string {
+func renderMarkdown(markdown string, width int, dark bool) string {
 	if width <= 0 {
 		return markdown
 	}
-	// WithEnvironmentConfig honors GLAMOUR_STYLE, so the notes follow whatever
-	// the user already set for every other glamour-rendered tool.
-	renderer, err := glamour.NewTermRenderer(glamour.WithEnvironmentConfig(), glamour.WithWordWrap(width))
+
+	// GLAMOUR_STYLE wins, so the notes follow whatever the user already set for
+	// every other glamour-rendered tool. glamour v2 has no style that follows the
+	// terminal, and its own fallback is dark whatever the terminal is, so docket
+	// picks from the background color Bubble Tea reported instead.
+	style := glamour.WithStandardStyle(styles.LightStyle)
+	switch {
+	case os.Getenv("GLAMOUR_STYLE") != "":
+		style = glamour.WithEnvironmentConfig()
+	case dark:
+		style = glamour.WithStandardStyle(styles.DarkStyle)
+	}
+
+	renderer, err := glamour.NewTermRenderer(style, glamour.WithWordWrap(width))
 	if err != nil {
 		return markdown
 	}

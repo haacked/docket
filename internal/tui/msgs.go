@@ -35,8 +35,9 @@ type childExitedMsg struct {
 }
 
 // detectedMsg carries the record after docket read GitHub for it. submitted
-// marks the one that followed a submission, which is the only detection that
-// leaves a screen behind.
+// marks the detection that follows a submission. The submit screen is still
+// showing when that one arrives, so the root switches to the dashboard and
+// clears the screen's busy marker.
 type detectedMsg struct {
 	record    review.Record
 	submitted bool

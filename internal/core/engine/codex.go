@@ -74,10 +74,6 @@ type sessionMeta struct {
 // same directory from matching.
 const startTolerance = 2 * time.Second
 
-// scanDayLimit caps how far CaptureSessionID walks. A record whose session
-// spanned more days than this has nothing worth resuming.
-const scanDayLimit = 7
-
 // How codex names a session's directory and its file, both in local time.
 const (
 	dayLayout  = "2006/01/02"
@@ -86,8 +82,16 @@ const (
 
 // CaptureSessionID finds the session codex just recorded for this record and
 // returns its id. A session matches when it ran in the record's directory and
-// began no earlier than the record did. The newest match wins, because resuming
-// writes a further rollout and the newest one is the conversation as it stands.
+// began no earlier than the record did. The oldest match wins.
+//
+// Oldest rather than newest, because docket's session is not the only codex
+// process in that directory. review-code dispatches each of its reviewers
+// through `codex exec` from inside the running session and passes no working
+// directory, so every reviewer inherits this one and writes its own rollout
+// carrying the same cwd and a later timestamp. Those rollouts outnumber the real
+// one. codex also refuses outright to resume a sub-agent thread through its
+// parent. A resume is still captured, because launch stamps StartedAt again and
+// the cutoff moves past the earlier session with it.
 //
 // Nothing found is not an error. The record keeps no id, and the next launch
 // starts a fresh session rather than resuming.
@@ -105,23 +109,20 @@ func (Codex) CaptureSessionID(rec review.Record, paths Paths) (string, error) {
 	// oldest session worth opening would have.
 	floor := "rollout-" + cutoff.Local().Format(fileLayout)
 
-	days := scanDays(rec.StartedAt)
-	// Both loops run newest first. The session that just exited is the newest
-	// rollout, so the first match is the answer. A real sessions directory holds
-	// hundreds of older files, and none of them is opened.
-	for i := len(days) - 1; i >= 0; i-- {
-		matches, err := filepath.Glob(filepath.Join(paths.CodexSessions, days[i], "rollout-*.jsonl"))
+	for _, day := range scanDays(rec.StartedAt) {
+		matches, err := filepath.Glob(filepath.Join(paths.CodexSessions, day, "rollout-*.jsonl"))
 		if err != nil {
-			return "", fmt.Errorf("scan codex sessions in %s: %w", days[i], err)
+			return "", fmt.Errorf("scan codex sessions in %s: %w", day, err)
 		}
-		for j := len(matches) - 1; j >= 0; j-- {
+		for _, path := range matches {
 			// Glob sorts lexically. This layout is zero-padded from the year down,
-			// so that order is chronological. One name below the floor means every
-			// name left, here and in the older days, is below it too.
-			if filepath.Base(matches[j]) < floor {
-				return "", nil
+			// so that order is chronological. A name below the floor belongs to a
+			// session that started before this one. Comparing the name is what keeps
+			// the hundreds of older files in a real sessions directory unopened.
+			if filepath.Base(path) < floor {
+				continue
 			}
-			meta, ok := readSessionMeta(matches[j])
+			meta, ok := readSessionMeta(path)
 			if !ok || meta.Payload.ID == "" || meta.Payload.Timestamp.Before(cutoff) {
 				continue
 			}
@@ -134,22 +135,16 @@ func (Codex) CaptureSessionID(rec review.Record, paths Paths) (string, error) {
 }
 
 // scanDays lists the directories a session started at startedAt could be filed
-// under, oldest first. codex names them for the local date while the timestamps
-// inside are UTC. A session started late in the evening is therefore filed a day
-// before the one its own timestamp reads.
+// under, oldest first. codex files a rollout under the local date the session
+// began, and launch stamps StartedAt immediately before handing over the
+// terminal, so only that day and the one after it can hold it. The second day
+// covers a launch that crosses midnight.
+//
+// codex names the directories for the local date while the timestamps inside
+// them are UTC, which is why these are built in local time.
 func scanDays(startedAt time.Time) []string {
 	day := midnight(startedAt.Local())
-	last := midnight(time.Now().Local())
-
-	var days []string
-	for range scanDayLimit {
-		days = append(days, day.Format(dayLayout))
-		if !day.Before(last) {
-			break
-		}
-		day = day.AddDate(0, 0, 1)
-	}
-	return days
+	return []string{day.Format(dayLayout), day.AddDate(0, 0, 1).Format(dayLayout)}
 }
 
 func midnight(t time.Time) time.Time {

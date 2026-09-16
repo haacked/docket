@@ -107,6 +107,12 @@ func TestALongReviewScrolls(t *testing.T) {
 // glamour wraps to a fixed width, so a resize that only moved the pane would
 // leave the old line breaks behind.
 func TestAResizeReRendersTheNotes(t *testing.T) {
+	// renderMarkdown falls back to the raw markdown when glamour cannot build a
+	// renderer, and a GLAMOUR_STYLE naming a style file this machine does not
+	// have does exactly that. Both widths would then return the same string and
+	// the test would fail on that developer's box rather than on the code.
+	t.Setenv("GLAMOUR_STYLE", "notty")
+
 	long := "The compaction rewrites the log from what Fold produced, and it holds the lock for the whole rewrite rather than dropping it between the read and the replace.\n"
 	m := New(Styles{}).SetSize(100, 20).SetNotes(record(), long, false)
 	wide := m.View()

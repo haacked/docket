@@ -43,7 +43,7 @@ A pull request can be a URL, `org/repo#123`, or a bare number once `default_repo
 
 Dashboard keys: `n` new review, `enter` resume, `s` submit a drafted review, `v` view the notes, `x` abandon, `r` refresh the selected record from GitHub, `R` refresh every record, `a` show archived records, `q` quit.
 
-On the submit screen, `tab` picks the event and `ctrl+s` submits. Approving is not offered on your own pull request, because GitHub refuses it. On the notes screen, `e` opens the file in `$EDITOR`.
+On the submit screen, `tab` picks the event and `ctrl+s` submits. Approving is not offered on your own pull request, because GitHub refuses it. On the notes screen, `e` opens the file in `$EDITOR`. The notes follow your terminal's background, and `GLAMOUR_STYLE` overrides that with any glamour style name, such as `light`, `dracula`, or `notty`.
 
 State lives in `~/.docket`, which `DOCKET_HOME` or `--home` overrides. It holds an append-only `index.jsonl`, `clones/` for shallow clones, `scratch/` for the tier-1 launch directory, and `config.toml`. Two docket instances can run at once: every write appends one line while holding a lock, and nothing is rewritten in place.
 

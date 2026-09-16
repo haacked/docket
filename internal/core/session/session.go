@@ -381,6 +381,10 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 		return rec, fmt.Errorf("GitHub refuses an approval of your own pull request; submit %s as %s instead", rec.Ref, review.EventComment)
 	}
 
+	// The user is retrying, so drop what the last attempt recorded. Keeping it
+	// would print the old failure under the row of a review that did go in.
+	// recordErr writes a new one if this attempt fails too.
+	rec.Err = ""
 	if err := s.GH.SubmitReview(ctx, rec.Ref, rec.ReviewID, event, body); err != nil {
 		return s.recordErr(rec, err)
 	}

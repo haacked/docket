@@ -81,10 +81,13 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 // Init shows the index from disk first and re-reads GitHub after, so the first
 // frame is the user's list rather than an empty dashboard waiting on the network.
 func (a App) Init() tea.Cmd {
+	// The notes pane renders markdown in a palette the terminal's background has
+	// to pick, and glamour has no style that follows it.
+	requestBackground := func() tea.Msg { return tea.RequestBackgroundColor() }
 	if a.dryRun {
-		return a.loadRecords()
+		return tea.Batch(a.loadRecords(), requestBackground)
 	}
-	return tea.Batch(a.loadRecords(), a.reconcile())
+	return tea.Batch(a.loadRecords(), a.reconcile(), requestBackground)
 }
 
 func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -99,6 +102,10 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if a.screen == msg.Notes {
 			a.notes = a.notes.SetSize(message.Width, a.notesHeight())
 		}
+		return a, nil
+
+	case tea.BackgroundColorMsg:
+		a.notes = a.notes.SetDark(message.IsDark())
 		return a, nil
 
 	case tea.KeyPressMsg:
@@ -455,11 +462,16 @@ func (a App) editNotes(rec review.Record) tea.Cmd {
 	}
 }
 
-// notesHeight is the room the notes pane gets: the window less the title, the
-// record header, the status line, and the footer. It is never cached, because a
+// notesChrome is what View draws around the notes pane: the title, the blank
+// line under it, the record header, the notes path, the blank line under that,
+// the blank line below the pane, the status line and its blank line, and the
+// footer. Changing View's layout means changing this count.
+const notesChrome = 9
+
+// notesHeight is the room the notes pane gets. It is never cached, because a
 // WindowSizeMsg follows every return from a child process.
 func (a App) notesHeight() int {
-	return max(a.height-9, 1)
+	return max(a.height-notesChrome, 1)
 }
 
 func (a App) prepare(input, engineName string) tea.Cmd {
@@ -468,6 +480,16 @@ func (a App) prepare(input, engineName string) tea.Cmd {
 		ref, err := pr.ParseRef(input, defaultRepo)
 		if err != nil {
 			return errMsg{err: err}
+		}
+		// Startup checks the default engine's binary, and the new review screen
+		// offers the others too. Looking this one up before Prepare is what keeps
+		// a missing binary from costing a tier-2 clone first.
+		eng, err := engine.For(engineName)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		if _, err := osexec.LookPath(eng.Binary()); err != nil {
+			return errMsg{err: fmt.Errorf("%s is not on your PATH", eng.Binary())}
 		}
 		rec, plan, err := svc.Prepare(context.Background(), ref, engineName)
 		if err != nil {
