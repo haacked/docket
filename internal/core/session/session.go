@@ -476,20 +476,23 @@ func (s *Service) EditNotesSpec(rec review.Record) (exec.CommandSpec, error) {
 // every machine docket runs on.
 const DefaultEditor = "vi"
 
-// EditorSpec builds the command that opens path in editor, which is $EDITOR and
-// may carry arguments of its own, as "code --wait" does.
+// EditorSpec builds the command that opens path in editor, which is $EDITOR.
+//
+// $EDITOR is a shell command line rather than an executable and its arguments.
+// git and crontab read it the same way. Running it through sh accepts both
+// "code --wait" and an executable whose path contains a space. The path is a
+// positional parameter, so the shell never reads it as code.
 //
 // The spec names no directory. The path is absolute, and the notes file may not
 // exist yet. Pointing the child at its parent would fail to start the editor on
 // exactly the record that has no notes to read.
 func EditorSpec(editor, path string) exec.CommandSpec {
-	fields := strings.Fields(editor)
-	if len(fields) == 0 {
-		fields = []string{DefaultEditor}
+	if strings.TrimSpace(editor) == "" {
+		editor = DefaultEditor
 	}
 	return exec.CommandSpec{
-		Path: fields[0],
-		Args: append(slices.Clone(fields[1:]), path),
+		Path: "sh",
+		Args: []string{"-c", editor + ` "$1"`, "sh", path},
 	}
 }
 

@@ -204,6 +204,11 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.editNotes(rec)
 
 	case notesLoadedMsg:
+		// The read runs in a command, so it can land after the user opened another
+		// record.
+		if message.record.ID != a.notes.Record.ID {
+			return a, nil
+		}
 		a.notes = a.notes.SetNotes(message.record, message.markdown, message.missing)
 		return a, nil
 

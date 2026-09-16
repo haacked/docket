@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,30 +86,33 @@ func TestEditorSpecOpensThePathInTheConfiguredEditor(t *testing.T) {
 	const path = "/opt/review-code/.reviews/haacked/docket/pr-7.md"
 
 	tests := []struct {
-		name     string
-		editor   string
-		wantPath string
-		wantArgs []string
+		name   string
+		editor string
+		want   string
 	}{
 		{
-			name:     "a plain editor",
-			editor:   "vim",
-			wantPath: "vim",
-			wantArgs: []string{path},
+			name:   "a plain editor",
+			editor: "vim",
+			want:   `vim "$1"`,
 		},
 		{
 			// An editor that returns before the file is saved would send docket
 			// back to notes it has already re-read, so people set this.
-			name:     "an editor carrying arguments",
-			editor:   "code --wait",
-			wantPath: "code",
-			wantArgs: []string{"--wait", path},
+			name:   "an editor carrying arguments",
+			editor: "code --wait",
+			want:   `code --wait "$1"`,
 		},
 		{
-			name:     "several arguments",
-			editor:   "emacsclient -nw -c",
-			wantPath: "emacsclient",
-			wantArgs: []string{"-nw", "-c", path},
+			name:   "several arguments",
+			editor: "emacsclient -nw -c",
+			want:   `emacsclient -nw -c "$1"`,
+		},
+		{
+			// The quotes are the shell's to read, so the space stays inside the
+			// executable's path.
+			name:   "an executable whose path contains a space",
+			editor: `"/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl" -w`,
+			want:   `"/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl" -w "$1"`,
 		},
 	}
 
@@ -116,13 +120,29 @@ func TestEditorSpecOpensThePathInTheConfiguredEditor(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			spec := EditorSpec(tt.editor, path)
 
-			if spec.Path != tt.wantPath {
-				t.Errorf("path = %q, want %q", spec.Path, tt.wantPath)
+			if spec.Path != "sh" {
+				t.Errorf("path = %q, want the shell that reads $EDITOR", spec.Path)
 			}
-			if strings.Join(spec.Args, " ") != strings.Join(tt.wantArgs, " ") {
-				t.Errorf("args = %v, want %v", spec.Args, tt.wantArgs)
+			want := []string{"-c", tt.want, "sh", path}
+			if !slices.Equal(spec.Args, want) {
+				t.Errorf("args = %q, want %q", spec.Args, want)
 			}
 		})
+	}
+}
+
+// The notes path reaches the shell as $1, not inside the script. A path
+// carrying a quote or a semicolon is therefore an argument, never a command.
+func TestEditorSpecKeepsThePathOutOfTheScript(t *testing.T) {
+	const path = `/tmp/notes/"; touch /tmp/pwned; ".md`
+
+	spec := EditorSpec("vim", path)
+
+	if got := spec.Args[1]; got != `vim "$1"` {
+		t.Errorf("script = %q, want the path left out of it", got)
+	}
+	if got := spec.Args[len(spec.Args)-1]; got != path {
+		t.Errorf("last argument = %q, want the path %q", got, path)
 	}
 }
 
@@ -132,10 +152,10 @@ func TestEditorSpecFallsBackWhenTheEnvironmentNamesNoEditor(t *testing.T) {
 	for _, editor := range []string{"", "   "} {
 		spec := EditorSpec(editor, path)
 
-		if spec.Path == "" || strings.ContainsAny(spec.Path, " \t") {
-			t.Errorf("EDITOR=%q gives the command %q, want one executable docket can run", editor, spec.Path)
+		if spec.Args[1] != DefaultEditor+` "$1"` {
+			t.Errorf("EDITOR=%q gives the script %q, want %q", editor, spec.Args[1], DefaultEditor+` "$1"`)
 		}
-		if len(spec.Args) == 0 || spec.Args[len(spec.Args)-1] != path {
+		if spec.Args[len(spec.Args)-1] != path {
 			t.Errorf("EDITOR=%q gives the arguments %v, want the notes last", editor, spec.Args)
 		}
 	}
@@ -152,10 +172,10 @@ func TestEditNotesSpecOpensTheRecordsNotes(t *testing.T) {
 		t.Fatalf("EditNotesSpec: %v", err)
 	}
 
-	if spec.Path != "code" {
-		t.Errorf("path = %q, want the editor from the environment", spec.Path)
+	if spec.Args[1] != `code --wait "$1"` {
+		t.Errorf("script = %q, want the editor from the environment", spec.Args[1])
 	}
-	if len(spec.Args) == 0 || spec.Args[len(spec.Args)-1] != rec.NotesPath {
+	if spec.Args[len(spec.Args)-1] != rec.NotesPath {
 		t.Errorf("args = %v, want %s last", spec.Args, rec.NotesPath)
 	}
 }

@@ -156,6 +156,37 @@ func TestOpeningTheNotesAimsThePaneThenShowsTheFile(t *testing.T) {
 	}
 }
 
+// The read runs in a command, so a slow one can land after the user opened
+// another record. The pane keeps showing the record they asked for.
+func TestNotesLandingForAnotherRecordAreIgnored(t *testing.T) {
+	left := draftedRecord()
+	open := draftedRecord()
+	open.ID = "rec-2"
+	open.Ref = pr.Ref{Org: "haacked", Repo: "docket", Number: 9}
+	open.NotesPath = "/opt/review-code/.reviews/haacked/docket/pr-9.md"
+
+	a := liveApp(left, open)
+	next, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	next, _ = next.(App).Update(msg.OpenNotes{ID: open.ID})
+	a = next.(App)
+
+	next, _ = a.Update(notesLoadedMsg{record: left, markdown: "Departed, the notes of the record left behind.\n"})
+	a = next.(App)
+
+	if a.notes.Record.ID != open.ID {
+		t.Errorf("the pane is aimed at %q, want the record the user opened", a.notes.Record.ID)
+	}
+	if content := a.View().Content; strings.Contains(content, "Departed") {
+		t.Errorf("the other record's notes are shown:\n%s", content)
+	}
+
+	next, _ = a.Update(notesLoadedMsg{record: open, markdown: "Arrived, the notes of the record on screen.\n"})
+
+	if content := next.(App).View().Content; !strings.Contains(content, "Arrived") {
+		t.Errorf("the notes the user asked for are not shown:\n%s", content)
+	}
+}
+
 // The pane draws nothing until it knows how much room it has, and a
 // WindowSizeMsg follows every return from a child process.
 func TestAResizeReachesTheNotesPane(t *testing.T) {
