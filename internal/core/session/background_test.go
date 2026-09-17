@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -117,12 +118,16 @@ func TestStartBackgroundRecordsTheReviewBeforeLaunchingIt(t *testing.T) {
 	}
 }
 
-// A start that never reported an id leaves no session to ask after. Polling it
-// would keep the tick alive forever over a review that is not running.
-func TestAStartThatReportedNoIdIsNotPolled(t *testing.T) {
+// A start that never reported an id leaves no session to wait on. The record
+// must not read as a running one, or the tick would spin over it for ever.
+// Recovery is what settles it, one way or the other.
+func TestAStartThatReportedNoIdIsNotWaitedOn(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
-	runner := &exec.Fake{Errs: map[string]error{"--bg": errors.New("claude is not logged in")}}
+	runner := &exec.Fake{
+		Errs:    map[string]error{"--bg": errors.New("claude is not logged in")},
+		Results: map[string]exec.Result{"agents": {Stdout: "[]"}},
+	}
 	svc.Runner = runner
 
 	rec, _, _ := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground)
@@ -131,12 +136,15 @@ func TestAStartThatReportedNoIdIsNotPolled(t *testing.T) {
 	if rec.BackgroundRunning() {
 		t.Error("a record with no background id is being waited on")
 	}
-	before := len(runner.Calls)
-	if _, _, err := svc.PollBackground(context.Background()); err != nil {
+	records, statuses, err := svc.PollBackground(context.Background())
+	if err != nil {
 		t.Fatalf("PollBackground: %v", err)
 	}
-	if len(runner.Calls) != before {
-		t.Errorf("the poll asked about a session that was never started: %v", runner.Lines())
+	if records[0].State == review.StateReviewing {
+		t.Error("a start that launched nothing is still waiting to finish")
+	}
+	if len(statuses) != 0 {
+		t.Errorf("a session that was never started reported a status: %+v", statuses)
 	}
 }
 
@@ -550,4 +558,96 @@ func TestPrepareMarksYourOwnPullRequest(t *testing.T) {
 	if rec.OwnPR {
 		t.Errorf("%s wrote this pull request, not the signed-in user", rec.Author)
 	}
+}
+
+// A launch records its id in a second append, so a docket killed in between
+// leaves a record naming no session. BackgroundRunning excludes it from every
+// poll, so without recovery the agent runs on with nobody watching it.
+func TestAPollAdoptsASessionTheLaunchNeverRecorded(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner("[]")
+	rec := startedBackground(t, svc, runner)
+
+	// The record as a docket killed between the launch and the second append
+	// would have left it.
+	lost := rec
+	lost.BGID = ""
+	if err := svc.append(lost); err != nil {
+		t.Fatal(err)
+	}
+
+	runner.Results["agents"] = exec.Result{Stdout: `[{"id": "6d681a76", "kind": "background",
+		"cwd": "` + rec.Dir + `", "startedAt": ` + msOf(rec.StartedAt) + `,
+		"sessionId": "` + bgSession + `", "state": "working", "status": "busy", "pid": 7}]`}
+
+	records, statuses, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatalf("PollBackground: %v", err)
+	}
+	if records[0].BGID != "6d681a76" {
+		t.Errorf("background id = %q, want the session adopted", records[0].BGID)
+	}
+	if records[0].State != review.StateReviewing {
+		t.Errorf("state = %q, want the adopted review still running", records[0].State)
+	}
+	if _, running := statuses[records[0].ID]; !running {
+		t.Error("the adopted session reports no status")
+	}
+}
+
+// A record with no session to find is one whose launch failed before starting
+// anything. Leaving it would read as running for ever.
+func TestAPollClosesALaunchThatStartedNothing(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner("[]")
+	rec := startedBackground(t, svc, runner)
+
+	lost := rec
+	lost.BGID = ""
+	if err := svc.append(lost); err != nil {
+		t.Fatal(err)
+	}
+
+	records, _, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatalf("PollBackground: %v", err)
+	}
+	if records[0].State == review.StateReviewing {
+		t.Error("a launch that started nothing is still waiting to finish")
+	}
+}
+
+// Archiving happens on its own once a review goes in, so there is nobody to
+// weigh an agent that may still be writing against a directory removed under it.
+func TestArchiveKeepsTheCloneWhenTheStopFails(t *testing.T) {
+	submitted := start.Add(time.Minute)
+	ghc := &fakeGH{login: "haacked", info: prInfo(), reviews: []review.GHReview{
+		{ID: 55, State: "APPROVED", SubmittedAt: &submitted, User: struct {
+			Login string `json:"login"`
+		}{Login: "haacked"}},
+	}}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner(bgListing("6d681a76", bgSession, "done", true))
+	rec := startedBackground(t, svc, runner)
+	runner.Errs = map[string]error{"stop": errors.New("no such session")}
+
+	records, _, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[0].State != review.StateArchived {
+		t.Errorf("state = %q, want the record closed anyway", records[0].State)
+	}
+	if !strings.Contains(records[0].Err, "no such session") {
+		t.Errorf("the row does not say the stop failed: %q", records[0].Err)
+	}
+	if _, err := os.Stat(rec.Dir); err != nil {
+		t.Errorf("the clone at %s was deleted under an agent that may still hold it", rec.Dir)
+	}
+}
+
+func msOf(t time.Time) string {
+	return strconv.FormatInt(t.UnixMilli(), 10)
 }

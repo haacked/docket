@@ -96,12 +96,11 @@ func (a App) Init() tea.Cmd {
 	// A background session outlives the docket that started it, so startup asks
 	// the agent about them straight away rather than waiting out the first tick.
 	//
-	// The two run in order because both read the whole index and both detect.
-	// Side by side, whichever finished last would draw, and that is the one that
-	// read the index before the other wrote to it.
+	// All three run in order because each reads the whole index and the last two
+	// write to it. Side by side, whichever finished last would draw, and that is
+	// the one that read the index before the others wrote to it.
 	return tea.Batch(
-		a.loadRecords(),
-		tea.Sequence(a.reconcile(), a.pollBackground()),
+		tea.Sequence(a.loadRecords(), a.reconcile(), a.pollBackground()),
 		requestBackground,
 	)
 }
@@ -674,14 +673,15 @@ func notesFor(statuses map[string]engine.BGStatus) map[string]string {
 	return notes
 }
 
-// startBackground launches a review that runs without the terminal, then polls
-// at once so the row shows what the session is doing rather than nothing.
+// startBackground launches a review that runs without the terminal. The poll
+// that follows is the one detectedMsg arms for any record that comes back
+// running, so this adds none of its own: two would read the index and the agent
+// twice for one keystroke.
 func (a App) startBackground(rec review.Record) tea.Cmd {
 	svc := a.svc
-	started := detected(func() (review.Record, error) {
+	return detected(func() (review.Record, error) {
 		return svc.StartBackground(context.Background(), rec)
 	})
-	return tea.Sequence(started, a.pollBackground())
 }
 
 // openBackground puts a running session on the terminal. Which command does that

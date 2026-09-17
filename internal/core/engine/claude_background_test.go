@@ -5,8 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/haacked/docket/internal/core/exec"
+	"github.com/haacked/docket/internal/core/review"
+	"github.com/haacked/docket/internal/core/tier"
 )
 
 // backgrounded is what `claude --bg` prints on stdout. The lines under the id
@@ -250,5 +253,71 @@ func TestReviewingYourOwnPullRequestAsksForTheDraft(t *testing.T) {
 		if !strings.Contains(line, "--self") {
 			t.Errorf("%s command %s would produce no draft review", name, line)
 		}
+	}
+}
+
+// lostListing holds the session a record launched moments before docket died,
+// a later one dispatched from inside it, one in another directory, and one that
+// started before the record did.
+// launchedAt is when the record started, as claude and docket both count it:
+// milliseconds since the epoch, on this machine's clock.
+const launchedAt = 1789606668709
+
+const lostListing = `[
+  {"id": "11111111", "kind": "background", "cwd": "/tmp/clone", "startedAt": 1789606669000, "state": "working"},
+  {"id": "22222222", "kind": "background", "cwd": "/tmp/clone", "startedAt": 1789606700000, "state": "working"},
+  {"id": "33333333", "kind": "background", "cwd": "/tmp/other", "startedAt": 1789606669000, "state": "working"},
+  {"id": "44444444", "kind": "background", "cwd": "/tmp/clone", "startedAt": 1789606000000, "state": "working"}
+]`
+
+func lostRecord() review.Record {
+	rec := record()
+	rec.Tier = tier.Tier2
+	rec.StartedAt = time.UnixMilli(launchedAt).UTC()
+	return rec
+}
+
+// A launch records its id in a second step, so a docket killed in between
+// leaves a record naming no session and an agent nobody is watching.
+func TestRecoverFindsTheSessionALaunchNeverRecorded(t *testing.T) {
+	id, ok := (Claude{}).RecoverBackgroundID(lostRecord(), exec.Result{Stdout: lostListing})
+	if !ok {
+		t.Fatal("RecoverBackgroundID found nothing to adopt")
+	}
+	// The oldest match at or after the launch. A review dispatches further
+	// sessions from inside the one docket started, and they carry the same
+	// directory and a later time, while a session from before the launch is not
+	// this record's at all.
+	if id != "11111111" {
+		t.Errorf("id = %q, want the session the record started", id)
+	}
+}
+
+func TestRecoverIgnoresSessionsThatCannotBeThisRecords(t *testing.T) {
+	rec := lostRecord()
+
+	// A tier-1 review shares one scratch directory with every other one, so a
+	// match there could belong to another record.
+	tier1 := rec
+	tier1.Tier = tier.Tier1
+	if _, ok := (Claude{}).RecoverBackgroundID(tier1, exec.Result{Stdout: lostListing}); ok {
+		t.Error("a tier-1 record adopted a session from a shared directory")
+	}
+
+	// A record that never launched has no start time to measure against.
+	unstarted := rec
+	unstarted.StartedAt = time.Time{}
+	if _, ok := (Claude{}).RecoverBackgroundID(unstarted, exec.Result{Stdout: lostListing}); ok {
+		t.Error("a record that never launched adopted a session")
+	}
+
+	elsewhere := rec
+	elsewhere.Dir = "/tmp/nowhere"
+	if _, ok := (Claude{}).RecoverBackgroundID(elsewhere, exec.Result{Stdout: lostListing}); ok {
+		t.Error("a record adopted a session from another directory")
+	}
+
+	if _, ok := (Claude{}).RecoverBackgroundID(rec, exec.Result{Stdout: "[]"}); ok {
+		t.Error("a record adopted a session out of an empty listing")
 	}
 }

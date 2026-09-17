@@ -89,6 +89,12 @@ DOCKET_SMOKE_PR=haacked/review-code#159 go test -count=1 -v -run Smoke ./interna
 
 That is how to check the one thing fakes cannot: that the clone sequence really lands on the head branch with files in the working tree.
 
+`internal/core/session/smoke_background_test.go` is the same idea for a background review, and it runs a real one end to end: the launch, the id capture, the poll, the detection of the draft on GitHub, the attach, and the teardown. Name a small pull request of your own, because a large diff dispatches a dozen reviewer agents and runs well past half an hour.
+
+```
+DOCKET_SMOKE_BG_PR=haacked/docket#2 go test -count=1 -v -timeout 50m -run SmokeBackground ./internal/core/session/
+```
+
 ## Where the milestones stand
 
 M1 is in: the dashboard, the new review screen, the claude engine, post-session detection, archive with tier-2 cleanup, abandon, refresh, and `--dry-run`.

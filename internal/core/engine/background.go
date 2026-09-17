@@ -47,6 +47,11 @@ type BackgroundEngine interface {
 	// is absent from the result has no entry, which the caller reads as a
 	// session the agent no longer knows about.
 	ParseStatus(res exec.Result) (map[string]BGStatus, error)
+	// RecoverBackgroundID finds the session a record launched but never got to
+	// record, by the directory it runs in and the time it started. A launch
+	// writes the id in a second step, so a docket that dies in between leaves a
+	// record naming no session and an agent nobody is watching.
+	RecoverBackgroundID(rec review.Record, res exec.Result) (string, bool)
 	// OpenSpec hands the session back to the terminal. It reports false when
 	// there is nothing left to open.
 	OpenSpec(rec review.Record, status BGStatus, paths Paths) (exec.CommandSpec, bool)

@@ -71,6 +71,10 @@ func (s *Service) PollBackground(ctx context.Context) ([]review.Record, map[stri
 		}
 	}
 
+	// A record whose launch never got its id written needs one before it can be
+	// asked about, so recovery runs first and folds its finds into the groups.
+	records, byEngine = s.recoverLost(ctx, records, byEngine)
+
 	statuses := make(map[string]engine.BGStatus)
 	var failure error
 	for name, indexes := range byEngine {
@@ -94,6 +98,51 @@ func (s *Service) PollBackground(ctx context.Context) ([]review.Record, map[stri
 		}
 	}
 	return records, statuses, failure
+}
+
+// recoverLost adopts the sessions that background records launched but never
+// recorded. StartBackground writes the id in a second append, so a docket killed
+// between the launch and that write leaves a record naming no session, which
+// BackgroundRunning excludes from every poll: the agent runs on with nobody
+// watching and nothing to stop it with.
+//
+// A record with no session to find is one whose launch failed before it started
+// anything. Detection closes it rather than leaving a row that reads as running
+// for ever.
+func (s *Service) recoverLost(ctx context.Context, records []review.Record, byEngine map[string][]int) ([]review.Record, map[string][]int) {
+	lost := map[string][]int{}
+	for i, rec := range records {
+		if rec.Mode == review.ModeBackground && rec.State == review.StateReviewing && rec.BGID == "" {
+			lost[rec.Engine] = append(lost[rec.Engine], i)
+		}
+	}
+
+	for name, indexes := range lost {
+		bg, ok := engine.Background(name)
+		if !ok {
+			continue
+		}
+		res, err := s.Runner.Run(ctx, bg.StatusSpec(s.enginePaths()))
+		if err != nil {
+			continue
+		}
+		for _, i := range indexes {
+			rec := records[i]
+			id, found := bg.RecoverBackgroundID(rec, res)
+			if !found {
+				records[i] = s.detectPolled(ctx, rec)
+				continue
+			}
+			rec.BGID = id
+			rec.Err = ""
+			if err := s.append(rec); err != nil {
+				rec.Err = err.Error()
+			}
+			records[i] = rec
+			byEngine[name] = append(byEngine[name], i)
+		}
+	}
+	return records, byEngine
 }
 
 func (s *Service) statuses(ctx context.Context, bg engine.BackgroundEngine) (map[string]engine.BGStatus, error) {
@@ -198,23 +247,21 @@ func (s *Service) afterBackgroundExit(ctx context.Context, rec review.Record) (r
 	return rec, s.append(rec)
 }
 
-// stopBackground ends the agent session behind a record, so nothing is still
-// writing when the clone under it is deleted.
+// stopBackground ends the agent session behind a record and reports whether the
+// agent has let go of it. The caller deletes the working tree the session was
+// running in, so a false answer means that tree has to stay.
 //
 // It asks whether a session exists rather than whether one is running. The agent
 // goes on holding a session after the review it ran has finished, so a record
-// abandoned once it was drafted still has one to end.
-//
-// A failure is recorded and does not stop the abandon. The user asked to be rid
-// of the record, and a row that cannot be abandoned because its agent will not
-// answer is worse than an agent left running.
-func (s *Service) stopBackground(ctx context.Context, rec review.Record) review.Record {
+// closed once it was drafted still has one to end.
+func (s *Service) stopBackground(ctx context.Context, rec review.Record) (review.Record, bool) {
 	bg, ok := engine.Background(rec.Engine)
 	if !ok || !rec.HasBackgroundSession() {
-		return rec
+		return rec, true
 	}
 	if _, err := s.Runner.Run(ctx, bg.StopSpec(rec, s.enginePaths())); err != nil {
 		rec.Err = fmt.Sprintf("stop the background session: %v", err)
+		return rec, false
 	}
-	return rec
+	return rec, true
 }

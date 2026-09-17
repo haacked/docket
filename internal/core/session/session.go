@@ -563,13 +563,23 @@ func EditorSpec(editor, path string) exec.CommandSpec {
 // Archive cleans up what docket created and closes the record. It leaves
 // review-code's notes file alone, because that is the part worth keeping.
 //
-// It ends the agent session first, for the same reason Abandon does. Submitting
-// is the ordinary end of a background review, and the agent goes on holding the
-// session it ran until something stops it. Left alone, one session would be held
-// per review, and for tier 2 the cleanup below would delete the very directory
-// that session is working in.
+// It ends the agent session first. Submitting is the ordinary end of a
+// background review, and the agent goes on holding the session it ran until
+// something stops it. Left alone, one session would be held per review.
+//
+// A stop that fails leaves the clone alone. Archiving is something docket does
+// on its own once a review goes in, so there is nobody to weigh an agent that
+// may still be writing against a directory removed under it. The record closes
+// carrying the reason, and the directory stays for the user to deal with.
+// Abandon makes the opposite call, because there the user asked.
 func (s *Service) Archive(ctx context.Context, rec review.Record) (review.Record, error) {
-	rec = s.stopBackground(ctx, rec)
+	rec, stopped := s.stopBackground(ctx, rec)
+	if !stopped {
+		at := s.now()
+		rec.ArchivedAt = &at
+		rec.State = review.StateArchived
+		return rec, s.append(rec)
+	}
 	if err := s.cleanup(rec); err != nil {
 		return s.recordErr(rec, err)
 	}
@@ -580,8 +590,12 @@ func (s *Service) Archive(ctx context.Context, rec review.Record) (review.Record
 }
 
 // Abandon drops a review the user is done with. The record stays in the index.
+//
+// A stop that fails is recorded and the abandon goes on anyway. The user asked
+// to be rid of this review, and a row that cannot be closed because its agent
+// will not answer is worse than a directory deleted under one.
 func (s *Service) Abandon(ctx context.Context, rec review.Record) (review.Record, error) {
-	rec = s.stopBackground(ctx, rec)
+	rec, _ = s.stopBackground(ctx, rec)
 	if err := s.cleanup(rec); err != nil {
 		return s.recordErr(rec, err)
 	}

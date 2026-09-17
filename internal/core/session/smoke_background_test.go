@@ -22,9 +22,10 @@ import (
 // name a pull request. It creates a pending review on that pull request, which
 // is what review-code's --draft does, and it never submits one.
 //
-// Name a pull request somebody else wrote. review-code skips the draft review on
-// your own unless it is passed --self, which docket does not pass, so your own
-// pull request ends the run in unreviewed however well the machinery worked:
+// Your own pull request is the one worth naming: Prepare marks it and the launch
+// passes --self, which is what makes review-code create the draft this test
+// detects. Name a small one. A review of a large diff dispatches a dozen
+// reviewer agents and runs well past half an hour:
 //
 //	DOCKET_SMOKE_BG_PR=haacked/docket#4 go test -count=1 -v -timeout 40m -run SmokeBackground ./internal/core/session/
 func TestSmokeBackgroundAgainstARealPullRequest(t *testing.T) {

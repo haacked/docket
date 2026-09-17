@@ -8,6 +8,7 @@ import (
 
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/review"
+	"github.com/haacked/docket/internal/core/tier"
 )
 
 // StartBackground launches the review as a detached session.
@@ -87,10 +88,10 @@ func (Claude) StatusSpec(_ Paths) exec.CommandSpec {
 }
 
 // bgStateDone is the state claude reports once a background session has
-// finished its turn. An unfamiliar state means the session is still going:
-// polling one that is really finished costs a listing per tick, while reading an
-// unknown state as finished would send docket to GitHub for a review still being
-// written.
+// finished its turn. It is not the only way a session ends, so the process
+// rather than the state is what ParseStatus reads: claude holds one for every
+// session it is still working on, and drops it for every session it is not.
+// A state docket has not seen therefore needs no entry here.
 const bgStateDone = "done"
 
 // agentEntry is one element of `claude agents --json`. Interactive sessions
@@ -102,6 +103,8 @@ type agentEntry struct {
 	State     string `json:"state"`
 	Status    string `json:"status"`
 	PID       int    `json:"pid"`
+	CWD       string `json:"cwd"`
+	StartedAt int64  `json:"startedAt"`
 }
 
 // ParseStatus keys the listing by the short id docket stored at launch. An
@@ -133,6 +136,41 @@ func (Claude) ParseStatus(res exec.Result) (map[string]BGStatus, error) {
 		}
 	}
 	return out, nil
+}
+
+// RecoverBackgroundID finds the session a record launched but never recorded.
+//
+// The record's own directory is what identifies it. docket gives every tier-2
+// review a directory of its own, and the launch stamps StartedAt immediately
+// before running the command, so a session in that directory that began no
+// earlier is the one the record lost. The oldest match wins, for the same reason
+// the codex engine takes the oldest: a review dispatches further sessions from
+// inside the one docket started.
+//
+// A tier-1 review shares one scratch directory with every other tier-1 review,
+// so a match there could belong to another record. Only a directory this record
+// has to itself can answer.
+func (Claude) RecoverBackgroundID(rec review.Record, res exec.Result) (string, bool) {
+	if rec.Dir == "" || rec.Tier != tier.Tier2 || rec.StartedAt.IsZero() {
+		return "", false
+	}
+	var entries []agentEntry
+	if err := json.Unmarshal([]byte(res.Stdout), &entries); err != nil {
+		return "", false
+	}
+
+	dir := resolve(rec.Dir)
+	cutoff := rec.StartedAt.Add(-startTolerance).UnixMilli()
+	best, bestAt := "", int64(0)
+	for _, entry := range entries {
+		if entry.ID == "" || entry.StartedAt < cutoff || resolve(entry.CWD) != dir {
+			continue
+		}
+		if best == "" || entry.StartedAt < bestAt {
+			best, bestAt = entry.ID, entry.StartedAt
+		}
+	}
+	return best, best != ""
 }
 
 // OpenSpec puts the background session on the terminal. attach is the verb for
