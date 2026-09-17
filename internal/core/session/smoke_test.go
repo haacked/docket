@@ -144,5 +144,6 @@ func realService(t *testing.T) *Service {
 		GH:     gh.New(runner),
 		Git:    gitCLI,
 		Cloner: clone.New(gitCLI, paths),
+		Runner: runner,
 	}
 }

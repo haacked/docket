@@ -25,6 +25,8 @@ Where docket launches the session depends on whether `review-code` already knows
 
 A background session outlives the docket that started it, so quitting docket does not stop the review and starting docket again picks it back up. `x` stops the session before deleting anything, and it never runs `claude rm`, so the conversation survives.
 
+Reviewing your own pull request works. review-code leaves the draft review out of one unless it is asked, so docket asks when the author is you.
+
 Only `claude` runs background reviews. `codex` 0.150.1 has no background mode, so the toggle says so and stays off.
 
 Review notes stay where `review-code` writes them, at `~/.agents/skills/review-code/.reviews/<org>/<repo>/pr-<N>.md`. docket records the path, and never moves or deletes the file.

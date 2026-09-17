@@ -90,6 +90,7 @@ type Record struct {
 	State          State      `json:"state"`
 	ReviewID       int64      `json:"review_id"`
 	NotesPath      string     `json:"notes_path"`
+	OwnPR          bool       `json:"own_pr"`
 	PriorReviewIDs []int64    `json:"prior_review_ids"`
 	Err            string     `json:"err"`
 }

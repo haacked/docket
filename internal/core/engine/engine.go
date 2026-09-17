@@ -57,3 +57,18 @@ func For(name string) (Engine, error) {
 
 // Names lists the engines docket can launch.
 func Names() []string { return []string{Claude{}.Name(), Codex{}.Name()} }
+
+// reviewArgs is the review-code invocation for a record, after the prefix each
+// agent puts in front of it.
+//
+// --self is what lets a review of your own pull request create its draft.
+// review-code leaves the draft out otherwise, and the Suggested Comments with
+// it, so docket would find nothing on GitHub and report the review as
+// unreviewed however well the session went.
+func reviewArgs(rec review.Record) string {
+	args := rec.URL + " --draft"
+	if rec.OwnPR {
+		args += " --self"
+	}
+	return args
+}

@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"fmt"
-
 	"github.com/google/uuid"
 
 	"github.com/haacked/docket/internal/core/exec"
@@ -23,7 +21,7 @@ func (Claude) Start(rec review.Record, _ Paths) exec.CommandSpec {
 	if rec.SessionID != "" {
 		args = append(args, "--session-id", rec.SessionID)
 	}
-	args = append(args, fmt.Sprintf("/review-code %s --draft", rec.URL))
+	args = append(args, "/review-code "+reviewArgs(rec))
 	return exec.CommandSpec{Path: "claude", Args: args, Dir: rec.Dir}
 }
 

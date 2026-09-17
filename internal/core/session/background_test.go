@@ -523,3 +523,31 @@ func TestArchivingABackgroundReviewStopsItsSession(t *testing.T) {
 		t.Errorf("the tier-2 clone at %s survived the archive", dir)
 	}
 }
+
+// Prepare is where docket learns whose pull request this is, and it has to know
+// before the session launches: review-code creates no draft review on your own
+// unless it is asked to.
+func TestPrepareMarksYourOwnPullRequest(t *testing.T) {
+	mine := prInfo()
+	mine.Author.Login = "haacked"
+	ghc := &fakeGH{login: "haacked", info: mine}
+	svc, _ := newService(t, ghc, newFakeGit())
+
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if !rec.OwnPR {
+		t.Error("a pull request the signed-in user wrote was not marked as their own")
+	}
+
+	theirs := &fakeGH{login: "haacked", info: prInfo()}
+	other, _ := newService(t, theirs, newFakeGit())
+	rec, _, err = other.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if rec.OwnPR {
+		t.Errorf("%s wrote this pull request, not the signed-in user", rec.Author)
+	}
+}

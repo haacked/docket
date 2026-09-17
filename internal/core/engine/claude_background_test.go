@@ -212,3 +212,43 @@ func TestOnlyClaudeRunsReviewsInTheBackground(t *testing.T) {
 		t.Errorf("BackgroundNames() = %v", names)
 	}
 }
+
+// `claude stop` on a session that was still working leaves it as "stopped",
+// which is not "done". A user can stop one from outside docket, and a record
+// waiting for that session to finish would wait for ever.
+func TestASessionClaudeNoLongerHoldsIsOver(t *testing.T) {
+	statuses, err := (Claude{}).ParseStatus(exec.Result{
+		Stdout: `[{"id": "bbbbbbbb", "kind": "background", "state": "stopped"}]`,
+	})
+	if err != nil {
+		t.Fatalf("ParseStatus: %v", err)
+	}
+	stopped := statuses["bbbbbbbb"]
+	if !stopped.Done {
+		t.Error("a stopped session reads as still running")
+	}
+	if stopped.Live {
+		t.Error("a stopped session keeps no process, so it is not live")
+	}
+}
+
+// review-code leaves the draft review out of a review of your own pull request
+// unless it is told otherwise, so docket would find nothing on GitHub and call
+// the review unreviewed however well the session went.
+func TestReviewingYourOwnPullRequestAsksForTheDraft(t *testing.T) {
+	rec := record()
+	if line := (Claude{}).Start(rec, Paths{}).String(); strings.Contains(line, "--self") {
+		t.Errorf("command %s passes --self on somebody else's pull request", line)
+	}
+
+	rec.OwnPR = true
+	for name, line := range map[string]string{
+		"start":      (Claude{}).Start(rec, Paths{}).String(),
+		"background": (Claude{}).StartBackground(rec, Paths{}).String(),
+		"codex":      (Codex{}).Start(rec, Paths{}).String(),
+	} {
+		if !strings.Contains(line, "--self") {
+			t.Errorf("%s command %s would produce no draft review", name, line)
+		}
+	}
+}

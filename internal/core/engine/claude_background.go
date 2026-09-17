@@ -18,7 +18,7 @@ import (
 func (Claude) StartBackground(rec review.Record, _ Paths) exec.CommandSpec {
 	return exec.CommandSpec{
 		Path: "claude",
-		Args: []string{"--bg", "/review-code " + rec.URL + " --draft" + unattended(rec)},
+		Args: []string{"--bg", "/review-code " + reviewArgs(rec) + unattended(rec)},
 		Dir:  rec.Dir,
 	}
 }
@@ -87,10 +87,10 @@ func (Claude) StatusSpec(_ Paths) exec.CommandSpec {
 }
 
 // bgStateDone is the state claude reports once a background session has
-// finished its turn. Every other state means it is still going, including the
-// ones docket has not seen: polling a session that is really finished costs one
-// listing per tick, while reading an unknown state as finished would send docket
-// to GitHub for a review still being written.
+// finished its turn. An unfamiliar state means the session is still going:
+// polling one that is really finished costs a listing per tick, while reading an
+// unknown state as finished would send docket to GitHub for a review still being
+// written.
 const bgStateDone = "done"
 
 // agentEntry is one element of `claude agents --json`. Interactive sessions
@@ -121,7 +121,11 @@ func (Claude) ParseStatus(res exec.Result) (map[string]BGStatus, error) {
 			SessionID: entry.SessionID,
 			State:     entry.State,
 			Activity:  entry.Status,
-			Done:      entry.State == bgStateDone,
+			// A session claude is no longer holding is over whatever its state
+			// says. `claude stop` on a session still working leaves it as
+			// "stopped", which is not "done" and would otherwise be polled for
+			// ever, and the user can stop one from outside docket.
+			Done: entry.State == bgStateDone || entry.PID == 0,
 			// claude keeps the process after the session's turn ends, and drops
 			// it once the session is stopped. That is the difference between a
 			// session that has to be attached and one a plain resume reopens.

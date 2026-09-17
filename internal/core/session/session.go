@@ -162,6 +162,14 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mo
 		rec.Dir = dir
 	}
 
+	// resolve read the login docket had cached, which a fresh install does not
+	// have yet. Asking now settles it before the session is launched.
+	me, err := s.Login(ctx)
+	if err != nil {
+		return s.fail(rec, plan, err)
+	}
+	rec.OwnPR = ownPR(rec.Author, me)
+
 	ids, err := s.priorIDs(ctx, ref)
 	if err != nil {
 		return s.fail(rec, plan, err)
@@ -218,6 +226,11 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		SessionID: startingSessionID(eng, mode),
 		State:     review.StatePreparing,
 		NotesPath: plan.NotesPath,
+		// The cached login, because Explain reaches here too and a dry run asks
+		// GitHub for nothing it can avoid. Prepare settles it properly below. A
+		// dry run on an install that has never cached a login therefore leaves
+		// --self off the command it prints.
+		OwnPR: ownPR(info.Author.Login, s.Cfg.GitHubUser),
 	}
 	return rec, plan, info, eng, nil
 }
@@ -411,6 +424,13 @@ func (s *Service) Refresh(ctx context.Context, rec review.Record) (review.Record
 	// detect writes a new Err through recordErr when this attempt fails too.
 	rec.Err = ""
 	return s.detect(ctx, rec)
+}
+
+// ownPR reports whether the pull request is the signed-in user's own. An
+// unknown login answers no, because passing --self on somebody else's pull
+// request is the mistake worth avoiding.
+func ownPR(author, me string) bool {
+	return me != "" && strings.EqualFold(author, me)
 }
 
 // sameRef reports whether two references name one pull request. GitHub compares an
