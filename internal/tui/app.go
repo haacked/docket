@@ -235,8 +235,8 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return a, nil
 		}
-		if rec.BackgroundRunning() {
-			a.status = fmt.Sprintf("%s is still being reviewed in the background", rec.Ref)
+		if rec.State == review.StateReviewing {
+			a.status = fmt.Sprintf("%s is still being reviewed", rec.Ref)
 			return a, nil
 		}
 		a.newrev = a.newrev.Reset().SetExisting(newreview.Existing{
@@ -253,13 +253,19 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return a, nil
 		}
-		if rec.BackgroundRunning() {
+		if rec.State == review.StateReviewing {
 			a.status = fmt.Sprintf("%s is still being reviewed; ask once the review finishes", rec.Ref)
 			return a, nil
 		}
 		if a.dryRun {
 			return a, a.explainAsk(rec)
 		}
+		// A second c before the first session takes the terminal would start
+		// a second session and overwrite the first one's id.
+		if _, busy := a.dash.Busy[rec.ID]; busy {
+			return a, nil
+		}
+		a.dash.Busy[rec.ID] = "opening"
 		return a, a.ask(rec)
 
 	case msg.Resume:

@@ -24,7 +24,7 @@ func (Claude) StartBackground(rec review.Record, _ Paths) exec.CommandSpec {
 }
 
 // unattended answers review-code's pre-flight context clear, because nobody is at
-// the terminal to. reviewArgs answers the prompt about a notes file that already
+// the terminal to answer it. reviewArgs answers the prompt about a notes file that already
 // exists, with the --append or --overwrite it takes from the record's intent.
 const unattended = " --force"
 

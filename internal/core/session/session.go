@@ -548,6 +548,9 @@ func (s *Service) askSpecFor(rec review.Record) (review.Record, exec.CommandSpec
 	if err != nil {
 		return rec, exec.CommandSpec{}, err
 	}
+	if err := refuseReviewing(rec); err != nil {
+		return rec, exec.CommandSpec{}, err
+	}
 	if err := checkDir(rec); err != nil {
 		return rec, exec.CommandSpec{}, err
 	}
@@ -633,14 +636,24 @@ func (s *Service) ExplainRereview(rec review.Record, intent review.Intent, mode 
 	return s.startSpec(eng, rec)
 }
 
+// refuseReviewing refuses a record whose review session may still be writing its
+// notes. Another docket instance can hold an interactive one, so the check reads
+// the state rather than whether a background session is running.
+func refuseReviewing(rec review.Record) error {
+	if rec.State == review.StateReviewing {
+		return fmt.Errorf("%s is still being reviewed", rec.Ref)
+	}
+	return nil
+}
+
 // rearm is the part of a re-review that writes nothing: the checks, and the
 // fields a fresh start needs.
 func (s *Service) rearm(rec review.Record, intent review.Intent, mode review.Mode) (review.Record, error) {
 	if intent != review.IntentAppend && intent != review.IntentOverwrite {
 		return rec, fmt.Errorf("a re-review appends or overwrites, not %q", intent)
 	}
-	if rec.BackgroundRunning() {
-		return rec, fmt.Errorf("%s is still being reviewed in the background", rec.Ref)
+	if err := refuseReviewing(rec); err != nil {
+		return rec, err
 	}
 	if mode == review.ModeBackground {
 		if _, ok := engine.Background(rec.Engine); !ok {

@@ -86,6 +86,18 @@ func TestARunningBackgroundReviewRefusesAskAndReReview(t *testing.T) {
 	}
 }
 
+// The dashboard stays live while the ask command builds. A second c in that
+// window would start a second session and overwrite the first one's id.
+func TestASecondAskWhileTheFirstOpensIsIgnored(t *testing.T) {
+	rec := adopted()
+	a := withRecords(rec)
+	a.dash.Busy[rec.ID] = "opening"
+
+	if _, cmd := a.Update(msg.Ask{ID: rec.ID}); cmd != nil {
+		t.Error("a second ask ran a command while the first was opening")
+	}
+}
+
 func TestAnAskSessionExitSkipsDetection(t *testing.T) {
 	rec := adopted()
 

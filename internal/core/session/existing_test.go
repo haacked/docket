@@ -731,6 +731,7 @@ func TestRereviewDropsTheOldReviewSession(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 	rec := launched(t, svc, unlisted)
+	rec.State = review.StateDrafted
 	old := rec.SessionID
 
 	again, line := rereviewed(t, svc, rec, review.IntentOverwrite)
@@ -877,6 +878,7 @@ func TestExplainAskReportsWithoutRecording(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	notesFor(t, svc, unlisted)
 	rec := launched(t, svc, unlisted)
+	rec.State = review.StateDrafted
 	before := stored(t, svc)
 
 	spec, err := svc.ExplainAsk(rec)
@@ -916,5 +918,22 @@ func TestExplainRereviewReportsWithoutRecording(t *testing.T) {
 	}
 	if ghc.reads != readsBefore {
 		t.Errorf("ExplainRereview read GitHub's reviews %d times, want none", ghc.reads-readsBefore)
+	}
+}
+
+// Another docket instance can hold an interactive review of the same record. A
+// second session would write the same notes while that one is still writing
+// them.
+func TestAReviewStillRunningRefusesAskAndReReview(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	notesFor(t, svc, unlisted)
+	rec := launched(t, svc, unlisted)
+
+	if _, _, err := svc.AskSpec(rec); err == nil || !strings.Contains(err.Error(), "still being reviewed") {
+		t.Errorf("AskSpec on a running review: err = %v", err)
+	}
+	if _, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive); err == nil || !strings.Contains(err.Error(), "still being reviewed") {
+		t.Errorf("Rereview on a running review: err = %v", err)
 	}
 }
