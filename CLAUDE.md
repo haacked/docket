@@ -10,7 +10,7 @@ internal/core/pr/           Ref{Org,Repo,Number}, ParseRef                      
 internal/core/reposconf/    Parse, Resolve                                         pure, filesystem via callback
 internal/core/tier/         Decide                                                 pure
 internal/core/review/       Record, Event, State, Fold, Decide                     pure
-internal/core/index/        Store: JSONL append under flock, Load, Compact (Watch in M4)
+internal/core/index/        Store: JSONL append under flock, Load, Compact, Stat/Changed for the watcher
 internal/core/config/       config.toml, DOCKET_HOME paths, review_code_dir, codex_sessions_dir
 internal/core/exec/         Runner: Real, Fake
 internal/core/engine/       Engine interface and Paths; claude.go and codex.go implement it
@@ -20,7 +20,7 @@ internal/core/clone/        the tier-2 clone sequence
 internal/core/session/      Service: Prepare, LaunchSpec, AfterExit, Submit, Notes, Abandon, Refresh, StartBackground, PollBackground
 internal/tui/               root model, its own messages, keymap, styles; the only package that runs a CommandSpec
 internal/tui/msg/           the intents the screens send up to the root
-internal/tui/screens/       dashboard, newreview, submit, notes
+internal/tui/screens/       dashboard, newreview, submit, notes, help
 ```
 
 `internal/tui/msg` holds only the intents a screen sends up, and it imports nothing
@@ -103,4 +103,4 @@ M3 is in: background reviews under claude. `ctrl+b` on the new review screen run
 
 M2 is in: the submit screen (`s`), the notes viewer (`v`, with `e` for `$EDITOR`), and the codex engine with session id capture. `Submit` posts the event and then re-reads GitHub through the same `detect` the rest of the app uses, so archiving and the tier-2 cleanup have one code path rather than two. The submit screen leaves `APPROVE` out when the record's author is the signed-in user, because GitHub answers 422 to approving your own pull request.
 
-Still to come: M4 (index watching, keymap help, install docs). Startup already compacts the log when it carries more than five events per record.
+M4 is in: the index watcher, the full key reference (`?`), and install docs. `Store.Changed` stats the index file every 2 seconds and compares mtime and size against the last check, so it costs no lock and no subprocess; a change reloads the dashboard the same way any other refresh does, which is what lets one instance pick up another's appends without either restarting. `?` is a screen like any other, `internal/tui/screens/help`, opened by `msg.OpenHelp` from dashboard and notes and closed by its own `esc`/`?`; new review and submit each hold a free-text field, so neither binds `?`, the same way neither treats a query string or a "?" in a review body as anything but text. Startup already compacts the log when it carries more than five events per record.

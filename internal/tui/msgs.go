@@ -2,6 +2,7 @@ package tui
 
 import (
 	"github.com/haacked/docket/internal/core/exec"
+	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
 )
@@ -70,6 +71,14 @@ type bgPolledMsg struct {
 	notes   map[string]string
 	err     error
 }
+
+// indexTickMsg asks the root to check whether another docket process appended
+// to the index since the last check.
+type indexTickMsg struct{}
+
+// indexChangedMsg reports that the index changed. It carries the StatMark to
+// compare against next time.
+type indexChangedMsg struct{ stamp index.StatMark }
 
 // statusMsg is a line for the footer.
 type statusMsg struct{ text string }

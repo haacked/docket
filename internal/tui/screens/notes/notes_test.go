@@ -76,6 +76,17 @@ func TestEAsksForTheEditor(t *testing.T) {
 	}
 }
 
+func TestQuestionMarkAsksForHelp(t *testing.T) {
+	_, cmd := opened(markdown, false).Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	if cmd == nil {
+		t.Fatal("? produced no command")
+	}
+
+	if got, want := cmd(), (msg.OpenHelp{}); got != want {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
 func TestLeavingGoesBackToTheDashboard(t *testing.T) {
 	for _, press := range []tea.KeyPressMsg{key(tea.KeyEscape), {Code: 'q', Text: "q"}} {
 		_, cmd := opened(markdown, false).Update(press)

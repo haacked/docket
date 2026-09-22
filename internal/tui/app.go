@@ -17,12 +17,14 @@ import (
 
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/engine"
+	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
 	"github.com/haacked/docket/internal/core/tier"
 	"github.com/haacked/docket/internal/tui/msg"
 	"github.com/haacked/docket/internal/tui/screens/dashboard"
+	"github.com/haacked/docket/internal/tui/screens/help"
 	"github.com/haacked/docket/internal/tui/screens/newreview"
 	"github.com/haacked/docket/internal/tui/screens/notes"
 	"github.com/haacked/docket/internal/tui/screens/submit"
@@ -40,15 +42,19 @@ type App struct {
 	newrev newreview.Model
 	sub    submit.Model
 	notes  notes.Model
+	help   help.Model
 
 	width  int
 	height int
 	status string
 	err    error
-	// polling means a tick is outstanding. Several things ask for a poll, and
-	// without this each answer would arm a tick of its own and every one of them
-	// would re-arm itself forever.
+	// polling means a background-session tick is outstanding. Several things ask
+	// for a poll, and without this each answer would arm a tick of its own and
+	// every one of them would re-arm itself forever.
 	polling bool
+	// indexStamp is the index file's state as of the last watch check, so the
+	// next one can tell whether another docket process appended to it.
+	indexStamp index.StatMark
 }
 
 // New builds the root model. A non-empty initialInput opens the new review screen
@@ -76,6 +82,7 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 		),
 		sub:   submit.New(submit.Styles{Label: s.Label, Dim: s.Dim, Selected: s.Selected}),
 		notes: notes.New(notes.Styles{Label: s.Label, Dim: s.Dim}),
+		help:  help.New(help.Styles{Group: s.Group, Label: s.Label}, msg.Dashboard),
 	}
 	if initialInput != "" {
 		app.screen = msg.NewReview
@@ -90,8 +97,10 @@ func (a App) Init() tea.Cmd {
 	// The notes pane renders markdown in a palette the terminal's background has
 	// to pick, and glamour has no style that follows it.
 	requestBackground := func() tea.Msg { return tea.RequestBackgroundColor() }
+	// The watch tick is a stat, not a subprocess. It runs during a dry run too,
+	// and whether or not anything else is running.
 	if a.dryRun {
-		return tea.Batch(a.loadRecords(), requestBackground)
+		return tea.Batch(a.loadRecords(), requestBackground, a.armIndexTick())
 	}
 	// A background session outlives the docket that started it, so startup asks
 	// the agent about them straight away rather than waiting out the first tick.
@@ -102,6 +111,7 @@ func (a App) Init() tea.Cmd {
 	return tea.Batch(
 		tea.Sequence(a.loadRecords(), a.reconcile(), a.pollBackground()),
 		requestBackground,
+		a.armIndexTick(),
 	)
 }
 
@@ -134,6 +144,12 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if a.screen == msg.NewReview {
 			a.newrev = a.newrev.Reset()
 		}
+		a.err = nil
+		return a, nil
+
+	case msg.OpenHelp:
+		a.help = a.help.For(a.screen)
+		a.screen = msg.Help
 		a.err = nil
 		return a, nil
 
@@ -272,6 +288,13 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case bgPolledMsg:
 		return a.applyPoll(message)
 
+	case indexTickMsg:
+		return a, tea.Batch(a.checkIndex(), a.armIndexTick())
+
+	case indexChangedMsg:
+		a.indexStamp = message.stamp
+		return a, a.loadRecords()
+
 	case detectedMsg:
 		delete(a.dash.Busy, message.record.ID)
 		a.status = describe(message.record)
@@ -346,6 +369,8 @@ func (a App) routeToScreen(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.sub, cmd = a.sub.Update(message)
 	case msg.Notes:
 		a.notes, cmd = a.notes.Update(message)
+	case msg.Help:
+		a.help, cmd = a.help.Update(message)
 	default:
 		a.dash, cmd = a.dash.Update(message)
 	}
@@ -381,6 +406,8 @@ func (a App) View() tea.View {
 		b.WriteString(a.sub.View())
 	case msg.Notes:
 		b.WriteString(a.notes.View() + "\n")
+	case msg.Help:
+		b.WriteString(a.help.View() + "\n")
 	default:
 		b.WriteString(a.dash.View() + "\n")
 	}
@@ -628,6 +655,31 @@ func modeFor(background bool) review.Mode {
 // review takes minutes, so this is about how soon the dashboard notices rather
 // than about catching the moment it ends.
 const bgInterval = 15 * time.Second
+
+// indexInterval is how often docket checks whether another instance appended
+// to the index. The check is a stat, not a subprocess. Unlike bgInterval,
+// this ticks whether or not anything is running.
+const indexInterval = 2 * time.Second
+
+func (a App) armIndexTick() tea.Cmd {
+	return tea.Tick(indexInterval, func(time.Time) tea.Msg { return indexTickMsg{} })
+}
+
+// checkIndex stats the index file and reports a change without taking the
+// lock Load does. A stat failure is dropped rather than surfaced. errMsg
+// clears the dashboard's busy markers on any error, and a transient failure
+// on this 2-second poll must not wipe one of those markers out from under an
+// operation still mid-flight.
+func (a App) checkIndex() tea.Cmd {
+	svc, prev := a.svc, a.indexStamp
+	return func() tea.Msg {
+		stamp, changed, err := svc.Store.Changed(prev)
+		if err != nil || !changed {
+			return nil
+		}
+		return indexChangedMsg{stamp: stamp}
+	}
+}
 
 // applyPoll redraws from a poll and arms the next one. The tick is re-armed here
 // rather than on a timer of its own, so an idle docket runs no subprocesses: the

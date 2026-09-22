@@ -148,6 +148,16 @@ func TestTypingGoesIntoTheBody(t *testing.T) {
 	}
 }
 
+// ? is not bound here the way it is on Dashboard and Notes. A review body is
+// free text, and writing "is this intentional?" in one is reasonable.
+func TestQuestionMarkGoesIntoTheBodyRatherThanOpeningHelp(t *testing.T) {
+	m, _ := model().Update(typed("?"))
+
+	if got := m.Body.Value(); got != "?" {
+		t.Errorf("body = %q, want the ? typed into it", got)
+	}
+}
+
 func TestEscapeGoesBack(t *testing.T) {
 	_, cmd := model().Update(key(tea.KeyEscape))
 	if cmd == nil {

@@ -131,6 +131,8 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			return m, msg.Send(msg.Goto{Screen: msg.Dashboard})
 		case "e":
 			return m, msg.Send(msg.EditNotes{ID: m.Record.ID})
+		case "?":
+			return m, msg.Send(msg.OpenHelp{})
 		}
 	}
 
