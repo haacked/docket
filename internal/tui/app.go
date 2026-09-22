@@ -127,6 +127,9 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if a.screen == msg.Notes {
 			a.notes = a.notes.SetSize(message.Width, a.notesHeight())
 		}
+		if a.screen == msg.Help {
+			a.help = a.help.SetSize(message.Width, a.helpHeight())
+		}
 		return a, nil
 
 	case tea.BackgroundColorMsg:
@@ -154,7 +157,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case msg.OpenHelp:
-		a.help = a.help.For(a.screen)
+		a.help = a.help.For(a.screen).SetSize(a.width, a.helpHeight())
 		a.screen = msg.Help
 		a.err = nil
 		return a, nil
@@ -570,6 +573,19 @@ const notesChrome = 9
 // WindowSizeMsg follows every return from a child process.
 func (a App) notesHeight() int {
 	return max(a.height-notesChrome, 1)
+}
+
+// helpChrome is what View draws around the help pane: the title, the blank
+// line under it, the blank line below the pane, the status line and its
+// blank line, and the footer. Changing View's layout means changing this
+// count.
+const helpChrome = 6
+
+// helpHeight is the room the help pane gets. The full reference is long
+// enough to overflow an ordinary terminal on its own, which is what the
+// pane's viewport is for.
+func (a App) helpHeight() int {
+	return max(a.height-helpChrome, 1)
 }
 
 func (a App) prepare(input, engineName string, background bool) tea.Cmd {

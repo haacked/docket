@@ -85,8 +85,33 @@ func TestHelpSwallowsKeysTheDashboardWouldOtherwiseAct(t *testing.T) {
 	}
 }
 
+// OpenHelp sizes the pane from the window size the app already knows about.
+// A normal terminal then shows a scrollable pane, not the earlier no-viewport
+// screen, which silently cut off everything past whatever the terminal's
+// rows happened to fit.
+func TestOpenHelpSizesThePaneFromTheCurrentWindow(t *testing.T) {
+	next, _ := app().Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	next, _ = next.(App).Update(msg.OpenHelp{})
+	a := next.(App)
+
+	if !strings.Contains(a.help.View(), "Dashboard") {
+		t.Fatal("help has no content at all right after opening")
+	}
+	before := a.help.View()
+
+	next, _ = a.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	a = next.(App)
+
+	if a.help.View() == before {
+		t.Error("pressing down on a 24-row terminal did not scroll, so content past the bottom is unreachable")
+	}
+}
+
 func TestHelpScreenListsEveryScreensKeys(t *testing.T) {
-	view := app().help.View()
+	a := app()
+	a.help = a.help.SetSize(100, 50)
+
+	view := a.help.View()
 	for _, want := range []string{"Dashboard", "New review", "Submit", "Notes", "ctrl+c", "quit"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("help screen is missing %q", want)

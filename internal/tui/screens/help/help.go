@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -84,40 +85,67 @@ func Footer(entries []Entry) []string {
 type Model struct {
 	// Return is the screen that was showing before help opened. Esc and ?
 	// close back to it.
-	Return msg.Screen
-	Styles Styles
+	Return   msg.Screen
+	Viewport viewport.Model
+	Styles   Styles
 }
 
+// New builds the pane and sets its content immediately, rather than on every
+// View. The reference text depends only on Styles, fixed for the Model's
+// life, so there is nothing later that would need to change it. Setting it
+// once here, rather than from View, is also what makes Update's scrolling
+// work. Update persists the Viewport it returns. A View that set content on
+// its own value-receiver copy would never reach that persisted one.
 func New(styles Styles) Model {
-	return Model{Styles: styles}
+	m := Model{Styles: styles, Viewport: viewport.New()}
+	m.Viewport.SetContent(content(styles))
+	return m
 }
 
-// For aims a close back at whatever screen opened this one.
+// For records the screen to return to when help closes.
 func (m Model) For(from msg.Screen) Model {
 	m.Return = from
 	return m
 }
 
-// Update closes on esc or ? and swallows every other key. That keeps a key
-// the screen underneath would act on, such as n for a new review, from
-// leaking through while help is on top.
+// SetSize refits the pane. The reference text is long enough to overflow an
+// ordinary terminal on its own. The viewport is what makes the rest of it
+// reachable by scrolling, instead of silently cut off.
+func (m Model) SetSize(width, height int) Model {
+	m.Viewport.SetWidth(width)
+	m.Viewport.SetHeight(max(height, 1))
+	return m
+}
+
+// Update closes on esc or ? and hands every other key to the viewport. The
+// viewport only reacts to its own scroll keys and leaves the rest as a
+// no-op, which keeps a key the screen underneath would act on, such as n
+// for a new review, from leaking through while help is on top.
 func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 	if key, ok := message.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc", "?":
 			return m, msg.Send(msg.Goto{Screen: m.Return})
 		}
-		return m, nil
 	}
-	return m, nil
+
+	var cmd tea.Cmd
+	m.Viewport, cmd = m.Viewport.Update(message)
+	return m, cmd
 }
 
 func (m Model) View() string {
+	return m.Viewport.View()
+}
+
+// content is the full reference text, built once by New and never changed
+// afterward.
+func content(styles Styles) string {
 	var b strings.Builder
 	section := func(title string, entries []Entry) {
-		b.WriteString(m.Styles.Group.Render(title) + "\n")
+		b.WriteString(styles.Group.Render(title) + "\n")
 		for _, e := range entries {
-			b.WriteString(keyLine(m.Styles, e.Key, e.Long))
+			b.WriteString(keyLine(styles, e.Key, e.Long))
 		}
 		b.WriteString("\n")
 	}

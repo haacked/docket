@@ -20,7 +20,7 @@ func helpFor(screen msg.Screen, showArchived bool) string {
 	case msg.Notes:
 		return join(append(help.Footer(help.Notes), "ctrl+c quit")...)
 	case msg.Help:
-		return join("esc/? back", "ctrl+c quit")
+		return join("↑/↓ scroll", "esc/? back", "ctrl+c quit")
 	default:
 		archived := "a show archived"
 		if showArchived {
