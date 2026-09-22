@@ -29,6 +29,18 @@ Reviewing your own pull request works. review-code leaves the draft review out o
 
 Only `claude` runs background reviews. `codex` 0.150.1 has no background mode, so the toggle says so and stays off.
 
+## Review requests
+
+`i` on the dashboard lists the open pull requests waiting on your review. The first section holds the ones that name you, and each team listed in `config.toml` gets a section of its own:
+
+```toml
+teams = ["PostHog/team-feature-flags"]
+```
+
+A pull request that asks for both you and a team appears only under you. `space` marks rows, and `enter` starts every marked pull request as a background review, one after another, under the default engine when it has a background mode and under `claude` otherwise. With nothing marked, `enter` opens the new review screen with the selected pull request filled in, so a single review can still run in this terminal or under `codex`. A pull request docket already has an open record for shows that record's state and cannot be marked.
+
+The list is a GitHub search, which allows 30 requests a minute, so docket searches when the screen opens and when you press `r`, and never on a timer.
+
 Review notes stay where `review-code` writes them, at `~/.agents/skills/review-code/.reviews/<org>/<repo>/pr-<N>.md`. docket records the path, and never moves or deletes the file.
 
 docket drives the `claude` and `codex` CLIs under your existing subscription. It never uses an Anthropic or OpenAI API key.
@@ -53,7 +65,7 @@ docket --dry-run o/r#123                      say what would happen, start and r
 
 A pull request can be a URL, `org/repo#123`, or a bare number once `default_repo` is set in `config.toml`.
 
-Dashboard keys: `n` new review, `enter` resume or open, `s` submit a drafted review, `v` view the notes, `x` abandon, `r` refresh the selected record from GitHub, `R` refresh every record, `a` show archived records, `?` show the full key reference, `q` quit.
+Dashboard keys: `n` new review, `i` review requests, `enter` resume or open, `s` submit a drafted review, `v` view the notes, `x` abandon, `r` refresh the selected record from GitHub, `R` refresh every record, `a` show archived records, `?` show the full key reference, `q` quit.
 
 On the new review screen, `tab` picks the engine and `ctrl+b` chooses between this terminal and the background. On the submit screen, `tab` picks the event and `ctrl+s` submits. Approving is not offered on your own pull request, because GitHub refuses it. On the notes screen, `e` opens the file in `$EDITOR`. The notes follow your terminal's background, and `GLAMOUR_STYLE` overrides that with any glamour style name, such as `light`, `dracula`, or `notty`. `?` opens the full key reference from the dashboard or the notes screen; `esc` or `?` closes it again. New review and submit leave `?` out of their own hints, because each holds a free-text field where a `?` is something you might actually want to type.
 

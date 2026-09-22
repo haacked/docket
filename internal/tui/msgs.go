@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/index"
+	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
 )
@@ -85,6 +86,16 @@ type indexTickMsg struct{}
 // indexChangedMsg reports that the index changed. It carries the StatMark to
 // compare against next time.
 type indexChangedMsg struct{ stamp index.StatMark }
+
+// requestsLoadedMsg carries what one search of GitHub for review requests found.
+type requestsLoadedMsg struct{ fetched requests.Fetched }
+
+// batchStartedMsg reports a batch of background reviews. failed holds one line
+// per pull request that did not start.
+type batchStartedMsg struct {
+	started int
+	failed  []string
+}
 
 // statusMsg is a line for the footer.
 type statusMsg struct{ text string }

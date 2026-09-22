@@ -395,3 +395,12 @@ func TestAPollThatWorksClearsTheLastFailure(t *testing.T) {
 		t.Errorf("the error survived a poll that worked: %v", next.(App).err)
 	}
 }
+
+func TestBatchEnginePrefersTheDefaultAndFallsBackToOneWithABackgroundMode(t *testing.T) {
+	if got := batchEngine("claude"); got != "claude" {
+		t.Errorf("batchEngine(claude) = %q", got)
+	}
+	if got := batchEngine("codex"); got != "claude" {
+		t.Errorf("batchEngine(codex) = %q, want claude: codex has no background mode", got)
+	}
+}

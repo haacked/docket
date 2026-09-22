@@ -290,7 +290,7 @@ func TestAFailedSubmissionLeavesTheSubmitScreenUsable(t *testing.T) {
 // where "a" sits in help.Dashboard. This pins that position rather than
 // just its presence.
 func TestTheDashboardFooterPlacesTheArchivedToggleBeforeHelpAndQuit(t *testing.T) {
-	want := "n new  ·  enter resume  ·  s submit  ·  v notes  ·  x abandon  ·  r refresh  ·  R refresh all  ·  a show archived  ·  ? help  ·  q quit"
+	want := "n new  ·  i requests  ·  enter resume  ·  s submit  ·  v notes  ·  x abandon  ·  r refresh  ·  R refresh all  ·  a show archived  ·  ? help  ·  q quit"
 	if got := helpFor(msg.Dashboard, false); got != want {
 		t.Errorf("footer = %q, want %q", got, want)
 	}

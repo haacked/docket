@@ -30,6 +30,9 @@ type Config struct {
 	DefaultEngine    string `toml:"default_engine"`
 	GitHubUser       string `toml:"github_user"`
 	DefaultRepo      string `toml:"default_repo"`
+	// Teams are the "org/team" slugs whose review requests the requests screen
+	// lists alongside the ones that name the user.
+	Teams []string `toml:"teams"`
 }
 
 // Paths are the files and directories under DOCKET_HOME.

@@ -31,12 +31,13 @@ type Entry struct {
 	Long  string
 }
 
-// Dashboard, NewReview, Submit, and Notes are the per-screen key tables.
+// Dashboard, NewReview, Submit, Notes, and Requests are the per-screen key tables.
 // NewReview and Submit have no entry for ?. Each holds a free-text field, so
 // neither binds it.
 var (
 	Dashboard = []Entry{
 		{Key: "n", Short: "new", Long: "start a new review"},
+		{Key: "i", Short: "requests", Long: "list the pull requests waiting on your review"},
 		{Key: "enter", Short: "resume", Long: "resume or open the selected record"},
 		{Key: "s", Short: "submit", Long: "submit a drafted review"},
 		{Key: "v", Short: "notes", Long: "view the review notes"},
@@ -65,6 +66,15 @@ var (
 		{Key: "↑/↓", Short: "scroll", Long: "scroll"},
 		{Key: "?", Short: "help", Long: "toggle this help"},
 		{Key: "esc/q", Short: "back", Long: "back to the dashboard"},
+	}
+	Requests = []Entry{
+		{Key: "space", Short: "mark", Long: "mark or unmark the selected pull request"},
+		{Key: "enter", Short: "start", Long: "start the marked as background reviews, or open the selected in a new review"},
+		{Key: "r", Short: "refresh", Long: "search GitHub again"},
+		{Key: "j/k ↓/↑", Long: "move the selection"},
+		{Key: "g/G", Long: "jump to the top or bottom"},
+		{Key: "?", Short: "help", Long: "toggle this help"},
+		{Key: "esc", Short: "back", Long: "back to the dashboard"},
 	}
 	everywhere = []Entry{{Key: "ctrl+c", Long: "quit"}}
 )
@@ -154,6 +164,7 @@ func content(styles Styles) string {
 	section("New review", NewReview)
 	section("Submit", Submit)
 	section("Notes", Notes)
+	section("Review requests", Requests)
 	section("Everywhere", everywhere)
 
 	return strings.TrimRight(b.String(), "\n")

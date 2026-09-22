@@ -10,9 +10,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/pr"
+	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 )
 
@@ -32,6 +34,7 @@ type GitHub interface {
 	PR(ctx context.Context, ref pr.Ref) (PRInfo, error)
 	Reviews(ctx context.Context, ref pr.Ref) ([]review.GHReview, error)
 	SubmitReview(ctx context.Context, ref pr.Ref, reviewID int64, event, body string) error
+	ReviewRequests(ctx context.Context, qualifier string) ([]requests.PR, error)
 }
 
 // CLI talks to GitHub through the gh command.
@@ -114,4 +117,58 @@ func (c *CLI) SubmitReview(ctx context.Context, ref pr.Ref, reviewID int64, even
 		return fmt.Errorf("submit review %d on %s: %w", reviewID, ref, err)
 	}
 	return nil
+}
+
+type searchItem struct {
+	HTMLURL string `json:"html_url"`
+	Title   string `json:"title"`
+	Draft   bool   `json:"draft"`
+	User    struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ReviewRequests lists the open pull requests matching one review-request
+// qualifier, such as "user-review-requested:haacked" or
+// "team-review-requested:org/team". It uses the REST search endpoint because
+// gh search prs goes through GraphQL, which refused with a rate-limit error while
+// the REST search still answered.
+func (c *CLI) ReviewRequests(ctx context.Context, qualifier string) ([]requests.PR, error) {
+	res, err := c.run(ctx,
+		"api", "-X", "GET", "--paginate", "--slurp", "search/issues",
+		"-f", "q=is:pr is:open archived:false "+qualifier,
+		"-f", "per_page=100",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("search %s: %w", qualifier, err)
+	}
+	out := strings.TrimSpace(res.Stdout)
+	if out == "" {
+		return nil, nil
+	}
+
+	var pages []struct {
+		Items []searchItem `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &pages); err != nil {
+		return nil, fmt.Errorf("parse search results for %s: %w", qualifier, err)
+	}
+	var prs []requests.PR
+	for _, page := range pages {
+		for _, item := range page.Items {
+			ref, err := pr.ParseRef(item.HTMLURL, "")
+			if err != nil {
+				return nil, fmt.Errorf("search %s returned %q: %w", qualifier, item.HTMLURL, err)
+			}
+			prs = append(prs, requests.PR{
+				Ref:       ref,
+				Title:     item.Title,
+				Author:    item.User.Login,
+				IsDraft:   item.Draft,
+				UpdatedAt: item.UpdatedAt,
+			})
+		}
+	}
+	return prs, nil
 }

@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/haacked/docket/internal/core/review"
+	"github.com/haacked/docket/internal/tui/format"
 	"github.com/haacked/docket/internal/tui/msg"
 )
 
@@ -118,6 +119,8 @@ func (m Model) handleKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		m = m.clampCursor()
 	case "n":
 		return m, msg.Send(msg.Goto{Screen: msg.NewReview})
+	case "i":
+		return m, msg.Send(msg.OpenRequests{})
 	case "enter":
 		if rec, ok := m.Selected(); ok {
 			return m, msg.Send(msg.Resume{ID: rec.ID})
@@ -212,9 +215,9 @@ func (m Model) row(rec review.Record, selected bool) string {
 	if note, busy := m.Busy[rec.ID]; busy {
 		meta = append(meta, note)
 	}
-	rendered := style.Render(truncate(line, m.titleWidth())) + " " + m.Styles.Dim.Render("· "+strings.Join(meta, " · "))
+	rendered := style.Render(format.Truncate(line, m.titleWidth())) + " " + m.Styles.Dim.Render("· "+strings.Join(meta, " · "))
 	if rec.Err != "" {
-		rendered += "\n" + m.Styles.Err.Render("    "+truncate(rec.Err, m.width()-4))
+		rendered += "\n" + m.Styles.Err.Render("    "+format.Truncate(rec.Err, m.width()-4))
 	}
 	return rendered
 }
@@ -227,40 +230,12 @@ func (m Model) age(rec review.Record) string {
 	if m.Now != nil {
 		now = m.Now()
 	}
-	d := now.Sub(rec.StartedAt)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-	}
+	return format.Ago(now.Sub(rec.StartedAt))
 }
 
-func (m Model) width() int {
-	if m.Width <= 0 {
-		return 80
-	}
-	return m.Width
-}
+func (m Model) width() int { return format.Width(m.Width) }
 
 func (m Model) titleWidth() int { return max(20, m.width()-34) }
-
-// truncate counts runes, not bytes. width is a column budget, and a pull request
-// title carrying an accent or an emoji otherwise gets cut inside a character.
-func truncate(s string, width int) string {
-	if width <= 1 {
-		return s
-	}
-	r := []rune(s)
-	if len(r) <= width {
-		return s
-	}
-	return string(r[:width-1]) + "…"
-}
 
 // background says what the session behind a record is doing. A record the last
 // poll said nothing about is one the agent no longer lists or one whose review

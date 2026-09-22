@@ -23,6 +23,13 @@ func (r Ref) URL() string {
 	return fmt.Sprintf("https://github.com/%s/%s/pull/%d", r.Org, r.Repo, r.Number)
 }
 
+// Equal reports whether two references name one pull request. GitHub compares an
+// owner and a repository name without case, so o/r#7 and O/R#7 are one review and
+// one clone directory.
+func (r Ref) Equal(o Ref) bool {
+	return r.Number == o.Number && strings.EqualFold(r.Org, o.Org) && strings.EqualFold(r.Repo, o.Repo)
+}
+
 func (r Ref) Valid() bool {
 	return validSegment(r.Org) && validSegment(r.Repo) && r.Number > 0
 }
