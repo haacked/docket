@@ -6,12 +6,14 @@ package newreview
 import (
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/haacked/docket/internal/core/pr"
+	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/tui/msg"
 	"github.com/haacked/docket/internal/tui/screens/choice"
 )
@@ -34,6 +36,31 @@ type Model struct {
 	DefaultRepo       string
 	Styles            Styles
 	Busy              string
+	// Existing holds what was found while the screen asks what to do with a
+	// review that is already there. It is nil while the screen takes a pull
+	// request.
+	Existing *Existing
+}
+
+// Existing is what the root found before reviewing a pull request. The screen
+// holds plain values rather than the service's own type, because a screen holds
+// no service.
+type Existing struct {
+	Ref    string
+	Engine string
+	// RecordID names a record already on the dashboard, which offers only a
+	// re-review. It is empty for a typed pull request.
+	RecordID string
+	// NotesAt is when the notes were last written, and zero when there are none.
+	NotesAt   time.Time
+	Pending   bool
+	Submitted bool
+}
+
+// CanAsk reports whether view and ask is on offer. It needs notes to ask about.
+// A record already on the dashboard has its own key for it.
+func (e Existing) CanAsk() bool {
+	return e.RecordID == "" && !e.NotesAt.IsZero()
 }
 
 func New(styles Styles, engines, backgroundEngines []string, engine, defaultRepo string) Model {
@@ -59,7 +86,24 @@ func New(styles Styles, engines, backgroundEngines []string, engine, defaultRepo
 // terminal. The toggle is refused for one that cannot, rather than failing after
 // the pull request has already been resolved and cloned.
 func (m Model) CanBackground() bool {
-	return slices.Contains(m.BackgroundEngines, m.Engine)
+	return slices.Contains(m.BackgroundEngines, m.engine())
+}
+
+// engine is the engine the review would run under. A re-review keeps the one
+// its record was started with.
+func (m Model) engine() string {
+	if m.Existing != nil && m.Existing.Engine != "" {
+		return m.Existing.Engine
+	}
+	return m.Engine
+}
+
+// SetExisting switches the screen to asking what to do with the review found.
+func (m Model) SetExisting(found Existing) Model {
+	m.Existing = &found
+	m.Busy = ""
+	m.Background = m.Background && m.CanBackground()
+	return m
 }
 
 // Reset clears the field, so leaving and returning does not carry a stale URL.
@@ -68,6 +112,7 @@ func (m Model) CanBackground() bool {
 func (m Model) Reset() Model {
 	m.Input.SetValue("")
 	m.Busy = ""
+	m.Existing = nil
 	return m
 }
 
@@ -86,6 +131,12 @@ func (m Model) SetValue(value string) Model {
 }
 
 func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
+	if m.Existing != nil {
+		if key, ok := message.(tea.KeyPressMsg); ok {
+			return m.choose(key)
+		}
+		return m, nil
+	}
 	if key, ok := message.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "esc":
@@ -119,11 +170,59 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+// choose handles the keys of the step that asks what to do with an existing
+// review. The text field is not on screen, so no key reaches it.
+func (m Model) choose(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	found := *m.Existing
+	var intent review.Intent
+	switch key.String() {
+	case "esc":
+		if found.RecordID != "" {
+			return m, msg.Send(msg.Goto{Screen: msg.Dashboard})
+		}
+		m.Existing = nil
+		return m, nil
+	case "ctrl+b":
+		if m.CanBackground() {
+			m.Background = !m.Background
+		}
+		return m, nil
+	case "v":
+		if !found.CanAsk() {
+			return m, nil
+		}
+		intent = review.IntentAsk
+	case "a":
+		intent = review.IntentAppend
+	case "o":
+		intent = review.IntentOverwrite
+	default:
+		return m, nil
+	}
+	if m.Busy != "" {
+		return m, nil
+	}
+
+	m.Busy = "preparing"
+	return m, msg.Send(msg.StartReview{
+		Input:  strings.TrimSpace(m.Input.Value()),
+		Engine: m.engine(),
+		// A question-and-answer session needs the terminal. There is no draft for
+		// a background one to finish.
+		Background: m.Background && intent != review.IntentAsk,
+		Intent:     string(intent),
+		RecordID:   found.RecordID,
+	})
+}
+
 func (m Model) ref() (pr.Ref, error) {
 	return pr.ParseRef(m.Input.Value(), m.DefaultRepo)
 }
 
 func (m Model) View() string {
+	if m.Existing != nil {
+		return m.existingView(*m.Existing)
+	}
 	var b strings.Builder
 	b.WriteString(m.Styles.Label.Render("Pull request") + "\n")
 	b.WriteString(m.Input.View() + "\n\n")
@@ -147,11 +246,53 @@ func (m Model) View() string {
 	return b.String()
 }
 
+func (m Model) existingView(found Existing) string {
+	var b strings.Builder
+	title := "Existing review of " + found.Ref
+	if found.RecordID != "" {
+		title = "Review " + found.Ref + " again"
+	}
+	b.WriteString(m.Styles.Label.Render(title) + "\n")
+	if summary := found.summary(); summary != "" {
+		b.WriteString(m.Styles.Dim.Render(summary) + "\n")
+	}
+
+	choices := []string{"a append", "o overwrite", "esc back"}
+	if found.CanAsk() {
+		choices = slices.Insert(choices, 0, "v view and ask")
+	}
+	b.WriteString("\n" + strings.Join(choices, " · ") + "\n")
+	b.WriteString("\n" + m.Styles.Label.Render("Engine") + " " + m.engine() + "\n")
+	b.WriteString(m.Styles.Label.Render("Run") + " " + m.runLine() + "\n")
+	if found.CanAsk() && m.Background {
+		b.WriteString(m.Styles.Dim.Render("view and ask runs in this terminal") + "\n")
+	}
+	if m.Busy != "" {
+		b.WriteString("\n" + m.Styles.Dim.Render(m.Busy+"…") + "\n")
+	}
+	return b.String()
+}
+
+// summary says what was found, in one line.
+func (e Existing) summary() string {
+	var parts []string
+	if !e.NotesAt.IsZero() {
+		parts = append(parts, "notes from "+e.NotesAt.Format("2006-01-02"))
+	}
+	if e.Pending {
+		parts = append(parts, "pending draft on GitHub")
+	}
+	if e.Submitted {
+		parts = append(parts, "submitted review on GitHub")
+	}
+	return strings.Join(parts, " · ")
+}
+
 // runLine says where the review will run, and why the choice is not on offer
 // when the engine has no background mode.
 func (m Model) runLine() string {
 	if !m.CanBackground() {
-		return m.Styles.Dim.Render("in this terminal · " + m.Engine + " has no background mode")
+		return m.Styles.Dim.Render("in this terminal · " + m.engine() + " has no background mode")
 	}
 	if m.Background {
 		return "in the background" + " " + m.Styles.Dim.Render("· ctrl+b for this terminal")

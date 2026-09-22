@@ -3,7 +3,6 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/haacked/docket/internal/core/exec"
@@ -19,34 +18,15 @@ import (
 func (Claude) StartBackground(rec review.Record, _ Paths) exec.CommandSpec {
 	return exec.CommandSpec{
 		Path: "claude",
-		Args: []string{"--bg", "/review-code " + reviewArgs(rec) + unattended(rec)},
+		Args: []string{"--bg", "/review-code " + reviewArgs(rec) + unattended},
 		Dir:  rec.Dir,
 	}
 }
 
-// unattended are the flags that answer review-code's prompts, because nobody is
-// at the terminal to.
-//
-// --force covers the pre-flight context clear. It does not cover the second
-// prompt: a review file that already exists asks whether to overwrite or append,
-// and only --overwrite or --append answers that one. docket keeps the notes of
-// every review it has run, so a pull request reviewed once already has that file
-// and a background re-review would stop there with nobody to answer, showing as
-// a session that runs and never finishes.
-//
-// --append is the answer rather than --overwrite because it is what a re-review
-// means: review-code reviews what changed since the recorded commit and resolves
-// the threads the author has since addressed.
-func unattended(rec review.Record) string {
-	flags := " --force"
-	if rec.NotesPath == "" {
-		return flags
-	}
-	if _, err := os.Stat(rec.NotesPath); err == nil {
-		flags += " --append"
-	}
-	return flags
-}
+// unattended answers review-code's pre-flight context clear, because nobody is at
+// the terminal to. reviewArgs answers the prompt about a notes file that already
+// exists, with the --append or --overwrite it takes from the record's intent.
+const unattended = " --force"
 
 // bgPrefix is what claude prints on stdout for a session it backgrounded. The
 // id follows it on the same line.

@@ -47,6 +47,9 @@ func TestFoldClearsFieldsASnapshotZeroes(t *testing.T) {
 		NotesPath:      "/tmp/notes.md",
 		PriorReviewIDs: []int64{1, 2},
 		Err:            "the session died",
+		Intent:         review.IntentAppend,
+		AskSessionID:   "ask-1",
+		AskStartedAt:   submitted.Add(-time.Minute),
 	}
 
 	cleared := review.Record{ID: "rec-1", State: review.StateReviewing}

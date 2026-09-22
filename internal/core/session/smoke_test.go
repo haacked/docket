@@ -35,14 +35,14 @@ func TestSmokeAgainstARealPullRequest(t *testing.T) {
 	svc := realService(t)
 	ctx := context.Background()
 
-	plan, spec, err := svc.Explain(ctx, ref, "claude", review.ModeInteractive)
+	plan, spec, err := svc.Explain(ctx, ref, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Explain: %v", err)
 	}
 	t.Logf("%s is %s: %s", ref, plan.Tier, plan.Description())
 	t.Logf("would run: %s", spec)
 
-	rec, _, err := svc.Prepare(ctx, ref, "claude", review.ModeInteractive)
+	rec, _, err := svc.Prepare(ctx, ref, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

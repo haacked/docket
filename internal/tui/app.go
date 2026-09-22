@@ -218,10 +218,49 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(a.loadRecords(), a.pollBackground())
 
 	case msg.StartReview:
-		if a.dryRun {
-			return a, a.explainStart(message.Input, message.Engine, message.Background)
+		return a.startReview(message)
+
+	case existingMsg:
+		a.newrev = a.newrev.SetExisting(newreview.Existing{
+			Ref:       message.ref.String(),
+			Engine:    message.engine,
+			NotesAt:   message.found.NotesAt,
+			Pending:   message.found.PendingID != 0,
+			Submitted: message.found.Submitted,
+		})
+		return a, nil
+
+	case msg.OpenRereview:
+		rec, ok := a.record(message.ID)
+		if !ok {
+			return a, nil
 		}
-		return a, a.prepare(message.Input, message.Engine, message.Background)
+		if rec.BackgroundRunning() {
+			a.status = fmt.Sprintf("%s is still being reviewed in the background", rec.Ref)
+			return a, nil
+		}
+		a.newrev = a.newrev.Reset().SetExisting(newreview.Existing{
+			Ref:      rec.Ref.String(),
+			Engine:   rec.Engine,
+			RecordID: rec.ID,
+		})
+		a.screen = msg.NewReview
+		a.err = nil
+		return a, nil
+
+	case msg.Ask:
+		rec, ok := a.record(message.ID)
+		if !ok {
+			return a, nil
+		}
+		if rec.BackgroundRunning() {
+			a.status = fmt.Sprintf("%s is still being reviewed; ask once the review finishes", rec.Ref)
+			return a, nil
+		}
+		if a.dryRun {
+			return a, a.explainAsk(rec)
+		}
+		return a, a.ask(rec)
 
 	case msg.Resume:
 		rec, ok := a.record(message.ID)
@@ -335,14 +374,22 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case preparedMsg:
 		a.screen = msg.Dashboard
-		a.status = message.plan.Description()
-		if message.record.Mode == review.ModeBackground {
+		a.status = message.status
+		switch {
+		case message.record.Intent == review.IntentAsk:
+			return a, a.ask(message.record)
+		case message.record.Mode == review.ModeBackground:
 			return a, a.startBackground(message.record)
+		default:
+			return a, a.launch(message.record, false)
 		}
-		return a, a.launch(message.record, false)
 
 	case launchMsg:
 		return a.handoff(message)
+
+	case askExitedMsg:
+		a.dash.Busy[message.record.ID] = "saving"
+		return a, tea.Batch(tea.ClearScreen, a.afterAsk(message.record, message.err))
 
 	case childExitedMsg:
 		a.dash.Busy[message.record.ID] = "reading GitHub"
@@ -457,12 +504,20 @@ func (a App) handoff(launch launchMsg) (tea.Model, tea.Cmd) {
 	cmd := osexec.Command(launch.spec.Path, launch.spec.Args...)
 	cmd.Dir = launch.spec.Dir
 	cmd.Env = launch.spec.Env(os.Environ())
-	return a, tea.ExecProcess(cmd, func(err error) tea.Msg {
-		if launch.editor {
-			return editorExitedMsg{record: launch.record, err: err}
-		}
+	return a, tea.ExecProcess(cmd, func(err error) tea.Msg { return exited(launch, err) })
+}
+
+// exited is the message a child's exit sends, which decides what runs next. Only
+// a review session's exit reads GitHub.
+func exited(launch launchMsg, err error) tea.Msg {
+	switch launch.kind {
+	case launchEditor:
+		return editorExitedMsg{record: launch.record, err: err}
+	case launchAsk:
+		return askExitedMsg{record: launch.record, err: err}
+	default:
 		return childExitedMsg{record: launch.record, err: err}
-	})
+	}
 }
 
 func (a App) View() tea.View {
@@ -585,6 +640,11 @@ func (a App) afterExit(rec review.Record, childErr error) tea.Cmd {
 	})
 }
 
+func (a App) afterAsk(rec review.Record, childErr error) tea.Cmd {
+	svc := a.svc
+	return detected(func() (review.Record, error) { return svc.AfterAsk(rec, childErr) })
+}
+
 func (a App) abandon(rec review.Record) tea.Cmd {
 	svc := a.svc
 	return detected(func() (review.Record, error) { return svc.Abandon(context.Background(), rec) })
@@ -620,7 +680,7 @@ func (a App) editNotes(rec review.Record) tea.Cmd {
 		if err != nil {
 			return errMsg{err: err}
 		}
-		return launchMsg{record: rec, spec: spec, editor: true}
+		return launchMsg{record: rec, spec: spec, kind: launchEditor}
 	}
 }
 
@@ -691,7 +751,7 @@ func startOne(ctx context.Context, svc *session.Service, url, engineName string)
 	if err != nil {
 		return err
 	}
-	rec, _, err := svc.Prepare(ctx, ref, engineName, review.ModeBackground)
+	rec, _, err := svc.Prepare(ctx, ref, engineName, review.ModeBackground, review.IntentReview)
 	if err != nil {
 		return fmt.Errorf("%s: %w", ref, err)
 	}
@@ -719,7 +779,7 @@ func explainOne(svc *session.Service, url, engineName string) string {
 	if err != nil {
 		return err.Error()
 	}
-	plan, spec, err := svc.Explain(context.Background(), ref, engineName, review.ModeBackground)
+	plan, spec, err := svc.Explain(context.Background(), ref, engineName, review.ModeBackground, review.IntentReview)
 	if err != nil {
 		return fmt.Sprintf("%s: %v", ref, err)
 	}
@@ -749,21 +809,111 @@ func batchEngine(defaultEngine string) string {
 	return names[0]
 }
 
-func (a App) prepare(input, engineName string, background bool) tea.Cmd {
-	svc, defaultRepo := a.svc, a.cfg.DefaultRepo
+// startReview routes the new review screen's request. A request with no intent
+// is the first one, which asks what review is already there before preparing.
+func (a App) startReview(start msg.StartReview) (tea.Model, tea.Cmd) {
+	intent, mode := review.Intent(start.Intent), modeFor(start.Background)
+	if start.RecordID == "" {
+		return a, a.prepare(start.Input, start.Engine, mode, intent)
+	}
+	rec, ok := a.record(start.RecordID)
+	if !ok {
+		a.newrev = a.newrev.ClearBusy()
+		return a, nil
+	}
+	if a.dryRun {
+		return a, a.explainRereview(rec, intent, mode)
+	}
+	return a, a.rereview(rec, intent, mode)
+}
+
+// prepare resolves the typed pull request and readies its record. With no intent
+// it first reads what review is already there. That read writes nothing, so a
+// dry run does it too and shows the same choice. A dry run then stops at the
+// command that would run.
+func (a App) prepare(input, engineName string, mode review.Mode, intent review.Intent) tea.Cmd {
+	svc, defaultRepo, dryRun := a.svc, a.cfg.DefaultRepo, a.dryRun
 	return func() tea.Msg {
+		ctx := context.Background()
 		ref, err := pr.ParseRef(input, defaultRepo)
 		if err != nil {
 			return errMsg{err: err}
 		}
+		if intent == "" {
+			found, err := svc.Existing(ctx, ref)
+			if err != nil {
+				return errMsg{err: err}
+			}
+			if found.Any() {
+				return existingMsg{ref: ref, engine: engineName, found: found}
+			}
+			intent = review.IntentReview
+		}
+
+		if dryRun {
+			plan, spec, err := svc.Explain(ctx, ref, engineName, mode, intent)
+			if err != nil {
+				return errMsg{err: err}
+			}
+			if intent == review.IntentAsk {
+				return statusMsg{text: "Would adopt the review of " + ref.String() + " in " + plan.Dir + "\nWould run: " + spec.String()}
+			}
+			return statusMsg{text: explainLine(plan, spec)}
+		}
+
 		if err := checkEngine(engineName); err != nil {
 			return errMsg{err: err}
 		}
-		rec, plan, err := svc.Prepare(context.Background(), ref, engineName, modeFor(background))
+		rec, plan, err := svc.Prepare(ctx, ref, engineName, mode, intent)
 		if err != nil {
 			return errMsg{err: err}
 		}
-		return preparedMsg{record: rec, plan: plan}
+		return preparedMsg{record: rec, status: plan.Description()}
+	}
+}
+
+func (a App) rereview(rec review.Record, intent review.Intent, mode review.Mode) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		updated, err := svc.Rereview(context.Background(), rec, intent, mode)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		return preparedMsg{record: updated, status: fmt.Sprintf("Reviewing %s again with --%s", rec.Ref, intent)}
+	}
+}
+
+func (a App) explainRereview(rec review.Record, intent review.Intent, mode review.Mode) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		spec, err := svc.ExplainRereview(rec, intent, mode)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		return statusMsg{text: "Would run: " + spec.String()}
+	}
+}
+
+// ask hands the terminal to a question-and-answer session about the notes.
+func (a App) ask(rec review.Record) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		updated, spec, err := svc.AskSpec(rec)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		return launchMsg{record: updated, spec: spec, kind: launchAsk}
+	}
+}
+
+func (a App) explainAsk(rec review.Record) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		spec, err := svc.ExplainAsk(rec)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		return statusMsg{text: "Would run: " + spec.String()}
 	}
 }
 
@@ -779,23 +929,6 @@ func (a App) launch(rec review.Record, resume bool) tea.Cmd {
 			return errMsg{err: err}
 		}
 		return launchMsg{record: updated, spec: launchSpec}
-	}
-}
-
-// explainStart is the dry-run counterpart of prepare. It reports the tier and the
-// command that would launch, and writes nothing.
-func (a App) explainStart(input, engineName string, background bool) tea.Cmd {
-	svc, defaultRepo := a.svc, a.cfg.DefaultRepo
-	return func() tea.Msg {
-		ref, err := pr.ParseRef(input, defaultRepo)
-		if err != nil {
-			return errMsg{err: err}
-		}
-		plan, spec, err := svc.Explain(context.Background(), ref, engineName, modeFor(background))
-		if err != nil {
-			return errMsg{err: err}
-		}
-		return statusMsg{text: explainLine(plan, spec)}
 	}
 }
 
@@ -841,7 +974,12 @@ func describe(rec review.Record) string {
 	case review.StateArchived:
 		return fmt.Sprintf("%s submitted and archived. Notes stay at %s", rec.Ref, rec.NotesPath)
 	case review.StateDrafted:
+		if rec.Intent == review.IntentAsk {
+			return fmt.Sprintf("%s has a pending review. Press s to submit it or c to ask about it", rec.Ref)
+		}
 		return fmt.Sprintf("%s has a pending review. Press enter to keep going", rec.Ref)
+	case review.StateReviewed:
+		return fmt.Sprintf("%s has your review notes. Press c to ask about them or u to review it again", rec.Ref)
 	case review.StateUnreviewed:
 		return fmt.Sprintf("%s has no review of yours on GitHub. Nothing was cleaned up", rec.Ref)
 	case review.StateAbandoned:

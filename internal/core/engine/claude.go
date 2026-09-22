@@ -17,12 +17,20 @@ func (Claude) Binary() string { return "claude" }
 func (Claude) NewSessionID() string { return uuid.NewString() }
 
 func (Claude) Start(rec review.Record, _ Paths) exec.CommandSpec {
+	return claudeSpec(rec.Dir, rec.SessionID, "/review-code "+reviewArgs(rec))
+}
+
+func (Claude) Ask(rec review.Record, _ Paths) exec.CommandSpec {
+	return claudeSpec(rec.Dir, rec.AskSessionID, askPrompt(rec))
+}
+
+func claudeSpec(dir, sessionID, prompt string) exec.CommandSpec {
 	args := []string{}
-	if rec.SessionID != "" {
-		args = append(args, "--session-id", rec.SessionID)
+	if sessionID != "" {
+		args = append(args, "--session-id", sessionID)
 	}
-	args = append(args, "/review-code "+reviewArgs(rec))
-	return exec.CommandSpec{Path: "claude", Args: args, Dir: rec.Dir}
+	args = append(args, prompt)
+	return exec.CommandSpec{Path: "claude", Args: args, Dir: dir}
 }
 
 func (Claude) Resume(rec review.Record, _ Paths) (exec.CommandSpec, bool) {

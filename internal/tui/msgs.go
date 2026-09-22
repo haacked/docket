@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/index"
+	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
@@ -21,19 +22,47 @@ type recordsLoadedMsg struct {
 	stamp   index.StatMark
 }
 
-// preparedMsg means the pull request resolved and the working directory is ready.
+// preparedMsg means the record is ready to launch: the pull request resolved and
+// the working directory is ready, or a record is set to be reviewed again. status
+// is the footer line that says what was prepared.
 type preparedMsg struct {
 	record review.Record
-	plan   session.Plan
+	status string
 }
 
-// launchMsg hands the root the command to run on the terminal. An editor is the
-// other thing docket gives the terminal to. Its exit ends in a re-read of the
-// notes rather than in detection.
+// existingMsg means the pull request already has a review, so the new review
+// screen asks what to do with it before anything is prepared.
+type existingMsg struct {
+	ref    pr.Ref
+	engine string
+	found  session.Found
+}
+
+// launchMsg hands the root the command to run on the terminal.
 type launchMsg struct {
 	record review.Record
 	spec   exec.CommandSpec
-	editor bool
+	kind   launchKind
+}
+
+// launchKind is what a launch hands the terminal to, which decides what its exit
+// runs.
+type launchKind int
+
+const (
+	// launchReview is a review session. Its exit reads GitHub.
+	launchReview launchKind = iota
+	// launchEditor is $EDITOR on the notes. Its exit re-reads them.
+	launchEditor
+	// launchAsk is a question-and-answer session. Its exit records the session
+	// and does not read GitHub.
+	launchAsk
+)
+
+// askExitedMsg reports that a question-and-answer session ended.
+type askExitedMsg struct {
+	record review.Record
+	err    error
 }
 
 // childExitedMsg reports that the agent session ended, whatever its exit status.

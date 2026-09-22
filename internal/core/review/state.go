@@ -20,6 +20,25 @@ const (
 	StateArchived   State = "archived"
 	StateAbandoned  State = "abandoned"
 	StateUnreviewed State = "unreviewed"
+	// StateReviewed is a record adopted from notes docket did not produce, with
+	// no pending review of mine on GitHub. Detection never produces it. Decide
+	// reads such a pull request as unreviewed, which misstates a review the user
+	// already did.
+	StateReviewed State = "reviewed"
+)
+
+// Intent is what the user asked for when a pull request already had a review.
+type Intent string
+
+const (
+	// IntentReview is a review of a pull request with nothing to choose about.
+	IntentReview Intent = "review"
+	// IntentAppend re-reviews and keeps the earlier notes and draft comments.
+	IntentAppend Intent = "append"
+	// IntentOverwrite re-reviews from scratch.
+	IntentOverwrite Intent = "overwrite"
+	// IntentAsk adopts the existing review without running review-code.
+	IntentAsk Intent = "ask"
 )
 
 // Submittable reports whether the record has a pending review to submit. The
@@ -93,4 +112,10 @@ type Record struct {
 	OwnPR          bool       `json:"own_pr"`
 	PriorReviewIDs []int64    `json:"prior_review_ids"`
 	Err            string     `json:"err"`
+	Intent         Intent     `json:"intent"`
+	// AskSessionID names the question-and-answer session about the notes. docket
+	// keeps it apart from SessionID, so asking about a review never replaces the
+	// review session that enter resumes.
+	AskSessionID string    `json:"ask_session_id"`
+	AskStartedAt time.Time `json:"ask_started_at"`
 }

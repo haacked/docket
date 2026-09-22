@@ -41,6 +41,8 @@ var (
 		{Key: "enter", Short: "resume", Long: "resume or open the selected record"},
 		{Key: "s", Short: "submit", Long: "submit a drafted review"},
 		{Key: "v", Short: "notes", Long: "view the review notes"},
+		{Key: "c", Short: "ask", Long: "ask questions about the review notes"},
+		{Key: "u", Short: "re-review", Long: "review again, appending to or overwriting the review"},
 		{Key: "x", Short: "abandon", Long: "abandon the selected record"},
 		{Key: "r", Short: "refresh", Long: "refresh the selected record from GitHub"},
 		{Key: "R", Short: "refresh all", Long: "refresh every record from GitHub"},
@@ -54,6 +56,7 @@ var (
 		{Key: "enter", Short: "start", Long: "start the review"},
 		{Key: "tab", Short: "engine", Long: "change the engine"},
 		{Key: "ctrl+b", Short: "background", Long: "toggle background vs. this terminal"},
+		{Key: "v/a/o", Long: "when a review exists: view and ask, append, or overwrite"},
 		{Key: "esc", Short: "back", Long: "back to the dashboard"},
 	}
 	Submit = []Entry{

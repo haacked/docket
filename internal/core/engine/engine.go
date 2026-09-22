@@ -39,6 +39,10 @@ type Engine interface {
 	// It returns "" when there is nothing to capture, which is not an error: an
 	// engine that mints its own ids up front never has anything to find.
 	CaptureSessionID(rec review.Record, paths Paths) (string, error)
+	// Ask starts a session that answers questions about the record's notes. It
+	// runs no review, so it passes none of the review-code flags. The session id
+	// it runs under is rec.AskSessionID.
+	Ask(rec review.Record, paths Paths) exec.CommandSpec
 }
 
 // For returns the engine with the given name.
@@ -65,10 +69,28 @@ func Names() []string { return []string{Claude{}.Name(), Codex{}.Name()} }
 // review-code leaves the draft out otherwise, and the Suggested Comments with
 // it, so docket would find nothing on GitHub and report the review as
 // unreviewed however well the session went.
+//
+// --append and --overwrite answer review-code's prompt about a notes file that
+// already exists. docket asks the user that question before it launches, so the
+// session never stops there, in the terminal or in the background.
 func reviewArgs(rec review.Record) string {
 	args := rec.URL + " --draft"
 	if rec.OwnPR {
 		args += " --self"
 	}
+	switch rec.Intent {
+	case review.IntentAppend:
+		args += " --append"
+	case review.IntentOverwrite:
+		args += " --overwrite"
+	}
 	return args
+}
+
+// askPrompt is the first message of a session about an existing review. It names
+// the notes file rather than invoking review-code, because `/review-code find`
+// only prints the notes and cannot resolve a pull request from docket's scratch
+// directory.
+func askPrompt(rec review.Record) string {
+	return fmt.Sprintf("Read the review notes at %s. They are my review of %s. I have questions about this review. Do not post anything to GitHub unless I ask.", rec.NotesPath, rec.URL)
 }

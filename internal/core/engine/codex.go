@@ -28,8 +28,16 @@ func (Codex) NewSessionID() string { return "" }
 var scrubbed = []string{"CLAUDECODE", "CLAUDE_CONFIG_DIR"}
 
 func (Codex) Start(rec review.Record, paths Paths) exec.CommandSpec {
-	args := append(codexDirs(rec.Dir, paths), "$review-code "+reviewArgs(rec))
-	return exec.CommandSpec{Path: "codex", Args: args, Dir: rec.Dir, Unset: scrubbed}
+	return codexSpec(rec.Dir, paths, "$review-code "+reviewArgs(rec))
+}
+
+func (Codex) Ask(rec review.Record, paths Paths) exec.CommandSpec {
+	return codexSpec(rec.Dir, paths, askPrompt(rec))
+}
+
+func codexSpec(dir string, paths Paths, prompt string) exec.CommandSpec {
+	args := append(codexDirs(dir, paths), prompt)
+	return exec.CommandSpec{Path: "codex", Args: args, Dir: dir, Unset: scrubbed}
 }
 
 func (Codex) Resume(rec review.Record, paths Paths) (exec.CommandSpec, bool) {

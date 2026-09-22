@@ -5,6 +5,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -108,7 +109,7 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 	if s.Cfg.GitHubUser != "" {
 		return s.Cfg.GitHubUser, nil
 	}
-	login, err := s.GH.Login(ctx)
+	login, err := s.peekLogin(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -149,14 +150,27 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 	return f, nil
 }
 
+// peekLogin is Login without caching the answer, for the paths a dry run takes.
+func (s *Service) peekLogin(ctx context.Context) (string, error) {
+	if s.Cfg.GitHubUser != "" {
+		return s.Cfg.GitHubUser, nil
+	}
+	return s.GH.Login(ctx)
+}
+
 // Prepare resolves the pull request, works out the tier, provisions the
 // directory the session will run in, and snapshots the reviews that already
 // exist. The record is written before provisioning, so a clone that fails leaves
 // a row carrying the reason. Nothing re-provisions that row: resume does not, and
 // a second Prepare is refused while it is open, so the user abandons it with x
 // and starts again with n.
-func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode) (review.Record, Plan, error) {
-	rec, plan, info, _, err := s.resolve(ctx, ref, engineName, mode)
+//
+// An ask intent adopts the review that is already there instead of starting one.
+// Prepare provisions it the same way, which lets the agent answering questions
+// read the files the notes cite. It also keeps Prepare the only place that
+// provisions a row.
+func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent) (review.Record, Plan, error) {
+	rec, plan, info, _, err := s.resolve(ctx, ref, engineName, mode, intent)
 	if err != nil {
 		return review.Record{}, Plan{}, err
 	}
@@ -167,16 +181,9 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mo
 	// before either appends. The check sits here rather than before resolve to keep
 	// that window off the call to GitHub. Closing it needs a compare-and-append the
 	// store does not have.
-	records, err := s.Records()
-	if err != nil {
+	if err := s.refuseOpen(ref); err != nil {
 		return review.Record{}, Plan{}, err
 	}
-	if slices.ContainsFunc(records, func(r review.Record) bool {
-		return r.Ref.Equal(ref) && r.State.Open()
-	}) {
-		return review.Record{}, Plan{}, fmt.Errorf("%s is already open; abandon it first", ref)
-	}
-
 	if err := s.append(rec); err != nil {
 		return rec, plan, err
 	}
@@ -195,18 +202,17 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mo
 
 	// resolve read the login docket had cached, which a fresh install does not
 	// have yet. Asking now settles it before the session is launched.
-	me, err := s.Login(ctx)
+	me, reviews, err := s.myReviews(ctx, ref, s.Login)
 	if err != nil {
 		return s.fail(rec, plan, err)
 	}
 	rec.OwnPR = ownPR(rec.Author, me)
 
-	ids, err := s.priorIDs(ctx, ref)
-	if err != nil {
-		return s.fail(rec, plan, err)
-	}
-	rec.PriorReviewIDs = ids
+	rec.PriorReviewIDs = review.PriorSubmittedIDs(reviews, me)
 	rec.Err = ""
+	if intent == review.IntentAsk {
+		rec = adopt(rec, reviews, me, s.now())
+	}
 
 	if err := s.append(rec); err != nil {
 		return rec, plan, err
@@ -214,9 +220,83 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mo
 	return rec, plan, nil
 }
 
+// adopt sets the state of a record taken over from a review docket did not run.
+// Decide cannot produce that state. With my submitted review in PriorReviewIDs,
+// Decide reads unreviewed. Without it, Decide reads that review as this record's
+// own submission, and record archives the row at once. The snapshot includes the
+// review all the same, so a later re-review does not count it as its own.
+func adopt(rec review.Record, reviews []review.GHReview, me string, now time.Time) review.Record {
+	rec.StartedAt = now
+	if id := review.PendingReviewID(reviews, me); id != 0 {
+		rec.State = review.StateDrafted
+		rec.ReviewID = id
+		return rec
+	}
+	rec.State = review.StateReviewed
+	return rec
+}
+
+// refuseOpen refuses a second record for a pull request that already has an
+// open one.
+func (s *Service) refuseOpen(ref pr.Ref) error {
+	records, err := s.Records()
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(records, func(r review.Record) bool {
+		return r.Ref.Equal(ref) && r.State.Open()
+	}) {
+		return fmt.Errorf("%s is already open; abandon it first", ref)
+	}
+	return nil
+}
+
+// Found is what already exists for a pull request before docket reviews it.
+type Found struct {
+	// NotesAt is when the notes file was last written, and zero when there is
+	// none.
+	NotesAt time.Time
+	// PendingID is my pending review on GitHub, or 0.
+	PendingID int64
+	// Submitted reports that I have already submitted a review.
+	Submitted bool
+}
+
+// Any reports whether there is a review the user has to choose what to do with.
+func (f Found) Any() bool {
+	return !f.NotesAt.IsZero() || f.PendingID != 0 || f.Submitted
+}
+
+// Existing reports what review of a pull request is already there, so the user
+// can choose to ask about it, append to it, or overwrite it before review-code
+// asks the same question in a terminal nobody may be watching.
+//
+// It writes nothing, so a dry run calls it too. That includes the login cache.
+// On an install that has not cached a login, Existing asks GitHub without saving
+// the answer, and Prepare saves it later.
+func (s *Service) Existing(ctx context.Context, ref pr.Ref) (Found, error) {
+	// The index is local, so the refusal comes before anything asks GitHub.
+	if err := s.refuseOpen(ref); err != nil {
+		return Found{}, err
+	}
+
+	var found Found
+	if info, err := os.Stat(s.Cfg.NotesPath(ref.Org, ref.Repo, ref.Number)); err == nil {
+		found.NotesAt = info.ModTime()
+	}
+
+	me, reviews, err := s.myReviews(ctx, ref, s.peekLogin)
+	if err != nil {
+		return Found{}, err
+	}
+	found.PendingID = review.PendingReviewID(reviews, me)
+	found.Submitted = len(review.PriorSubmittedIDs(reviews, me)) > 0
+	return found, nil
+}
+
 // resolve works out everything about a review that reads nothing but GitHub and
 // repos.conf. Prepare goes on to provision and record. Explain stops here.
-func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode) (review.Record, Plan, gh.PRInfo, engine.Engine, error) {
+func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent) (review.Record, Plan, gh.PRInfo, engine.Engine, error) {
 	eng, err := engine.For(engineName)
 	if err != nil {
 		return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
@@ -244,6 +324,14 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		plan.Dir = s.Cloner.Dir(ref)
 	}
 
+	// A question-and-answer session needs the terminal, and an adopted record
+	// has no review session of its own to name.
+	sessionID := startingSessionID(eng, mode)
+	if intent == review.IntentAsk {
+		mode = review.ModeInteractive
+		sessionID = ""
+	}
+
 	rec := review.Record{
 		ID:        s.newID(),
 		Ref:       ref,
@@ -254,9 +342,10 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		Tier:      decided,
 		Mode:      mode,
 		Dir:       plan.Dir,
-		SessionID: startingSessionID(eng, mode),
+		SessionID: sessionID,
 		State:     review.StatePreparing,
 		NotesPath: plan.NotesPath,
+		Intent:    intent,
 		// The cached login, because Explain reaches here too and a dry run asks
 		// GitHub for nothing it can avoid. Prepare settles it properly below. A
 		// dry run on an install that has never cached a login therefore leaves
@@ -269,19 +358,29 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 // Explain says what a review would do without doing any of it. A dry run must not
 // provision. A check that reads what provisioning would have written then tells
 // the user nothing, so Explain stops before both.
-func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode) (Plan, exec.CommandSpec, error) {
-	rec, plan, _, eng, err := s.resolve(ctx, ref, engineName, mode)
+func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent) (Plan, exec.CommandSpec, error) {
+	rec, plan, _, eng, err := s.resolve(ctx, ref, engineName, mode, intent)
 	if err != nil {
 		return Plan{}, exec.CommandSpec{}, err
 	}
-	if mode == review.ModeBackground {
-		bg, ok := eng.(engine.BackgroundEngine)
-		if !ok {
-			return Plan{}, exec.CommandSpec{}, fmt.Errorf("%s cannot run a review in the background", engineName)
-		}
-		return plan, bg.StartBackground(rec, s.enginePaths()), nil
+	if intent == review.IntentAsk {
+		rec.AskSessionID = eng.NewSessionID()
+		return plan, eng.Ask(rec, s.enginePaths()), nil
 	}
-	return plan, eng.Start(rec, s.enginePaths()), nil
+	spec, err := s.startSpec(eng, rec)
+	return plan, spec, err
+}
+
+// startSpec is the command that starts a fresh review of rec in its mode.
+func (s *Service) startSpec(eng engine.Engine, rec review.Record) (exec.CommandSpec, error) {
+	if rec.Mode != review.ModeBackground {
+		return eng.Start(rec, s.enginePaths()), nil
+	}
+	bg, ok := eng.(engine.BackgroundEngine)
+	if !ok {
+		return exec.CommandSpec{}, fmt.Errorf("%s cannot run a review in the background", eng.Name())
+	}
+	return bg.StartBackground(rec, s.enginePaths()), nil
 }
 
 // ensureScratch keeps the tier-1 launch directory a git repository with no
@@ -330,6 +429,12 @@ func (s *Service) specFor(rec review.Record, resume bool) (review.Record, exec.C
 		if spec, ok := eng.Resume(rec, s.enginePaths()); ok {
 			return rec, spec, nil
 		}
+	}
+	// An adopted record has no review session. A fresh start would pass
+	// review-code neither --append nor --overwrite, so review-code would stop and
+	// ask the question the user already answered when choosing to adopt.
+	if rec.Intent == review.IntentAsk {
+		return rec, exec.CommandSpec{}, fmt.Errorf("%s has no review session to resume; press u to review it again", rec.Ref)
 	}
 	if rec.SessionID == "" {
 		rec.SessionID = eng.NewSessionID()
@@ -397,11 +502,7 @@ func (s *Service) AfterExit(ctx context.Context, rec review.Record, childErr err
 // resume, which specFor already handles by starting fresh, so it is not worth
 // failing the detection that follows.
 func (s *Service) captureSessionID(rec review.Record) review.Record {
-	eng, err := engine.For(rec.Engine)
-	if err != nil {
-		return rec
-	}
-	id, err := eng.CaptureSessionID(rec, s.enginePaths())
+	id, err := s.capture(rec)
 	if err != nil {
 		rec.Err = err.Error()
 		return rec
@@ -410,6 +511,147 @@ func (s *Service) captureSessionID(rec review.Record) review.Record {
 		rec.SessionID = id
 	}
 	return rec
+}
+
+func (s *Service) capture(rec review.Record) (string, error) {
+	eng, err := engine.For(rec.Engine)
+	if err != nil {
+		return "", nil
+	}
+	return eng.CaptureSessionID(rec, s.enginePaths())
+}
+
+// AskSpec returns the command that opens a question-and-answer session about the
+// record's notes, after recording that it started. It resumes the record's
+// earlier session about them when there is one.
+//
+// It leaves the review's own state alone. The session is not meant to post
+// anything, so a row that was drafted stays drafted.
+func (s *Service) AskSpec(rec review.Record) (review.Record, exec.CommandSpec, error) {
+	rec, spec, err := s.askSpecFor(rec)
+	if err != nil {
+		return rec, exec.CommandSpec{}, err
+	}
+	rec.AskStartedAt = s.now()
+	rec.Err = ""
+	return rec, spec, s.append(rec)
+}
+
+// ExplainAsk is the command AskSpec would run, without recording anything.
+func (s *Service) ExplainAsk(rec review.Record) (exec.CommandSpec, error) {
+	_, spec, err := s.askSpecFor(rec)
+	return spec, err
+}
+
+func (s *Service) askSpecFor(rec review.Record) (review.Record, exec.CommandSpec, error) {
+	eng, err := engine.For(rec.Engine)
+	if err != nil {
+		return rec, exec.CommandSpec{}, err
+	}
+	if err := checkDir(rec); err != nil {
+		return rec, exec.CommandSpec{}, err
+	}
+	if _, err := os.Stat(rec.NotesPath); err != nil {
+		return rec, exec.CommandSpec{}, fmt.Errorf("%s has no review notes to ask about", rec.Ref)
+	}
+
+	if rec.AskSessionID != "" {
+		// Resume reads SessionID, which names the review session on this record.
+		asked := rec
+		asked.SessionID = rec.AskSessionID
+		if spec, ok := eng.Resume(asked, s.enginePaths()); ok {
+			return rec, spec, nil
+		}
+	}
+	rec.AskSessionID = eng.NewSessionID()
+	return rec, eng.Ask(rec, s.enginePaths()), nil
+}
+
+// AfterAsk records the session a question-and-answer launch left behind. It does
+// not read GitHub. That session was not meant to post. Detection would also read
+// an adopted row with no pending review as unreviewed.
+func (s *Service) AfterAsk(rec review.Record, childErr error) (review.Record, error) {
+	if childErr != nil {
+		rec.Err = childErr.Error()
+	}
+	// CaptureSessionID matches on StartedAt, which on this record is when the
+	// review started rather than when the questions did.
+	asked := rec
+	asked.StartedAt = rec.AskStartedAt
+	id, err := s.capture(asked)
+	if err != nil {
+		rec.Err = err.Error()
+	} else if id != "" {
+		rec.AskSessionID = id
+	}
+	return rec, s.append(rec)
+}
+
+// Rereview readies a record to be reviewed again with --append or --overwrite.
+// The caller launches it the way it launches a prepared record, in the mode
+// given here.
+//
+// It re-snapshots the submitted reviews, because the record may be old and a
+// launch that is not a resume does not. It drops the review session, because a
+// fresh start is what passes the new flag. It first stops a background session
+// the agent still holds. Otherwise the agent would hold that session for ever
+// with no record naming it.
+func (s *Service) Rereview(ctx context.Context, rec review.Record, intent review.Intent, mode review.Mode) (review.Record, error) {
+	rearmed, err := s.rearm(rec, intent, mode)
+	if err != nil {
+		return rec, err
+	}
+	// The stop reads the mode the session was started in, not the new one.
+	rec, ok := s.stopBackground(ctx, rec)
+	if !ok {
+		return s.recordErr(rec, errors.New(rec.Err))
+	}
+	ids, err := s.priorIDs(ctx, rec.Ref)
+	if err != nil {
+		return s.recordErr(rec, err)
+	}
+	rearmed.PriorReviewIDs = ids
+	rearmed.BGID = ""
+	return rearmed, s.append(rearmed)
+}
+
+// ExplainRereview is the command a re-review would run, without recording or
+// stopping anything.
+func (s *Service) ExplainRereview(rec review.Record, intent review.Intent, mode review.Mode) (exec.CommandSpec, error) {
+	rec, err := s.rearm(rec, intent, mode)
+	if err != nil {
+		return exec.CommandSpec{}, err
+	}
+	eng, err := engine.For(rec.Engine)
+	if err != nil {
+		return exec.CommandSpec{}, err
+	}
+	if err := checkDir(rec); err != nil {
+		return exec.CommandSpec{}, err
+	}
+	rec.SessionID = startingSessionID(eng, mode)
+	return s.startSpec(eng, rec)
+}
+
+// rearm is the part of a re-review that writes nothing: the checks, and the
+// fields a fresh start needs.
+func (s *Service) rearm(rec review.Record, intent review.Intent, mode review.Mode) (review.Record, error) {
+	if intent != review.IntentAppend && intent != review.IntentOverwrite {
+		return rec, fmt.Errorf("a re-review appends or overwrites, not %q", intent)
+	}
+	if rec.BackgroundRunning() {
+		return rec, fmt.Errorf("%s is still being reviewed in the background", rec.Ref)
+	}
+	if mode == review.ModeBackground {
+		if _, ok := engine.Background(rec.Engine); !ok {
+			return rec, fmt.Errorf("%s cannot run a review in the background", rec.Engine)
+		}
+	}
+	rec.Intent = intent
+	rec.Mode = mode
+	rec.SessionID = ""
+	rec.Err = ""
+	return rec, nil
 }
 
 // Submit turns the session's pending review into a submitted one and closes the
@@ -696,15 +938,25 @@ func (s *Service) fail(rec review.Record, plan Plan, cause error) (review.Record
 // priorIDs is the snapshot that stops an older review of mine from looking like
 // this session's submission.
 func (s *Service) priorIDs(ctx context.Context, ref pr.Ref) ([]int64, error) {
-	me, err := s.Login(ctx)
-	if err != nil {
-		return nil, err
-	}
-	reviews, err := s.GH.Reviews(ctx, ref)
+	me, reviews, err := s.myReviews(ctx, ref, s.Login)
 	if err != nil {
 		return nil, err
 	}
 	return review.PriorSubmittedIDs(reviews, me), nil
+}
+
+// myReviews is the login docket compares authors against and every review on the
+// pull request. login is Login, or peekLogin where nothing may be written.
+func (s *Service) myReviews(ctx context.Context, ref pr.Ref, login func(context.Context) (string, error)) (string, []review.GHReview, error) {
+	me, err := login(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	reviews, err := s.GH.Reviews(ctx, ref)
+	if err != nil {
+		return "", nil, err
+	}
+	return me, reviews, nil
 }
 
 func (s *Service) recordErr(rec review.Record, cause error) (review.Record, error) {

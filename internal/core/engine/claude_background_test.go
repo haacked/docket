@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -176,26 +174,34 @@ func TestStopEndsTheSessionWithoutDeletingIt(t *testing.T) {
 	}
 }
 
-// docket keeps the notes of every review it runs, so a second review of a pull
-// request finds that file already there. review-code then asks what to do with
-// it, and --force does not answer that prompt.
-func TestAReReviewAnswersTheExistingNotesPrompt(t *testing.T) {
-	rec := record()
-	rec.NotesPath = filepath.Join(t.TempDir(), "pr-7.md")
-
-	if line := (Claude{}).StartBackground(rec, Paths{}).String(); strings.Contains(line, "--append") {
-		t.Errorf("command %s appends to notes that are not there", line)
+// A background review has nobody to answer review-code's prompts. --force
+// answers the pre-flight one, and the record's intent answers the one about a
+// notes file that already exists.
+func TestABackgroundReviewAnswersEveryPrompt(t *testing.T) {
+	cases := []struct {
+		intent review.Intent
+		want   string
+		absent []string
+	}{
+		{intent: review.IntentReview, absent: []string{"--append", "--overwrite"}},
+		{intent: review.IntentAppend, want: "--append", absent: []string{"--overwrite"}},
+		{intent: review.IntentOverwrite, want: "--overwrite", absent: []string{"--append"}},
 	}
-
-	if err := os.WriteFile(rec.NotesPath, []byte("# an earlier review\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	line := (Claude{}).StartBackground(rec, Paths{}).String()
-	if !strings.Contains(line, "--append") {
-		t.Errorf("command %s would stop at the existing-review prompt with nobody to answer", line)
-	}
-	if !strings.Contains(line, "--force") {
-		t.Errorf("command %s dropped the pre-flight answer", line)
+	for _, tc := range cases {
+		rec := record()
+		rec.Intent = tc.intent
+		line := (Claude{}).StartBackground(rec, Paths{}).String()
+		if !strings.Contains(line, "--force") {
+			t.Errorf("%s: command %s dropped the pre-flight answer", tc.intent, line)
+		}
+		if tc.want != "" && !strings.Contains(line, tc.want) {
+			t.Errorf("%s: command %s is missing %s", tc.intent, line, tc.want)
+		}
+		for _, flag := range tc.absent {
+			if strings.Contains(line, flag) {
+				t.Errorf("%s: command %s carries %s", tc.intent, line, flag)
+			}
+		}
 	}
 }
 

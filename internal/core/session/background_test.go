@@ -41,7 +41,7 @@ func startedBackground(t *testing.T, svc *Service, runner *exec.Fake) review.Rec
 	t.Helper()
 	svc.Runner = runner
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestPrepareMintsNoSessionIdForABackgroundReview(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestStartBackgroundRecordsTheReviewBeforeLaunchingIt(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	svc.Runner = &exec.Fake{Errs: map[string]error{"--bg": errors.New("claude is not logged in")}}
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestAStartThatReportedNoIdIsNotWaitedOn(t *testing.T) {
 	}
 	svc.Runner = runner
 
-	rec, _, _ := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground)
+	rec, _, _ := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
 	rec, _ = svc.StartBackground(context.Background(), rec)
 
 	if rec.BackgroundRunning() {
@@ -415,7 +415,7 @@ func TestExplainBackgroundRecordsNothing(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	svc.Runner = bgRunner("[]")
 
-	_, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeBackground)
+	_, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
 	if err != nil {
 		t.Fatalf("ExplainBackground: %v", err)
 	}
@@ -437,7 +437,7 @@ func TestBackgroundIsRefusedForAnEngineThatHasNone(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	svc.Runner = bgRunner("[]")
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "codex", review.ModeBackground)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "codex", review.ModeBackground, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestAbandoningAnInteractiveReviewStopsNothing(t *testing.T) {
 	runner := bgRunner("[]")
 	svc.Runner = runner
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +541,7 @@ func TestPrepareMarksYourOwnPullRequest(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: mine}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -551,7 +551,7 @@ func TestPrepareMarksYourOwnPullRequest(t *testing.T) {
 
 	theirs := &fakeGH{login: "haacked", info: prInfo()}
 	other, _ := newService(t, theirs, newFakeGit())
-	rec, _, err = other.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	rec, _, err = other.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

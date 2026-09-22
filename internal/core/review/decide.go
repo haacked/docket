@@ -43,7 +43,7 @@ func Decide(reviews []GHReview, me string, startedAt time.Time, priorIDs []int64
 		if !strings.EqualFold(r.User.Login, me) {
 			continue
 		}
-		if strings.EqualFold(r.State, StatePending) {
+		if r.pending() {
 			draftedID = r.ID
 			continue
 		}
@@ -68,9 +68,25 @@ func Decide(reviews []GHReview, me string, startedAt time.Time, priorIDs []int64
 func PriorSubmittedIDs(reviews []GHReview, me string) []int64 {
 	var ids []int64
 	for _, r := range reviews {
-		if strings.EqualFold(r.User.Login, me) && !strings.EqualFold(r.State, StatePending) {
+		if strings.EqualFold(r.User.Login, me) && !r.pending() {
 			ids = append(ids, r.ID)
 		}
 	}
 	return ids
 }
+
+// PendingReviewID is my pending review on the pull request, or 0 when there is
+// none. Adopting an existing review asks for it directly rather than through
+// Decide, which reports a submitted review ahead of a pending one. The last
+// match wins, as it does in Decide.
+func PendingReviewID(reviews []GHReview, me string) int64 {
+	var id int64
+	for _, r := range reviews {
+		if strings.EqualFold(r.User.Login, me) && r.pending() {
+			id = r.ID
+		}
+	}
+	return id
+}
+
+func (r GHReview) pending() bool { return strings.EqualFold(r.State, StatePending) }

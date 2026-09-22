@@ -212,7 +212,7 @@ func TestPrepareTier1MakesNoClone(t *testing.T) {
 	gitc := newFakeGit()
 	svc, paths := newService(t, ghc, gitc)
 
-	rec, plan, err := svc.Prepare(context.Background(), listed, "claude", review.ModeInteractive)
+	rec, plan, err := svc.Prepare(context.Background(), listed, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestPrepareTier2ClonesTheHead(t *testing.T) {
 	gitc := newFakeGit()
 	svc, paths := newService(t, ghc, gitc)
 
-	rec, plan, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	rec, plan, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestPrepareKeepsARecordWhenTheCloneFails(t *testing.T) {
 	gitc.failAt = "fetch"
 	svc, _ := newService(t, ghc, gitc)
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive); err == nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err == nil {
 		t.Fatal("Prepare succeeded, want the fetch failure")
 	}
 
@@ -294,7 +294,7 @@ func TestPrepareSnapshotsOnlySubmittedReviews(t *testing.T) {
 	}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestLaunchSpecRecordsTheSessionBeforeReturning(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestLaunchSpecRefusesAMissingDirectory(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestLaunchSpecRefusesAMissingDirectory(t *testing.T) {
 
 func launched(t *testing.T, svc *Service, ref pr.Ref) review.Record {
 	t.Helper()
-	rec, _, err := svc.Prepare(context.Background(), ref, "claude", review.ModeInteractive)
+	rec, _, err := svc.Prepare(context.Background(), ref, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -721,7 +721,7 @@ func TestRefreshRefusesARecordThatNeverStartedASession(t *testing.T) {
 	gitc.failAt = "fetch"
 	svc, _ := newService(t, ghc, gitc)
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive); err == nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err == nil {
 		t.Fatal("Prepare succeeded, want the fetch failure")
 	}
 	records, err := svc.Records()
@@ -786,11 +786,11 @@ func TestPrepareRefusesAPullRequestThatIsAlreadyOpen(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, paths := newService(t, ghc, newFakeGit())
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive); err != nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive); err == nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err == nil {
 		t.Fatal("Prepare made a second record for a pull request already open; abandoning either deletes the clone the other uses")
 	}
 
@@ -810,7 +810,7 @@ func TestPrepareAllowsAReviewAfterTheEarlierOneClosed(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	first, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	first, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -818,7 +818,7 @@ func TestPrepareAllowsAReviewAfterTheEarlierOneClosed(t *testing.T) {
 		t.Fatalf("Abandon: %v", err)
 	}
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive); err != nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err != nil {
 		t.Errorf("Prepare refused a pull request whose earlier review was abandoned: %v", err)
 	}
 }
@@ -889,7 +889,7 @@ func TestExplainReportsWithoutProvisioningOrRecording(t *testing.T) {
 	gitc := newFakeGit()
 	svc, paths := newService(t, ghc, gitc)
 
-	plan, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeInteractive)
+	plan, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Explain: %v", err)
 	}
@@ -919,14 +919,14 @@ func TestPrepareRefusesTheSamePullRequestInADifferentCase(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive); err != nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 
 	// GitHub resolves an owner and a repository without case, so this is the same
 	// pull request and the same clone directory.
 	shouted := pr.Ref{Org: strings.ToUpper(unlisted.Org), Repo: strings.ToUpper(unlisted.Repo), Number: unlisted.Number}
-	if _, _, err := svc.Prepare(context.Background(), shouted, "claude", review.ModeInteractive); err == nil {
+	if _, _, err := svc.Prepare(context.Background(), shouted, "claude", review.ModeInteractive, review.IntentReview); err == nil {
 		t.Fatal("Prepare opened a second record for the same pull request under a different case")
 	}
 
