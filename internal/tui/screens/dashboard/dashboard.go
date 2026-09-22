@@ -47,13 +47,16 @@ type Model struct {
 	Cursor       int
 	ShowArchived bool
 	Busy         map[string]string
-	Styles       Styles
-	Width        int
-	Now          func() time.Time
+	// Background is what each running background session is doing, keyed by
+	// record. The root formats it, because a screen holds no engine to ask.
+	Background map[string]string
+	Styles     Styles
+	Width      int
+	Now        func() time.Time
 }
 
 func New(styles Styles) Model {
-	return Model{Styles: styles, Busy: map[string]string{}}
+	return Model{Styles: styles, Busy: map[string]string{}, Background: map[string]string{}}
 }
 
 // SetRecords replaces the list and keeps the cursor on the record it was on. The
@@ -201,6 +204,9 @@ func (m Model) row(rec review.Record, selected bool) string {
 	line := fmt.Sprintf("%s%s  %s", marker, rec.Ref, title)
 
 	meta := []string{rec.Engine, rec.Tier.String(), m.age(rec)}
+	if rec.Mode == review.ModeBackground {
+		meta = append(meta, m.background(rec))
+	}
 	if note, busy := m.Busy[rec.ID]; busy {
 		meta = append(meta, note)
 	}
@@ -252,4 +258,11 @@ func truncate(s string, width int) string {
 		return s
 	}
 	return string(r[:width-1]) + "…"
+}
+
+// background says what the session behind a record is doing. A record the last
+// poll said nothing about is one the agent no longer lists or one whose review
+// is over, so the row names the mode and nothing more.
+func (m Model) background(rec review.Record) string {
+	return strings.TrimSpace("background " + m.Background[rec.ID])
 }

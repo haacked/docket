@@ -86,6 +86,7 @@ func run() error {
 		GH:     gh.New(runner),
 		Git:    gitCLI,
 		Cloner: clone.New(gitCLI, paths),
+		Runner: runner,
 	}
 
 	return tui.Run(tui.New(svc, cfg, opts.input, opts.dryRun))

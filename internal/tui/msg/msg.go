@@ -18,10 +18,12 @@ const (
 // Goto switches screens.
 type Goto struct{ Screen Screen }
 
-// StartReview asks for a review of whatever the user typed.
+// StartReview asks for a review of whatever the user typed. Background asks for
+// one that runs without the terminal.
 type StartReview struct {
-	Input  string
-	Engine string
+	Input      string
+	Engine     string
+	Background bool
 }
 
 // Resume reopens the session behind a record.

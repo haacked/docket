@@ -4,6 +4,7 @@
 package newreview
 
 import (
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -22,15 +23,20 @@ type Styles struct {
 }
 
 type Model struct {
-	Input       textinput.Model
-	Engine      string
-	Engines     []string
-	DefaultRepo string
-	Styles      Styles
-	Busy        string
+	Input   textinput.Model
+	Engine  string
+	Engines []string
+	// BackgroundEngines are the engines that can run a review without the
+	// terminal. It is a list of names rather than anything richer because a
+	// screen holds no engine: it turns keys into intents and nothing else.
+	BackgroundEngines []string
+	Background        bool
+	DefaultRepo       string
+	Styles            Styles
+	Busy              string
 }
 
-func New(styles Styles, engines []string, engine, defaultRepo string) Model {
+func New(styles Styles, engines, backgroundEngines []string, engine, defaultRepo string) Model {
 	input := textinput.New()
 	input.Placeholder = "https://github.com/org/repo/pull/123"
 	input.Prompt = "› "
@@ -40,15 +46,25 @@ func New(styles Styles, engines []string, engine, defaultRepo string) Model {
 	input.SetVirtualCursor(true)
 	input.Focus()
 	return Model{
-		Input:       input,
-		Engine:      engine,
-		Engines:     engines,
-		DefaultRepo: defaultRepo,
-		Styles:      styles,
+		Input:             input,
+		Engine:            engine,
+		Engines:           engines,
+		BackgroundEngines: backgroundEngines,
+		DefaultRepo:       defaultRepo,
+		Styles:            styles,
 	}
 }
 
+// CanBackground reports whether the chosen engine runs a review without the
+// terminal. The toggle is refused for one that cannot, rather than failing after
+// the pull request has already been resolved and cloned.
+func (m Model) CanBackground() bool {
+	return slices.Contains(m.BackgroundEngines, m.Engine)
+}
+
 // Reset clears the field, so leaving and returning does not carry a stale URL.
+// The background choice is left alone: a user who runs reviews in the background
+// runs the next one there too.
 func (m Model) Reset() Model {
 	m.Input.SetValue("")
 	m.Busy = ""
@@ -76,6 +92,14 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			return m, msg.Send(msg.Goto{Screen: msg.Dashboard})
 		case "tab":
 			m.Engine = choice.Next(m.Engines, m.Engine)
+			// The engine that was chosen may not run background reviews, and
+			// leaving the flag set would start a review the engine refuses.
+			m.Background = m.Background && m.CanBackground()
+			return m, nil
+		case "ctrl+b":
+			if m.CanBackground() {
+				m.Background = !m.Background
+			}
 			return m, nil
 		case "enter":
 			if m.Busy != "" {
@@ -86,7 +110,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 				return m, nil
 			}
 			m.Busy = "resolving"
-			return m, msg.Send(msg.StartReview{Input: value, Engine: m.Engine})
+			return m, msg.Send(msg.StartReview{Input: value, Engine: m.Engine, Background: m.Background})
 		}
 	}
 
@@ -116,8 +140,21 @@ func (m Model) View() string {
 	}
 
 	b.WriteString("\n" + m.Styles.Label.Render("Engine") + " " + choice.Line(m.Engines, m.Engine, lipgloss.Style{}, m.Styles.Dim) + "\n")
+	b.WriteString(m.Styles.Label.Render("Run") + " " + m.runLine() + "\n")
 	if m.Busy != "" {
 		b.WriteString("\n" + m.Styles.Dim.Render(m.Busy+"…") + "\n")
 	}
 	return b.String()
+}
+
+// runLine says where the review will run, and why the choice is not on offer
+// when the engine has no background mode.
+func (m Model) runLine() string {
+	if !m.CanBackground() {
+		return m.Styles.Dim.Render("in this terminal · " + m.Engine + " has no background mode")
+	}
+	if m.Background {
+		return "in the background" + " " + m.Styles.Dim.Render("· ctrl+b for this terminal")
+	}
+	return "in this terminal" + " " + m.Styles.Dim.Render("· ctrl+b for the background")
 }

@@ -57,6 +57,20 @@ type editorExitedMsg struct {
 	err    error
 }
 
+// bgTickMsg asks for a poll of the running background sessions. The root
+// re-arms it from its own handler, and only while something is running, so an
+// idle docket makes no subprocess calls.
+type bgTickMsg struct{}
+
+// bgPolledMsg carries the index after a poll, with what each running background
+// session is doing. The note is already formatted: the dashboard holds no engine
+// to ask.
+type bgPolledMsg struct {
+	records []review.Record
+	notes   map[string]string
+	err     error
+}
+
 // statusMsg is a line for the footer.
 type statusMsg struct{ text string }
 

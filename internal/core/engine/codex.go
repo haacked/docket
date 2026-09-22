@@ -28,7 +28,7 @@ func (Codex) NewSessionID() string { return "" }
 var scrubbed = []string{"CLAUDECODE", "CLAUDE_CONFIG_DIR"}
 
 func (Codex) Start(rec review.Record, paths Paths) exec.CommandSpec {
-	args := append(codexDirs(rec.Dir, paths), fmt.Sprintf("$review-code %s --draft", rec.URL))
+	args := append(codexDirs(rec.Dir, paths), "$review-code "+reviewArgs(rec))
 	return exec.CommandSpec{Path: "codex", Args: args, Dir: rec.Dir, Unset: scrubbed}
 }
 
