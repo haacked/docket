@@ -25,8 +25,8 @@ type Model struct {
 	Styles Styles
 }
 
-func New(styles Styles, from msg.Screen) Model {
-	return Model{Styles: styles, Return: from}
+func New(styles Styles) Model {
+	return Model{Styles: styles}
 }
 
 // For aims a close back at whatever screen opened this one.
@@ -70,6 +70,7 @@ func (m Model) View() string {
 		{"a", "show or hide archived records"},
 		{"j/k ↓/↑", "move the selection"},
 		{"g/G", "jump to the top or bottom"},
+		{"?", "toggle this help"},
 		{"q", "quit"},
 	})
 	section("New review", [][2]string{
@@ -86,10 +87,10 @@ func (m Model) View() string {
 	section("Notes", [][2]string{
 		{"e", "edit in $EDITOR"},
 		{"↑/↓", "scroll"},
-		{"esc", "back to the dashboard"},
+		{"?", "toggle this help"},
+		{"esc/q", "back to the dashboard"},
 	})
 	section("Everywhere", [][2]string{
-		{"?", "toggle this help"},
 		{"ctrl+c", "quit"},
 	})
 

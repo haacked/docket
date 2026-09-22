@@ -76,6 +76,16 @@ func TestTabCyclesEngines(t *testing.T) {
 	}
 }
 
+// ? is not bound here. The field takes arbitrary text, and a pasted URL's
+// query string can carry one.
+func TestQuestionMarkGoesIntoTheFieldRatherThanOpeningHelp(t *testing.T) {
+	m, _ := model().Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+
+	if got := m.Input.Value(); got != "?" {
+		t.Errorf("field = %q, want the ? typed into it", got)
+	}
+}
+
 func TestEscapeGoesBack(t *testing.T) {
 	_, cmd := model().Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cmd == nil {

@@ -17,6 +17,7 @@ package index_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -33,6 +34,42 @@ func TestStatOnAFreshIndexEstablishesABaselineWithoutError(t *testing.T) {
 	}
 	if mark != (index.StatMark{}) {
 		t.Errorf("Stat() on a missing index = %+v, want the zero StatMark", mark)
+	}
+}
+
+// A missing index file is not an error, distinct from a genuine stat
+// failure. A parent path component that is a regular file, not a directory,
+// gives os.Stat a deterministic error that is not IsNotExist.
+func TestStatReturnsAnErrorForAFailureThatIsNotAMissingFile(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(parent, nil, 0o644); err != nil {
+		t.Fatalf("seed %s: %v", parent, err)
+	}
+	store := newStore(t, filepath.Join(parent, "index.jsonl"))
+
+	if _, err := store.Stat(); err == nil {
+		t.Error("Stat() through a path component that is a file returned no error")
+	}
+}
+
+func TestChangedLeavesTheMarkAloneOnAStatFailure(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(parent, nil, 0o644); err != nil {
+		t.Fatalf("seed %s: %v", parent, err)
+	}
+	store := newStore(t, filepath.Join(parent, "index.jsonl"))
+	prev := index.StatMark{Size: 7}
+
+	got, changed, err := store.Changed(prev)
+
+	if err == nil {
+		t.Fatal("Changed() through a path component that is a file returned no error")
+	}
+	if changed {
+		t.Error("Changed() reported a change on a stat failure, want none: nothing was confirmed")
+	}
+	if got != prev {
+		t.Errorf("Changed() returned mark %+v on error, want prev unchanged (%+v)", got, prev)
 	}
 }
 
@@ -194,6 +231,13 @@ func TestTwoStoreHandlesWatchingTheSamePathSeeEachOthersAppends(t *testing.T) {
 	}
 	if !bobSeesAlice {
 		t.Error("bob's Changed() missed alice's append")
+	}
+
+	// Catch alice's own mark up past her own append, so the check below can
+	// only pass by seeing bob's, not by seeing her own again.
+	aliceMark, _, err = alice.Changed(aliceMark)
+	if err != nil {
+		t.Fatalf("alice: Changed() returned error %v", err)
 	}
 
 	appendAll(t, bob, ev("rec-2", "started", indexBase.Add(time.Minute), map[string]any{"title": "Bob's review"}))

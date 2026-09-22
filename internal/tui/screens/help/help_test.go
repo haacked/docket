@@ -12,7 +12,7 @@ import (
 func key(s string) tea.KeyPressMsg { return tea.KeyPressMsg{Code: rune(s[0]), Text: s} }
 
 func TestForSetsWhereEscAndQuestionMarkReturnTo(t *testing.T) {
-	m := New(Styles{}, msg.Dashboard).For(msg.Submit)
+	m := New(Styles{}).For(msg.Submit)
 
 	if m.Return != msg.Submit {
 		t.Errorf("Return = %v, want msg.Submit", m.Return)
@@ -21,7 +21,7 @@ func TestForSetsWhereEscAndQuestionMarkReturnTo(t *testing.T) {
 
 func TestEscAndQuestionMarkCloseToReturn(t *testing.T) {
 	for _, press := range []tea.KeyPressMsg{{Code: tea.KeyEscape}, key("?")} {
-		m := New(Styles{}, msg.Notes)
+		m := New(Styles{}).For(msg.Notes)
 
 		_, cmd := m.Update(press)
 
@@ -37,7 +37,7 @@ func TestEscAndQuestionMarkCloseToReturn(t *testing.T) {
 // A key help does not recognize is swallowed rather than passed through, so
 // the screen underneath does not act on it while help is on top.
 func TestOtherKeysAreSwallowed(t *testing.T) {
-	m := New(Styles{}, msg.Dashboard)
+	m := New(Styles{})
 
 	_, cmd := m.Update(key("n"))
 
@@ -47,7 +47,7 @@ func TestOtherKeysAreSwallowed(t *testing.T) {
 }
 
 func TestViewListsEveryScreensKeys(t *testing.T) {
-	view := New(Styles{}, msg.Dashboard).View()
+	view := New(Styles{}).View()
 
 	for _, want := range []string{"Dashboard", "New review", "Submit", "Notes", "Everywhere", "ctrl+c", "quit"} {
 		if !strings.Contains(view, want) {

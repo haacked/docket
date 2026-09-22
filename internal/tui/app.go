@@ -82,7 +82,7 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 		),
 		sub:   submit.New(submit.Styles{Label: s.Label, Dim: s.Dim, Selected: s.Selected}),
 		notes: notes.New(notes.Styles{Label: s.Label, Dim: s.Dim}),
-		help:  help.New(help.Styles{Group: s.Group, Label: s.Label}, msg.Dashboard),
+		help:  help.New(help.Styles{Group: s.Group, Label: s.Label}),
 	}
 	if initialInput != "" {
 		app.screen = msg.NewReview
@@ -143,6 +143,12 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.screen = message.Screen
 		if a.screen == msg.NewReview {
 			a.newrev = a.newrev.Reset()
+		}
+		// OpenNotes already refits on its own way in. Help closing back to Notes
+		// goes through here instead. A resize while help was on top would
+		// otherwise leave the pane wrapped to a stale width until the next one.
+		if a.screen == msg.Notes {
+			a.notes = a.notes.SetSize(a.width, a.notesHeight())
 		}
 		a.err = nil
 		return a, nil

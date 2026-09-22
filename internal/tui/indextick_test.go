@@ -7,11 +7,16 @@ package tui
 // the stamp assignment, and every tick reloads forever with no test failing.
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/index"
+	"github.com/haacked/docket/internal/core/session"
 )
 
 func TestCheckIndexReportsNoChangeAgainstItsOwnFreshStamp(t *testing.T) {
@@ -67,9 +72,33 @@ func TestCheckIndexReportsTheChangeAndFeedingItBackUpdatesTheStamp(t *testing.T)
 	}
 }
 
+// A stat failure other than a missing file must be dropped rather than
+// surfaced as errMsg, which would clear the dashboard's busy markers on a
+// transient failure. A path component that is a regular file, not a
+// directory, gives os.Stat a deterministic error to force this against.
+func TestCheckIndexDropsAStatFailureRatherThanSurfacingIt(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(parent, nil, 0o644); err != nil {
+		t.Fatalf("seed %s: %v", parent, err)
+	}
+	store := index.New(filepath.Join(parent, "index.jsonl"), filepath.Join(parent, "index.lock"))
+	a := New(&session.Service{Store: store}, config.Config{DefaultEngine: "claude"}, "", false)
+
+	if got := a.checkIndex()(); got != nil {
+		t.Errorf("checkIndex() = %#v on a stat failure, want nil rather than an errMsg", got)
+	}
+}
+
+// Calling a tea.Batch command returns the tea.BatchMsg of its children
+// without running them, so this is safe against the nil-svc app().
 func TestIndexTickBatchesTheCheckAndTheNextArm(t *testing.T) {
 	_, cmd := app().Update(indexTickMsg{})
 	if cmd == nil {
 		t.Fatal("indexTickMsg produced no command")
+	}
+
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("indexTickMsg produced %#v, want a batch of the check and the next tick", cmd())
 	}
 }

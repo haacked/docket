@@ -198,9 +198,9 @@ func (s *Store) compactLocked(records []review.Record) error {
 
 // StatMark is a cheap fingerprint of the index file's state on disk, used to
 // detect that another process appended or compacted without taking the
-// shared lock. Compact swaps the file in with a rename. Two appends within
-// one coarse-mtime second can differ only in size, which is why ModTime alone
-// is not enough.
+// shared lock. On a filesystem with second-granularity mtimes, a write
+// landing in the same second as the previous check can leave ModTime
+// unchanged while Size differs, which is why Changed compares both.
 type StatMark struct {
 	ModTime time.Time
 	Size    int64
