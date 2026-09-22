@@ -266,6 +266,12 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case recordsLoadedMsg:
 		a.dash = a.dash.SetRecords(message.records)
+		// A zero stamp means this load came from reconcile or refreshAll,
+		// which carry none. Leaving indexStamp alone there is what keeps the
+		// next watch tick from wrongly treating their writes as already seen.
+		if message.stamp != (index.StatMark{}) {
+			a.indexStamp = message.stamp
+		}
 		return a, nil
 
 	case preparedMsg:
@@ -473,9 +479,24 @@ func detected(work func() (review.Record, error)) tea.Cmd {
 	}
 }
 
+// loadRecords stats the index before reading it, so the stamp it hands back
+// reflects the file as of just before this read rather than just after. Any
+// write landing during or after the read is then still new to the next
+// watch tick, rather than being folded silently into what this load already
+// saw. reconcile and refreshAll go through loaded instead. Each makes its
+// own writes partway through its work, so a stamp taken at their start
+// would call those writes "already seen." It could also miss a genuinely
+// concurrent external write landing in the same window.
 func (a App) loadRecords() tea.Cmd {
 	svc := a.svc
-	return loaded(svc.Records)
+	return func() tea.Msg {
+		stamp, _ := svc.Store.Stat()
+		records, err := svc.Records()
+		if err != nil {
+			return errMsg{err: err}
+		}
+		return recordsLoadedMsg{records: records, stamp: stamp}
+	}
 }
 
 func (a App) reconcile() tea.Cmd {

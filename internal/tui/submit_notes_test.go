@@ -285,11 +285,27 @@ func TestAFailedSubmissionLeavesTheSubmitScreenUsable(t *testing.T) {
 	}
 }
 
+// The archived toggle's label is built at runtime and slotted into the
+// table-derived footer between the static entries and the trailing ? / q,
+// where "a" sits in help.Dashboard. This pins that position rather than
+// just its presence.
+func TestTheDashboardFooterPlacesTheArchivedToggleBeforeHelpAndQuit(t *testing.T) {
+	want := "n new  ·  enter resume  ·  s submit  ·  v notes  ·  x abandon  ·  r refresh  ·  R refresh all  ·  a show archived  ·  ? help  ·  q quit"
+	if got := helpFor(msg.Dashboard, false); got != want {
+		t.Errorf("footer = %q, want %q", got, want)
+	}
+
+	want = strings.Replace(want, "a show archived", "a hide archived", 1)
+	if got := helpFor(msg.Dashboard, true); got != want {
+		t.Errorf("footer with archived shown = %q, want %q", got, want)
+	}
+}
+
 func TestTheFooterNamesTheKeysOfEachScreen(t *testing.T) {
 	for screen, want := range map[msg.Screen][]string{
 		msg.Dashboard: {"s submit", "notes", "? help"},
 		msg.Submit:    {"ctrl+s submit", "tab event", "esc back"},
-		msg.Notes:     {"e edit", "esc back", "? help"},
+		msg.Notes:     {"e edit", "esc/q back", "? help"},
 		msg.Help:      {"esc/? back", "ctrl+c quit"},
 	} {
 		got := helpFor(screen, false)

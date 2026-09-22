@@ -55,3 +55,34 @@ func TestViewListsEveryScreensKeys(t *testing.T) {
 		}
 	}
 }
+
+// Footer skips an entry with no Short, which is how Dashboard's movement
+// keys and its dynamic archived toggle stay out of the footer.
+func TestFooterSkipsEntriesWithNoShortLabel(t *testing.T) {
+	got := Footer([]Entry{
+		{Key: "n", Short: "new"},
+		{Key: "j/k", Long: "move the selection"},
+		{Key: "q", Short: "quit"},
+	})
+
+	want := []string{"n new", "q quit"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("Footer() = %v, want %v", got, want)
+	}
+}
+
+// The whole point of a shared table is that the footer and the full help
+// screen cannot drift the way they did before it existed: every key Footer
+// shows has to come from the same Long text View renders.
+func TestFooterKeysAllAppearInTheFullHelpScreen(t *testing.T) {
+	view := New(Styles{}).View()
+
+	for _, table := range [][]Entry{Dashboard, NewReview, Submit, Notes} {
+		for _, part := range Footer(table) {
+			key := strings.SplitN(part, " ", 2)[0]
+			if !strings.Contains(view, key) {
+				t.Errorf("footer key %q from %q is not shown anywhere in the full help screen", key, part)
+			}
+		}
+	}
+}

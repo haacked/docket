@@ -16,6 +16,7 @@ import (
 
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/index"
+	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
 )
 
@@ -86,6 +87,45 @@ func TestCheckIndexDropsAStatFailureRatherThanSurfacingIt(t *testing.T) {
 
 	if got := a.checkIndex()(); got != nil {
 		t.Errorf("checkIndex() = %#v on a stat failure, want nil rather than an errMsg", got)
+	}
+}
+
+// loadRecords stamps before it reads, so adopting that stamp after a local
+// write (the kind Prepare/Submit/Abandon/AfterExit already make before
+// calling loadRecords) leaves nothing for the next tick to find changed.
+func TestLoadRecordsStampsBeforeTheReadSoALocalWriteCausesNoRedundantReload(t *testing.T) {
+	svc, _ := serviceOverIndex(t)
+	a := New(svc, config.Config{DefaultEngine: "claude"}, "", false)
+	if err := svc.Store.Append(startedEvent(t, "rec-1", "A local review", time.Now())); err != nil {
+		t.Fatalf("seed a local write: %v", err)
+	}
+
+	got := a.loadRecords()()
+	loadedMsg, ok := got.(recordsLoadedMsg)
+	if !ok {
+		t.Fatalf("loadRecords() produced %#v, want a recordsLoadedMsg", got)
+	}
+	next, _ := a.Update(loadedMsg)
+	a = next.(App)
+
+	if got := a.checkIndex()(); got != nil {
+		t.Errorf("checkIndex() = %#v right after loadRecords adopted its stamp, want nil", got)
+	}
+}
+
+// reconcile and refreshAll share loaded rather than loadRecords, because
+// each makes its own writes partway through its work. A stamp taken at
+// their start would call those writes already seen. It could also miss a
+// genuinely concurrent external one landing in the same window.
+func TestLoadedCarriesNoStampUnlikeLoadRecords(t *testing.T) {
+	got := loaded(func() ([]review.Record, error) { return nil, nil })()
+
+	msg, ok := got.(recordsLoadedMsg)
+	if !ok {
+		t.Fatalf("loaded() produced %#v, want a recordsLoadedMsg", got)
+	}
+	if msg.stamp != (index.StatMark{}) {
+		t.Errorf("loaded() carried a non-zero stamp %+v, want the zero value", msg.stamp)
 	}
 }
 

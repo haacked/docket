@@ -11,8 +11,14 @@ import (
 // root. They stay here rather than in internal/tui/msg so that the screens, which
 // hold no service, do not depend on the service packages these name.
 
-// recordsLoadedMsg carries the index as it now stands.
-type recordsLoadedMsg struct{ records []review.Record }
+// recordsLoadedMsg carries the index as it now stands. stamp is set only by
+// loadRecords, which stats the index right before reading it. reconcile and
+// refreshAll leave it zero, because their own writes during the read would
+// make a stamp taken there misrepresent what they actually saw.
+type recordsLoadedMsg struct {
+	records []review.Record
+	stamp   index.StatMark
+}
 
 // preparedMsg means the pull request resolved and the working directory is ready.
 type preparedMsg struct {
