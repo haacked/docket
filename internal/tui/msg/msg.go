@@ -13,6 +13,7 @@ const (
 	NewReview
 	Submit
 	Notes
+	Help
 )
 
 // Goto switches screens.
@@ -51,6 +52,9 @@ type OpenNotes struct{ ID string }
 
 // EditNotes opens those notes in the user's editor.
 type EditNotes struct{ ID string }
+
+// OpenHelp asks for the full key reference over whatever screen sent it.
+type OpenHelp struct{}
 
 // Send wraps a message as the command that delivers it.
 func Send(message tea.Msg) tea.Cmd {

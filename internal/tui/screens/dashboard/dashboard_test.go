@@ -86,6 +86,7 @@ func TestKeysEmitIntents(t *testing.T) {
 		{"refresh all", key("R"), msg.RefreshRecords{}},
 		{"submit", key("s"), msg.OpenSubmit{ID: "a"}},
 		{"notes", key("v"), msg.OpenNotes{ID: "a"}},
+		{"help", key("?"), msg.OpenHelp{}},
 	}
 
 	for _, tc := range tests {

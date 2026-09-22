@@ -202,6 +202,29 @@ func TestAResizeReachesTheNotesPane(t *testing.T) {
 	}
 }
 
+// OpenNotes refits the pane on its own way in. Help closing back to notes
+// goes through Goto instead. A resize while help was on top would otherwise
+// leave the pane wrapped to a stale width until the next one.
+func TestGotoBackToNotesRefitsAResizeThatLandedWhileHelpWasOnTop(t *testing.T) {
+	rec := draftedRecord()
+	a := liveApp(rec)
+	next, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	next, _ = next.(App).Update(msg.OpenNotes{ID: rec.ID})
+	next, _ = next.(App).Update(msg.OpenHelp{})
+	a = next.(App)
+	if a.screen != msg.Help {
+		t.Fatal("OpenHelp did not open help")
+	}
+
+	next, _ = a.Update(tea.WindowSizeMsg{Width: 60, Height: 40})
+	next, _ = next.(App).Update(msg.Goto{Screen: msg.Notes})
+	a = next.(App)
+
+	if got := a.notes.Viewport.Width(); got != 60 {
+		t.Errorf("notes viewport width = %d, want 60 after the resize that landed while help was open", got)
+	}
+}
+
 // An editor is not a review session. Reading GitHub after it would mark the row
 // busy and measure a detection window the editor never moved.
 func TestAnEditorExitRereadsTheNotesInsteadOfGitHub(t *testing.T) {
@@ -262,11 +285,28 @@ func TestAFailedSubmissionLeavesTheSubmitScreenUsable(t *testing.T) {
 	}
 }
 
+// The archived toggle's label is built at runtime and slotted into the
+// table-derived footer between the static entries and the trailing ? / q,
+// where "a" sits in help.Dashboard. This pins that position rather than
+// just its presence.
+func TestTheDashboardFooterPlacesTheArchivedToggleBeforeHelpAndQuit(t *testing.T) {
+	want := "n new  ·  enter resume  ·  s submit  ·  v notes  ·  x abandon  ·  r refresh  ·  R refresh all  ·  a show archived  ·  ? help  ·  q quit"
+	if got := helpFor(msg.Dashboard, false); got != want {
+		t.Errorf("footer = %q, want %q", got, want)
+	}
+
+	want = strings.Replace(want, "a show archived", "a hide archived", 1)
+	if got := helpFor(msg.Dashboard, true); got != want {
+		t.Errorf("footer with archived shown = %q, want %q", got, want)
+	}
+}
+
 func TestTheFooterNamesTheKeysOfEachScreen(t *testing.T) {
 	for screen, want := range map[msg.Screen][]string{
-		msg.Dashboard: {"s submit", "notes"},
+		msg.Dashboard: {"s submit", "notes", "? help"},
 		msg.Submit:    {"ctrl+s submit", "tab event", "esc back"},
-		msg.Notes:     {"e edit", "esc back"},
+		msg.Notes:     {"e edit", "esc/q back", "? help"},
+		msg.Help:      {"esc/? back", "ctrl+c quit"},
 	} {
 		got := helpFor(screen, false)
 

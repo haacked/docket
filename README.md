@@ -53,11 +53,11 @@ docket --dry-run o/r#123                      say what would happen, start and r
 
 A pull request can be a URL, `org/repo#123`, or a bare number once `default_repo` is set in `config.toml`.
 
-Dashboard keys: `n` new review, `enter` resume or open, `s` submit a drafted review, `v` view the notes, `x` abandon, `r` refresh the selected record from GitHub, `R` refresh every record, `a` show archived records, `q` quit.
+Dashboard keys: `n` new review, `enter` resume or open, `s` submit a drafted review, `v` view the notes, `x` abandon, `r` refresh the selected record from GitHub, `R` refresh every record, `a` show archived records, `?` show the full key reference, `q` quit.
 
-On the new review screen, `tab` picks the engine and `ctrl+b` chooses between this terminal and the background. On the submit screen, `tab` picks the event and `ctrl+s` submits. Approving is not offered on your own pull request, because GitHub refuses it. On the notes screen, `e` opens the file in `$EDITOR`. The notes follow your terminal's background, and `GLAMOUR_STYLE` overrides that with any glamour style name, such as `light`, `dracula`, or `notty`.
+On the new review screen, `tab` picks the engine and `ctrl+b` chooses between this terminal and the background. On the submit screen, `tab` picks the event and `ctrl+s` submits. Approving is not offered on your own pull request, because GitHub refuses it. On the notes screen, `e` opens the file in `$EDITOR`. The notes follow your terminal's background, and `GLAMOUR_STYLE` overrides that with any glamour style name, such as `light`, `dracula`, or `notty`. `?` opens the full key reference from the dashboard or the notes screen; `esc` or `?` closes it again. New review and submit leave `?` out of their own hints, because each holds a free-text field where a `?` is something you might actually want to type.
 
-State lives in `~/.docket`, which `DOCKET_HOME` or `--home` overrides. It holds an append-only `index.jsonl`, `clones/` for shallow clones, `scratch/` for the tier-1 launch directory, and `config.toml`. Two docket instances can run at once: every write appends one line while holding a lock, and nothing is rewritten in place.
+State lives in `~/.docket`, which `DOCKET_HOME` or `--home` overrides. It holds an append-only `index.jsonl`, `clones/` for shallow clones, `scratch/` for the tier-1 launch directory, and `config.toml`. Two docket instances can run at once: every write appends one line while holding a lock, and nothing is rewritten in place. Each instance also polls the index file every couple of seconds, so a review started in one shows up on the other's dashboard shortly after.
 
 ## Build
 
@@ -65,7 +65,7 @@ State lives in `~/.docket`, which `DOCKET_HOME` or `--home` overrides. It holds 
 go build ./cmd/docket
 ```
 
-`go install github.com/haacked/docket/cmd/docket@latest` works once the repository is published.
+or `go install github.com/haacked/docket/cmd/docket@latest`.
 
 ## License
 

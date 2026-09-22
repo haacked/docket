@@ -2,6 +2,7 @@ package tui
 
 import (
 	"github.com/haacked/docket/internal/core/exec"
+	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
 )
@@ -10,8 +11,14 @@ import (
 // root. They stay here rather than in internal/tui/msg so that the screens, which
 // hold no service, do not depend on the service packages these name.
 
-// recordsLoadedMsg carries the index as it now stands.
-type recordsLoadedMsg struct{ records []review.Record }
+// recordsLoadedMsg carries the index as it now stands. stamp is set only by
+// loadRecords, which stats the index right before reading it. reconcile and
+// refreshAll leave it zero, because their own writes during the read would
+// make a stamp taken there misrepresent what they actually saw.
+type recordsLoadedMsg struct {
+	records []review.Record
+	stamp   index.StatMark
+}
 
 // preparedMsg means the pull request resolved and the working directory is ready.
 type preparedMsg struct {
@@ -70,6 +77,14 @@ type bgPolledMsg struct {
 	notes   map[string]string
 	err     error
 }
+
+// indexTickMsg asks the root to check whether another docket process appended
+// to the index since the last check.
+type indexTickMsg struct{}
+
+// indexChangedMsg reports that the index changed. It carries the StatMark to
+// compare against next time.
+type indexChangedMsg struct{ stamp index.StatMark }
 
 // statusMsg is a line for the footer.
 type statusMsg struct{ text string }

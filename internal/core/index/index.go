@@ -196,6 +196,44 @@ func (s *Store) compactLocked(records []review.Record) error {
 	return nil
 }
 
+// StatMark is a cheap fingerprint of the index file's state on disk, used to
+// detect that another process appended or compacted without taking the
+// shared lock. On a filesystem with second-granularity mtimes, a write
+// landing in the same second as the previous check can leave ModTime
+// unchanged while Size differs, which is why Changed compares both.
+type StatMark struct {
+	ModTime time.Time
+	Size    int64
+}
+
+func (s StatMark) equal(other StatMark) bool {
+	return s.Size == other.Size && s.ModTime.Equal(other.ModTime)
+}
+
+// Stat reads the index file's current StatMark. It takes no lock, so polling
+// it does not contend with another process's Append. A missing index reports
+// the zero StatMark rather than an error, matching Events' treatment of one.
+func (s *Store) Stat() (StatMark, error) {
+	info, err := os.Stat(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return StatMark{}, nil
+		}
+		return StatMark{}, fmt.Errorf("stat %s: %w", s.path, err)
+	}
+	return StatMark{ModTime: info.ModTime(), Size: info.Size()}, nil
+}
+
+// Changed reports whether the index file's StatMark differs from prev. It
+// returns the current StatMark to compare against next time.
+func (s *Store) Changed(prev StatMark) (StatMark, bool, error) {
+	cur, err := s.Stat()
+	if err != nil {
+		return prev, false, err
+	}
+	return cur, !cur.equal(prev), nil
+}
+
 func (s *Store) lock(exclusive bool) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(s.lockPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create %s: %w", filepath.Dir(s.lockPath), err)

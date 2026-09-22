@@ -140,6 +140,8 @@ func (m Model) handleKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 	case "R":
 		return m, msg.Send(msg.RefreshRecords{})
+	case "?":
+		return m, msg.Send(msg.OpenHelp{})
 	}
 	return m, nil
 }
