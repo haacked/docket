@@ -73,11 +73,18 @@ State lives in `~/.docket`, which `DOCKET_HOME` or `--home` overrides. It holds 
 
 ## Build
 
+The scripts in `bin/` follow PostHog's [scripts convention](https://posthog.com/handbook/engineering/conventions/scripts).
+
 ```
-go build ./cmd/docket
+bin/setup     download the Go modules; run it once after cloning
+bin/build     build ./docket
+bin/start     run docket from source; arguments pass through, as in bin/start --dry-run o/r#123
+bin/test      check formatting, run go vet, and run the tests; flags pass through to go test
+bin/fmt       format the Go code, and the scripts in bin/ when shfmt is installed
+bin/update    download the modules go.mod names, after a pull
 ```
 
-or `go install github.com/haacked/docket/cmd/docket@latest`.
+To put docket on your PATH, run `go install ./cmd/docket` from the clone, or `go install github.com/haacked/docket/cmd/docket@latest`.
 
 ## License
 

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#/ Usage: bin/setup
+#/ Description: Downloads the Go modules that go.mod names. It is safe to run again.
+
+set -euo pipefail
+
+# shellcheck source=bin/helpers/_utils.sh
+source "$(dirname "$0")/helpers/_utils.sh"
+set_source_and_root_dir
+parse_common_args "$@"
+
+command_exists go || fatal "go is not on PATH. Install Go 1.26 or later."
+
+echo "Downloading Go modules…"
+go mod download
+echo "Setup complete. Run bin/test to check the build, or bin/start to run docket."

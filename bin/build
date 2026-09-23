@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#/ Usage: bin/build
+#/ Description: Builds ./docket from cmd/docket.
+
+set -euo pipefail
+
+# shellcheck source=bin/helpers/_utils.sh
+source "$(dirname "$0")/helpers/_utils.sh"
+set_source_and_root_dir
+parse_common_args "$@"
+
+go build -o docket ./cmd/docket
+echo "Built $root_dir/docket"

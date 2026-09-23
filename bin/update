@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#/ Usage: bin/update
+#/ Description: Downloads the Go modules that go.mod names after a pull, by running bin/setup.
+
+set -euo pipefail
+
+# shellcheck source=bin/helpers/_utils.sh
+source "$(dirname "$0")/helpers/_utils.sh"
+set_source_and_root_dir
+parse_common_args "$@"
+
+# This must never run go get -u. go.mod pins exact versions of the Charm modules.
+exec bin/setup
