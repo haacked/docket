@@ -119,10 +119,12 @@ type indexChangedMsg struct{ stamp index.StatMark }
 // requestsLoadedMsg carries what one search of GitHub for review requests found.
 type requestsLoadedMsg struct{ fetched requests.Fetched }
 
-// batchStartedMsg reports a batch of background reviews. failed holds one line
-// per pull request that did not start.
+// batchStartedMsg reports a batch of background reviews. skipped holds each pull
+// request left alone because it already has a review. failed holds one line per
+// pull request that did not start.
 type batchStartedMsg struct {
 	started int
+	skipped []string
 	failed  []string
 }
 

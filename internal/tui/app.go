@@ -6,6 +6,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -212,8 +213,11 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case batchStartedMsg:
 		a.status = fmt.Sprintf("Started %d background reviews", message.started)
+		if len(message.skipped) > 0 {
+			a.status += fmt.Sprintf("\n%d already reviewed, start each with n to append or overwrite:\n%s", len(message.skipped), strings.Join(message.skipped, "\n"))
+		}
 		if len(message.failed) > 0 {
-			a.status += fmt.Sprintf("; %d failed:\n%s", len(message.failed), strings.Join(message.failed, "\n"))
+			a.status += fmt.Sprintf("\n%d failed:\n%s", len(message.failed), strings.Join(message.failed, "\n"))
 		}
 		return a, tea.Batch(a.loadRecords(), a.pollBackground())
 
@@ -742,27 +746,51 @@ func (a App) startBatch(urls []string, engineName string) tea.Cmd {
 		ctx := context.Background()
 		var done batchStartedMsg
 		for _, url := range urls {
-			if err := startOne(ctx, svc, url, engineName); err != nil {
+			ref, err := startOne(ctx, svc, url, engineName)
+			switch {
+			case errors.Is(err, errHasReview):
+				done.skipped = append(done.skipped, ref.String())
+			case err != nil:
 				done.failed = append(done.failed, err.Error())
-				continue
+			default:
+				done.started++
 			}
-			done.started++
 		}
 		return done
 	}
 }
 
-func startOne(ctx context.Context, svc *session.Service, url, engineName string) error {
+// errHasReview marks a pull request that a batch leaves alone because a review of
+// it already exists. Only the new review screen asks whether to append to that
+// review or overwrite it. Without that answer, review-code asks the question in
+// a background session where nobody can answer it.
+var errHasReview = errors.New("already has a review")
+
+func startOne(ctx context.Context, svc *session.Service, url, engineName string) (pr.Ref, error) {
 	ref, err := pr.ParseRef(url, "")
 	if err != nil {
-		return err
+		return ref, err
+	}
+	if err := checkNoReview(ctx, svc, ref); err != nil {
+		return ref, err
 	}
 	rec, _, err := svc.Prepare(ctx, ref, engineName, review.ModeBackground, review.IntentReview)
 	if err != nil {
-		return fmt.Errorf("%s: %w", ref, err)
+		return ref, fmt.Errorf("%s: %w", ref, err)
 	}
 	if _, err := svc.StartBackground(ctx, rec); err != nil {
+		return ref, fmt.Errorf("%s: %w", ref, err)
+	}
+	return ref, nil
+}
+
+func checkNoReview(ctx context.Context, svc *session.Service, ref pr.Ref) error {
+	found, err := svc.Existing(ctx, ref)
+	if err != nil {
 		return fmt.Errorf("%s: %w", ref, err)
+	}
+	if found.Any() {
+		return fmt.Errorf("%s %w", ref, errHasReview)
 	}
 	return nil
 }
@@ -785,7 +813,11 @@ func explainOne(svc *session.Service, url, engineName string) string {
 	if err != nil {
 		return err.Error()
 	}
-	plan, spec, err := svc.Explain(context.Background(), ref, engineName, review.ModeBackground, review.IntentReview)
+	ctx := context.Background()
+	if err := checkNoReview(ctx, svc, ref); err != nil {
+		return err.Error()
+	}
+	plan, spec, err := svc.Explain(ctx, ref, engineName, review.ModeBackground, review.IntentReview)
 	if err != nil {
 		return fmt.Sprintf("%s: %v", ref, err)
 	}
