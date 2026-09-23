@@ -433,7 +433,7 @@ func (s *Service) specFor(rec review.Record, resume bool) (review.Record, exec.C
 	// An adopted record has no review session. A fresh start would pass
 	// review-code neither --append nor --overwrite, so review-code would stop and
 	// ask the question the user already answered when choosing to adopt.
-	if rec.Intent == review.IntentAsk {
+	if rec.Adopted() {
 		return rec, exec.CommandSpec{}, fmt.Errorf("%s has no review session to resume; press u to review it again", rec.Ref)
 	}
 	if rec.SessionID == "" {
@@ -559,10 +559,7 @@ func (s *Service) askSpecFor(rec review.Record) (review.Record, exec.CommandSpec
 	}
 
 	if rec.AskSessionID != "" {
-		// Resume reads SessionID, which names the review session on this record.
-		asked := rec
-		asked.SessionID = rec.AskSessionID
-		if spec, ok := eng.Resume(asked, s.enginePaths()); ok {
+		if spec, ok := eng.Resume(asAsk(rec), s.enginePaths()); ok {
 			return rec, spec, nil
 		}
 	}
@@ -570,24 +567,67 @@ func (s *Service) askSpecFor(rec review.Record) (review.Record, exec.CommandSpec
 	return rec, eng.Ask(rec, s.enginePaths()), nil
 }
 
-// AfterAsk records the session a question-and-answer launch left behind. It does
-// not read GitHub. That session was not meant to post. Detection would also read
-// an adopted row with no pending review as unreviewed.
-func (s *Service) AfterAsk(rec review.Record, childErr error) (review.Record, error) {
+// AfterAsk records the session a question-and-answer launch left behind, then
+// reads GitHub for anything the user had the agent post during it. A review
+// submitted in the session archives the row, and a new pending review moves it to
+// drafted.
+//
+// It writes onto the stored record rather than the one AskSpec returned. The row
+// is not reviewing during the session, so another instance may have submitted,
+// archived, or re-reviewed it meanwhile.
+func (s *Service) AfterAsk(ctx context.Context, rec review.Record, childErr error) (review.Record, error) {
+	current := s.latest(rec)
+	current.AskStartedAt = rec.AskStartedAt
+	current.AskSessionID = rec.AskSessionID
 	if childErr != nil {
-		rec.Err = childErr.Error()
+		current.Err = childErr.Error()
 	}
-	// CaptureSessionID matches on StartedAt, which on this record is when the
-	// review started rather than when the questions did.
-	asked := rec
-	asked.StartedAt = rec.AskStartedAt
-	id, err := s.capture(asked)
+	id, err := s.capture(asAsk(rec))
 	if err != nil {
-		rec.Err = err.Error()
+		current.Err = err.Error()
 	} else if id != "" {
-		rec.AskSessionID = id
+		current.AskSessionID = id
 	}
-	return rec, s.append(rec)
+
+	switch current.State {
+	case review.StateDrafted, review.StateReviewed, review.StateUnreviewed:
+	default:
+		return current, s.append(current)
+	}
+	decided, reviews, err := s.decide(ctx, current)
+	if err != nil {
+		current.Err = err.Error()
+		return current, s.append(current)
+	}
+	// Decide reads a row with no new review of mine as unreviewed. After a Q&A
+	// session that only means nothing was posted, and an adopted row would lose
+	// the reviewed state that Decide cannot produce.
+	if decided.State == review.StateUnreviewed {
+		return current, s.append(current)
+	}
+	return s.record(ctx, decided, reviews)
+}
+
+// latest is the index's copy of rec, or rec itself when the index cannot be read
+// or no longer holds it.
+func (s *Service) latest(rec review.Record) review.Record {
+	records, err := s.Records()
+	if err != nil {
+		return rec
+	}
+	if i := slices.IndexFunc(records, func(r review.Record) bool { return r.ID == rec.ID }); i >= 0 {
+		return records[i]
+	}
+	return rec
+}
+
+// asAsk is the record as an engine sees the question-and-answer session. Resume
+// reads SessionID and CaptureSessionID reads StartedAt, and on the record both
+// belong to the review session.
+func asAsk(rec review.Record) review.Record {
+	rec.SessionID = rec.AskSessionID
+	rec.StartedAt = rec.AskStartedAt
+	return rec
 }
 
 // Rereview readies a record to be reviewed again with --append or --overwrite.

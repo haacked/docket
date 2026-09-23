@@ -117,19 +117,6 @@ func TestABackgroundStartTakesItsFlagFromTheIntentNotTheNotesFile(t *testing.T) 
 	}
 }
 
-func TestABackgroundOverwriteForcesAndOverwrites(t *testing.T) {
-	line := Claude{}.StartBackground(intentRecord(review.IntentOverwrite), Paths{}).String()
-
-	for _, want := range []string{"--force", "--overwrite"} {
-		if !strings.Contains(line, want) {
-			t.Errorf("command %s is missing %q", line, want)
-		}
-	}
-	if strings.Contains(line, "--append") {
-		t.Errorf("command %s appends as well as overwriting", line)
-	}
-}
-
 // promptOf is the one argument that is not a flag, which is where the question
 // for the agent goes.
 func promptOf(t *testing.T, args []string) string {

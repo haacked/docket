@@ -55,7 +55,7 @@ const (
 	// launchEditor is $EDITOR on the notes. Its exit re-reads them.
 	launchEditor
 	// launchAsk is a question-and-answer session. Its exit records the session
-	// and does not read GitHub.
+	// and then reads GitHub for anything posted during it.
 	launchAsk
 )
 

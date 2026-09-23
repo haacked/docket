@@ -126,7 +126,7 @@ func (m Model) handleKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		if rec, ok := m.Selected(); ok {
 			// An adopted record has no review session to resume, so enter offers
 			// to review it again instead.
-			if rec.Intent == review.IntentAsk {
+			if rec.Adopted() {
 				return m, msg.Send(msg.OpenRereview{ID: rec.ID})
 			}
 			return m, msg.Send(msg.Resume{ID: rec.ID})

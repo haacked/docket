@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
@@ -98,11 +101,13 @@ func TestASecondAskWhileTheFirstOpensIsIgnored(t *testing.T) {
 	}
 }
 
-func TestAnAskSessionExitSkipsDetection(t *testing.T) {
+// An ask session's exit captures the Q&A session before it reads GitHub, and a
+// review session's exit reads GitHub only. Each needs its own message.
+func TestAnAskSessionExitTakesItsOwnPath(t *testing.T) {
 	rec := adopted()
 
 	if _, ok := exited(launchMsg{record: rec, kind: launchAsk}, nil).(askExitedMsg); !ok {
-		t.Error("an ask session's exit would read GitHub")
+		t.Error("an ask session's exit went down the review's path")
 	}
 	if _, ok := exited(launchMsg{record: rec}, nil).(childExitedMsg); !ok {
 		t.Error("a review session's exit would not read GitHub")
@@ -112,8 +117,34 @@ func TestAnAskSessionExitSkipsDetection(t *testing.T) {
 	}
 
 	next, _ := withRecords(rec).Update(askExitedMsg{record: rec})
-	if note := next.(App).dash.Busy[rec.ID]; note != "saving" {
-		t.Errorf("busy = %q, want saving rather than reading GitHub", note)
+	if note := next.(App).dash.Busy[rec.ID]; note != "reading GitHub" {
+		t.Errorf("busy = %q, want reading GitHub", note)
+	}
+}
+
+// View and ask is prepared the way a review is. A review launch would pass
+// review-code no --append or --overwrite, so the root has to open the Q&A
+// session instead.
+func TestAPreparedAskOpensTheQuestionSession(t *testing.T) {
+	svc, _ := serviceOverIndex(t)
+	rec := adopted()
+	rec.Dir = t.TempDir()
+	rec.NotesPath = filepath.Join(rec.Dir, "pr-4.md")
+	if err := os.WriteFile(rec.NotesPath, []byte("# Review\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := New(svc, config.Config{DefaultEngine: "claude"}, "", false)
+
+	_, cmd := a.Update(preparedMsg{record: rec})
+	if cmd == nil {
+		t.Fatal("a prepared ask ran nothing")
+	}
+	launch, ok := cmd().(launchMsg)
+	if !ok {
+		t.Fatal("a prepared ask did not launch")
+	}
+	if launch.kind != launchAsk {
+		t.Errorf("launch kind = %v, want the Q&A session", launch.kind)
 	}
 }
 

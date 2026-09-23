@@ -178,26 +178,15 @@ func TestStopEndsTheSessionWithoutDeletingIt(t *testing.T) {
 // answers the pre-flight one, and the record's intent answers the one about a
 // notes file that already exists.
 func TestABackgroundReviewAnswersEveryPrompt(t *testing.T) {
-	cases := []struct {
-		intent review.Intent
-		want   string
-		absent []string
-	}{
-		{intent: review.IntentReview, absent: []string{"--append", "--overwrite"}},
-		{intent: review.IntentAppend, want: "--append", absent: []string{"--overwrite"}},
-		{intent: review.IntentOverwrite, want: "--overwrite", absent: []string{"--append"}},
-	}
-	for _, tc := range cases {
-		rec := record()
-		rec.Intent = tc.intent
-		line := (Claude{}).StartBackground(rec, Paths{}).String()
+	for _, tc := range intentFlags {
+		line := (Claude{}).StartBackground(intentRecord(tc.intent), Paths{}).String()
 		if !strings.Contains(line, "--force") {
 			t.Errorf("%s: command %s dropped the pre-flight answer", tc.intent, line)
 		}
 		if tc.want != "" && !strings.Contains(line, tc.want) {
 			t.Errorf("%s: command %s is missing %s", tc.intent, line, tc.want)
 		}
-		for _, flag := range tc.absent {
+		for _, flag := range tc.refused {
 			if strings.Contains(line, flag) {
 				t.Errorf("%s: command %s carries %s", tc.intent, line, flag)
 			}

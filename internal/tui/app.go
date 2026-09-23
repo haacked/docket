@@ -382,7 +382,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.screen = msg.Dashboard
 		a.status = message.status
 		switch {
-		case message.record.Intent == review.IntentAsk:
+		case message.record.Adopted():
 			return a, a.ask(message.record)
 		case message.record.Mode == review.ModeBackground:
 			return a, a.startBackground(message.record)
@@ -394,7 +394,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handoff(message)
 
 	case askExitedMsg:
-		a.dash.Busy[message.record.ID] = "saving"
+		a.dash.Busy[message.record.ID] = "reading GitHub"
 		return a, tea.Batch(tea.ClearScreen, a.afterAsk(message.record, message.err))
 
 	case childExitedMsg:
@@ -648,7 +648,7 @@ func (a App) afterExit(rec review.Record, childErr error) tea.Cmd {
 
 func (a App) afterAsk(rec review.Record, childErr error) tea.Cmd {
 	svc := a.svc
-	return detected(func() (review.Record, error) { return svc.AfterAsk(rec, childErr) })
+	return detected(func() (review.Record, error) { return svc.AfterAsk(context.Background(), rec, childErr) })
 }
 
 func (a App) abandon(rec review.Record) tea.Cmd {
@@ -980,7 +980,7 @@ func describe(rec review.Record) string {
 	case review.StateArchived:
 		return fmt.Sprintf("%s submitted and archived. Notes stay at %s", rec.Ref, rec.NotesPath)
 	case review.StateDrafted:
-		if rec.Intent == review.IntentAsk {
+		if rec.Adopted() {
 			return fmt.Sprintf("%s has a pending review. Press s to submit it or c to ask about it", rec.Ref)
 		}
 		return fmt.Sprintf("%s has a pending review. Press enter to keep going", rec.Ref)

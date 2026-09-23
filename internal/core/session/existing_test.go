@@ -542,7 +542,7 @@ func TestAskSpecResumesTheQuestionSessionItStartedBefore(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 	rec := adopted(t, svc, unlisted)
-	rec, err := svc.AfterAsk(rec, nil)
+	rec, err := svc.AfterAsk(context.Background(), rec, nil)
 	if err != nil {
 		t.Fatalf("AfterAsk: %v", err)
 	}
@@ -588,27 +588,18 @@ func TestAskSpecRefusesAMissingDirectory(t *testing.T) {
 	}
 }
 
-// The Q&A session was not meant to post. Detection would move a reviewed row to
-// unreviewed, or read a new review of mine as this row's own and archive it.
-func TestAfterAskLeavesTheStateAndSkipsGitHub(t *testing.T) {
-	ghc := &fakeGH{login: "haacked", info: prInfo()}
+// Nothing posted in the session reads as unreviewed to Decide, which an adopted
+// row must not become.
+func TestAfterAskKeepsAReviewedRowWhenNothingWasPosted(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo(), reviews: []review.GHReview{mySubmitted()}}
 	svc, _ := newService(t, ghc, newFakeGit())
 	rec := adopted(t, svc, unlisted)
 
-	at := start.Add(3 * time.Minute)
-	ghc.reviews = []review.GHReview{
-		{ID: 9, User: review.GHUser{Login: "haacked"}, State: "APPROVED", SubmittedAt: &at},
-	}
-	before := ghc.reads
-
-	done, err := svc.AfterAsk(rec, nil)
+	done, err := svc.AfterAsk(context.Background(), rec, nil)
 	if err != nil {
 		t.Fatalf("AfterAsk: %v", err)
 	}
 
-	if ghc.reads != before {
-		t.Errorf("AfterAsk read GitHub's reviews %d times, want none", ghc.reads-before)
-	}
 	if done.State != review.StateReviewed {
 		t.Errorf("state = %q, want reviewed", done.State)
 	}
@@ -620,12 +611,81 @@ func TestAfterAskLeavesTheStateAndSkipsGitHub(t *testing.T) {
 	}
 }
 
+// The user can ask the agent to submit the draft once their questions are
+// answered, and the review is then done.
+func TestAfterAskArchivesAReviewSubmittedDuringTheSession(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo(), reviews: []review.GHReview{myPending()}}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := adopted(t, svc, unlisted)
+	if rec.State != review.StateDrafted {
+		t.Fatalf("adopted state = %q, want drafted", rec.State)
+	}
+
+	at := start.Add(3 * time.Minute)
+	ghc.reviews = []review.GHReview{
+		{ID: myPendingID, User: review.GHUser{Login: "haacked"}, State: "COMMENTED", SubmittedAt: &at},
+	}
+
+	done, err := svc.AfterAsk(context.Background(), rec, nil)
+	if err != nil {
+		t.Fatalf("AfterAsk: %v", err)
+	}
+
+	if done.State != review.StateArchived {
+		t.Errorf("state = %q, want the submitted review archived", done.State)
+	}
+	if got := storedByID(t, svc, rec.ID); got.State != review.StateArchived || got.AskSessionID != rec.AskSessionID {
+		t.Errorf("stored record is %q with ask session %q, want archived with %q", got.State, got.AskSessionID, rec.AskSessionID)
+	}
+}
+
+func TestAfterAskPicksUpADraftPostedDuringTheSession(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo(), reviews: []review.GHReview{mySubmitted()}}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := adopted(t, svc, unlisted)
+	ghc.reviews = append(ghc.reviews, myPending())
+
+	done, err := svc.AfterAsk(context.Background(), rec, nil)
+	if err != nil {
+		t.Fatalf("AfterAsk: %v", err)
+	}
+
+	if done.State != review.StateDrafted || done.ReviewID != myPendingID {
+		t.Errorf("record is %q with review %d, want drafted with %d", done.State, done.ReviewID, myPendingID)
+	}
+	if !done.Submittable() {
+		t.Error("the draft posted in the session cannot be submitted from the dashboard")
+	}
+}
+
+// The session is recorded even when GitHub cannot be read, so the next c still
+// resumes it.
+func TestAfterAskKeepsTheSessionWhenGitHubFails(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := adopted(t, svc, unlisted)
+	ghc.reviewErr = errors.New("dial tcp: lookup api.github.com: no such host")
+
+	done, err := svc.AfterAsk(context.Background(), rec, nil)
+	if err != nil {
+		t.Fatalf("AfterAsk: %v", err)
+	}
+
+	got := storedByID(t, svc, rec.ID)
+	if got.State != review.StateReviewed || got.AskSessionID != rec.AskSessionID {
+		t.Errorf("stored record is %q with ask session %q, want reviewed with %q", got.State, got.AskSessionID, rec.AskSessionID)
+	}
+	if !strings.Contains(done.Err, "no such host") || !strings.Contains(got.Err, "no such host") {
+		t.Errorf("err = %q (stored %q), want GitHub's failure on the row", done.Err, got.Err)
+	}
+}
+
 func TestAfterAskRecordsTheChildsFailure(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 	rec := adopted(t, svc, unlisted)
 
-	done, err := svc.AfterAsk(rec, errors.New("exit status 130"))
+	done, err := svc.AfterAsk(context.Background(), rec, errors.New("exit status 130"))
 	if err != nil {
 		t.Fatalf("AfterAsk: %v", err)
 	}
@@ -635,6 +695,34 @@ func TestAfterAskRecordsTheChildsFailure(t *testing.T) {
 	}
 	if got := storedByID(t, svc, rec.ID).Err; got == "" {
 		t.Error("the child's failure is not in the index")
+	}
+}
+
+// A Q&A session leaves the row open to other instances, which may close it
+// before the session ends.
+func TestAfterAskKeepsWhatAnotherInstanceRecorded(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := adopted(t, svc, unlisted)
+	elsewhere := rec
+	elsewhere.State = review.StateArchived
+	if err := svc.append(elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	before := ghc.reads
+
+	done, err := svc.AfterAsk(context.Background(), rec, nil)
+	if err != nil {
+		t.Fatalf("AfterAsk: %v", err)
+	}
+	if done.State != review.StateArchived {
+		t.Errorf("state = %q, want the archive another instance recorded", done.State)
+	}
+	if got := storedByID(t, svc, rec.ID); got.State != review.StateArchived || got.AskSessionID != rec.AskSessionID {
+		t.Errorf("stored record is %q with ask session %q, want archived with %q", got.State, got.AskSessionID, rec.AskSessionID)
+	}
+	if ghc.reads != before {
+		t.Error("AfterAsk read GitHub for a row another instance had closed")
 	}
 }
 
@@ -650,10 +738,12 @@ func TestAfterAskCapturesTheCodexSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AskSpec: %v", err)
 	}
+	// The review's own rollout is older than the ask's, so a capture that cut off
+	// at the review's start would take it.
+	writeRollout(t, sessions, "0199a1b2-0000-7000-8000-0000000be1e0", rec.Dir, rec.StartedAt.Add(time.Minute))
 	writeRollout(t, sessions, "0199a1b2-0000-7000-8000-00000000a5c0", rec.Dir, rec.AskStartedAt.Add(time.Minute))
-	before := ghc.reads
 
-	done, err := svc.AfterAsk(rec, nil)
+	done, err := svc.AfterAsk(context.Background(), rec, nil)
 	if err != nil {
 		t.Fatalf("AfterAsk: %v", err)
 	}
@@ -663,9 +753,6 @@ func TestAfterAskCapturesTheCodexSessionID(t *testing.T) {
 	}
 	if got := storedByID(t, svc, rec.ID).AskSessionID; got != done.AskSessionID {
 		t.Errorf("stored ask session id = %q, want %q", got, done.AskSessionID)
-	}
-	if ghc.reads != before {
-		t.Error("AfterAsk read GitHub after a codex ask")
 	}
 }
 
@@ -791,7 +878,7 @@ func TestRereviewRefusesWhenTheReviewSnapshotCannotRefresh(t *testing.T) {
 	}
 }
 
-func TestRereviewRefusesAMissingDirectory(t *testing.T) {
+func TestALaunchAfterRereviewRefusesAMissingDirectory(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 	rec := adopted(t, svc, unlisted)
@@ -801,7 +888,7 @@ func TestRereviewRefusesAMissingDirectory(t *testing.T) {
 
 	again, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive)
 	if err != nil {
-		return
+		t.Fatalf("Rereview: %v", err)
 	}
 	if _, _, err := svc.LaunchSpec(context.Background(), again); err == nil {
 		t.Error("a re-review launched in a directory that is gone")

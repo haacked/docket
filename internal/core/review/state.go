@@ -67,6 +67,13 @@ func (r Record) HasBackgroundSession() bool {
 	return r.Mode == ModeBackground && r.BGID != ""
 }
 
+// Adopted reports whether the record took over an existing review and has run no
+// review session of its own. The dashboard opens the re-review choice for it and
+// the service refuses to resume it, so the rule is stated once.
+func (r Record) Adopted() bool {
+	return r.Intent == IntentAsk
+}
+
 // Open reports whether the record still wants the user's attention.
 func (s State) Open() bool {
 	switch s {
