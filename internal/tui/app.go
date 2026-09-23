@@ -186,6 +186,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.searchRequests()
 
 	case msg.RefreshRequests:
+		a.err = nil
 		a.reqs.Loading = true
 		return a, a.searchRequests()
 

@@ -451,3 +451,21 @@ func TestReopeningTheRequestsScreenDuringASearchStartsNoSecondSearch(t *testing.
 		t.Error("reopening the screen started a second search")
 	}
 }
+
+// r is how the user retries a failed search, so the failure must not stay on
+// screen above the rows the retry found.
+func TestRefreshingTheRequestsScreenClearsTheLastError(t *testing.T) {
+	next, _ := app().Update(msg.OpenRequests{})
+	a := next.(App)
+	next, _ = a.Update(errMsg{err: errNotFound})
+	a = next.(App)
+
+	next, _ = a.Update(msg.RefreshRequests{})
+	a = next.(App)
+	next, _ = a.Update(requestsLoadedMsg{})
+	a = next.(App)
+
+	if a.err != nil {
+		t.Errorf("err = %v, want it cleared by the refresh that succeeded", a.err)
+	}
+}

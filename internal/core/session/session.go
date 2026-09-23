@@ -120,7 +120,7 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 }
 
 // Requests searches GitHub for the open pull requests that ask for the user's
-// review, and for each configured team's. It writes nothing, so a dry run may
+// review or for a configured team's review. It writes nothing, so a dry run may
 // call it. It asks GitHub for the login rather than calling Login, because Login
 // caches the login in config.toml. The searches run one after another because
 // GitHub's secondary rate limits ask that one user's requests not run

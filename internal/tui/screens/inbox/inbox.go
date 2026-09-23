@@ -194,7 +194,7 @@ func (m Model) View() string {
 // header says what a mark does, because space and enter do something different
 // here than anywhere else in docket.
 func (m Model) header() string {
-	text := "space marks · enter starts the marked as " + m.Engine + " background reviews"
+	text := "space marks · enter starts the marked pull requests as " + m.Engine + " background reviews"
 	switch {
 	case m.Engine == "":
 		text = "no engine has a background mode, so enter opens the selected in a new review"
