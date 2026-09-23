@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/review"
+	"github.com/haacked/docket/internal/core/tier"
 )
 
 // intentFlags is what each intent adds after --draft. A plain review and an ask
@@ -224,5 +226,42 @@ func TestCodexAskPromptNamesTheNotesAndThePullRequest(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt %q is missing %q", prompt, want)
 		}
+	}
+}
+
+// A tier-1 ask runs in the shared scratch repository. review-code removes the
+// pull request's worktree when its review ends, so the prompt tells the agent
+// where to read the pull request's files instead.
+func TestATier1AskPromptSaysWhereToReadThePullRequest(t *testing.T) {
+	rec := intentRecord(review.IntentAsk)
+	rec.Tier = tier.Tier1
+
+	for name, spec := range map[string]exec.CommandSpec{
+		"claude": Claude{}.Ask(rec, Paths{}),
+		"codex":  Codex{}.Ask(rec, Paths{Grant: grants}),
+	} {
+		prompt := promptOf(t, spec.Args)
+		for _, want := range []string{
+			"gh pr diff " + rec.URL,
+			"repos/haacked/docket/contents/",
+			"ref=refs/pull/7/head",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("%s prompt %q is missing %q", name, prompt, want)
+			}
+		}
+	}
+}
+
+// A tier-2 ask runs in docket's clone of the pull request, so its files are
+// already in the working directory.
+func TestATier2AskPromptDoesNotSendTheAgentToGitHubForFiles(t *testing.T) {
+	rec := intentRecord(review.IntentAsk)
+	rec.Tier = tier.Tier2
+
+	prompt := promptOf(t, Claude{}.Ask(rec, Paths{}).Args)
+
+	if strings.Contains(prompt, "gh pr diff") {
+		t.Errorf("prompt %q sends the agent to GitHub for files the clone already has", prompt)
 	}
 }

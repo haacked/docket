@@ -7,6 +7,7 @@ import (
 
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/review"
+	"github.com/haacked/docket/internal/core/tier"
 )
 
 // Paths are the installed locations an engine needs to build a command. They are
@@ -91,6 +92,15 @@ func reviewArgs(rec review.Record) string {
 // the notes file rather than invoking review-code, because `/review-code find`
 // only prints the notes and cannot resolve a pull request from docket's scratch
 // directory.
+//
+// A tier-1 ask runs in that scratch directory with none of the pull request's
+// files. review-code removes the worktree it read them from when the review
+// ends. The prompt therefore names the GitHub commands that read the change and
+// its files at the pull request's head.
 func askPrompt(rec review.Record) string {
-	return fmt.Sprintf("Read the review notes at %s. They are my review of %s. I have questions about this review. Do not post anything to GitHub unless I ask.", rec.NotesPath, rec.URL)
+	prompt := fmt.Sprintf("Read the review notes at %s. They are my review of %s. I have questions about this review. Do not post anything to GitHub unless I ask.", rec.NotesPath, rec.URL)
+	if rec.Tier == tier.Tier1 {
+		prompt += fmt.Sprintf(" The pull request's files are not checked out here. Run `gh pr diff %s` to see the change, and `gh api -H 'Accept: application/vnd.github.raw' 'repos/%s/%s/contents/<path>?ref=refs/pull/%d/head'` to read a whole file.", rec.URL, rec.Ref.Org, rec.Ref.Repo, rec.Ref.Number)
+	}
+	return prompt
 }

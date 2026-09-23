@@ -166,9 +166,10 @@ func (s *Service) peekLogin(ctx context.Context) (string, error) {
 // and starts again with n.
 //
 // An ask intent adopts the review that is already there instead of starting one.
-// Prepare provisions it the same way, which lets the agent answering questions
-// read the files the notes cite. It also keeps Prepare the only place that
-// provisions a row.
+// Prepare provisions it the same way, which keeps Prepare the only place that
+// provisions a row. On tier 2 that puts the files the notes cite in the working
+// directory. On tier 1 the working directory is the shared scratch repository,
+// so the ask prompt sends the agent to GitHub for the files.
 func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent) (review.Record, Plan, error) {
 	rec, plan, info, _, err := s.resolve(ctx, ref, engineName, mode, intent)
 	if err != nil {
