@@ -235,8 +235,8 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return a, nil
 		}
-		if rec.State == review.StateReviewing {
-			a.status = fmt.Sprintf("%s is still being reviewed", rec.Ref)
+		if rec.InProgress() {
+			a.status = fmt.Sprintf("%s is still %s", rec.Ref, rec.State)
 			return a, nil
 		}
 		a.newrev = a.newrev.Reset().SetExisting(newreview.Existing{
@@ -253,8 +253,8 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return a, nil
 		}
-		if rec.State == review.StateReviewing {
-			a.status = fmt.Sprintf("%s is still being reviewed; ask once the review finishes", rec.Ref)
+		if rec.InProgress() {
+			a.status = fmt.Sprintf("%s is still %s; ask once it finishes", rec.Ref, rec.State)
 			return a, nil
 		}
 		if a.dryRun {

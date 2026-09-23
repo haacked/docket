@@ -1017,10 +1017,56 @@ func TestAReviewStillRunningRefusesAskAndReReview(t *testing.T) {
 	notesFor(t, svc, unlisted)
 	rec := launched(t, svc, unlisted)
 
-	if _, _, err := svc.AskSpec(rec); err == nil || !strings.Contains(err.Error(), "still being reviewed") {
+	if _, _, err := svc.AskSpec(rec); err == nil || !strings.Contains(err.Error(), "is still reviewing") {
 		t.Errorf("AskSpec on a running review: err = %v", err)
 	}
-	if _, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive); err == nil || !strings.Contains(err.Error(), "still being reviewed") {
+	if _, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive); err == nil || !strings.Contains(err.Error(), "is still reviewing") {
 		t.Errorf("Rereview on a running review: err = %v", err)
+	}
+}
+
+// Another instance may still be provisioning the clone of a preparing record.
+func TestARecordStillPreparingRefusesAskAndReReview(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := adopted(t, svc, unlisted)
+	rec.State = review.StatePreparing
+	if err := svc.append(rec); err != nil {
+		t.Fatal(err)
+	}
+	before := stored(t, svc)
+
+	if _, _, err := svc.AskSpec(rec); err == nil || !strings.Contains(err.Error(), "is still preparing") {
+		t.Errorf("AskSpec on a preparing record: err = %v", err)
+	}
+	if _, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive); err == nil || !strings.Contains(err.Error(), "is still preparing") {
+		t.Errorf("Rereview on a preparing record: err = %v", err)
+	}
+	if after := stored(t, svc); !reflect.DeepEqual(after, before) {
+		t.Errorf("a refused ask or re-review changed the index:\nbefore %+v\nafter  %+v", before, after)
+	}
+}
+
+// Rereview writes the record before the launch marks it reviewing. In that gap
+// the old draft must not look submittable to another instance, because the new
+// review is about to replace it.
+func TestRereviewRecordsNoSubmittableDraftBeforeTheLaunch(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo(), reviews: []review.GHReview{myPending()}}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := adopted(t, svc, unlisted)
+	if !rec.Submittable() {
+		t.Fatalf("adopted record is %q with review %d, want a submittable draft", rec.State, rec.ReviewID)
+	}
+
+	if _, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive); err != nil {
+		t.Fatalf("Rereview: %v", err)
+	}
+
+	got := storedByID(t, svc, rec.ID)
+	if got.Submittable() || got.ReviewID != 0 {
+		t.Errorf("stored record is %q with review %d, want no draft to submit", got.State, got.ReviewID)
+	}
+	if !got.InProgress() {
+		t.Errorf("stored state = %q, want it in progress so ask and re-review wait", got.State)
 	}
 }

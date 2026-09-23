@@ -74,17 +74,19 @@ func TestReReviewOpensTheChoiceForTheRecord(t *testing.T) {
 	}
 }
 
-func TestARunningBackgroundReviewRefusesAskAndReReview(t *testing.T) {
-	rec := backgroundRecord(review.StateReviewing)
+func TestARecordInProgressRefusesAskAndReReview(t *testing.T) {
+	for _, state := range []review.State{review.StateReviewing, review.StatePreparing} {
+		rec := backgroundRecord(state)
 
-	for _, message := range []any{msg.Ask{ID: rec.ID}, msg.OpenRereview{ID: rec.ID}} {
-		next, cmd := withRecords(rec).Update(message)
-		got := next.(App)
-		if cmd != nil {
-			t.Errorf("%T ran a command against a review still running", message)
-		}
-		if got.screen != msg.Dashboard || !strings.Contains(got.status, "still being reviewed") {
-			t.Errorf("%T: screen = %v, status = %q", message, got.screen, got.status)
+		for _, message := range []any{msg.Ask{ID: rec.ID}, msg.OpenRereview{ID: rec.ID}} {
+			next, cmd := withRecords(rec).Update(message)
+			got := next.(App)
+			if cmd != nil {
+				t.Errorf("%s: %T ran a command against a record still in progress", state, message)
+			}
+			if got.screen != msg.Dashboard || !strings.Contains(got.status, "is still "+string(state)) {
+				t.Errorf("%s: %T: screen = %v, status = %q", state, message, got.screen, got.status)
+			}
 		}
 	}
 }

@@ -548,7 +548,7 @@ func (s *Service) askSpecFor(rec review.Record) (review.Record, exec.CommandSpec
 	if err != nil {
 		return rec, exec.CommandSpec{}, err
 	}
-	if err := refuseReviewing(rec); err != nil {
+	if err := refuseInProgress(rec); err != nil {
 		return rec, exec.CommandSpec{}, err
 	}
 	if err := checkDir(rec); err != nil {
@@ -676,12 +676,13 @@ func (s *Service) ExplainRereview(rec review.Record, intent review.Intent, mode 
 	return s.startSpec(eng, rec)
 }
 
-// refuseReviewing refuses a record whose review session may still be writing its
-// notes. Another docket instance can hold an interactive one, so the check reads
-// the state rather than whether a background session is running.
-func refuseReviewing(rec review.Record) error {
-	if rec.State == review.StateReviewing {
-		return fmt.Errorf("%s is still being reviewed", rec.Ref)
+// refuseInProgress refuses a record that another step may still be writing. The
+// check reads the state rather than whether a background session is running,
+// because another docket instance can hold an interactive session or be
+// provisioning the clone.
+func refuseInProgress(rec review.Record) error {
+	if rec.InProgress() {
+		return fmt.Errorf("%s is still %s", rec.Ref, rec.State)
 	}
 	return nil
 }
@@ -692,7 +693,7 @@ func (s *Service) rearm(rec review.Record, intent review.Intent, mode review.Mod
 	if intent != review.IntentAppend && intent != review.IntentOverwrite {
 		return rec, fmt.Errorf("a re-review appends or overwrites, not %q", intent)
 	}
-	if err := refuseReviewing(rec); err != nil {
+	if err := refuseInProgress(rec); err != nil {
 		return rec, err
 	}
 	if mode == review.ModeBackground {
@@ -704,6 +705,11 @@ func (s *Service) rearm(rec review.Record, intent review.Intent, mode review.Mod
 	rec.Mode = mode
 	rec.SessionID = ""
 	rec.Err = ""
+	// The record is written before the launch that marks it reviewing. Until
+	// then it must not read as drafted, or another instance could submit the
+	// draft this review is about to replace.
+	rec.State = review.StatePreparing
+	rec.ReviewID = 0
 	return rec, nil
 }
 
