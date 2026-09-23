@@ -243,10 +243,8 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			a.status = fmt.Sprintf("%s is still %s", rec.Ref, rec.State)
 			return a, nil
 		}
-		if err := session.RefuseClosed(rec.Ref, rec.PRState); err != nil {
-			a.status = err.Error()
-			return a, nil
-		}
+		// The stored PRState can be stale, so a closed pull request is not refused
+		// here. Rereview and ExplainRereview read GitHub again before acting.
 		a.newrev = a.newrev.Reset().SetExisting(newreview.Existing{
 			Ref:      rec.Ref.String(),
 			Engine:   rec.Engine,

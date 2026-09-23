@@ -9,18 +9,19 @@ import (
 	"github.com/haacked/docket/internal/tui/msg"
 )
 
-func TestAMergedPullRequestRefusesReReview(t *testing.T) {
+// The stored PRState can be stale, so OpenRereview does not refuse on it: a
+// record last detected as closed may have reopened since. Rereview and
+// ExplainRereview read GitHub again before acting, which is where a pull request
+// still closed is actually refused (see internal/core/session/closed_test.go).
+func TestOpenRereviewIgnoresTheStalePRState(t *testing.T) {
 	rec := draftedRecord()
 	rec.PRState = review.PRMerged
 
-	next, cmd := withRecords(rec).Update(msg.OpenRereview{ID: rec.ID})
+	next, _ := withRecords(rec).Update(msg.OpenRereview{ID: rec.ID})
 	got := next.(App)
 
-	if cmd != nil {
-		t.Error("re-review of a merged pull request ran a command")
-	}
-	if got.screen != msg.Dashboard || !strings.Contains(got.status, "is merged") {
-		t.Errorf("screen = %v, status = %q, want the dashboard saying the pull request merged", got.screen, got.status)
+	if got.screen != msg.NewReview {
+		t.Errorf("screen = %v, want the new review screen despite the stale merged state", got.screen)
 	}
 }
 

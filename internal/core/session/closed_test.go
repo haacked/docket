@@ -246,6 +246,23 @@ func TestRefreshLeavesARunningBackgroundReviewToThePoll(t *testing.T) {
 	}
 }
 
+// A launch records StateReviewing before the background id arrives, so a record
+// can carry no BGID while a session is genuinely running behind it. recoverLost
+// treats this shape as needing recovery from the agent's own listing. Refuse it
+// the same as a record that already has its id, because stopBackground cannot
+// stop a session it has no id for.
+func TestRefreshLeavesABackgroundReviewWithNoIDYetToThePoll(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := startedBackground(t, svc, bgRunner(bgListing("6d681a76", bgSession, "working", true)))
+	rec.BGID = ""
+	ghc.info.State = review.PRMerged
+
+	if _, err := svc.Refresh(context.Background(), rec); err == nil {
+		t.Error("Refresh read GitHub for a background review with no id yet")
+	}
+}
+
 func TestPollArchivesAFinishedBackgroundReviewOnAMergedPullRequest(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())

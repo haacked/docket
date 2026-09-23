@@ -60,6 +60,17 @@ func (r Record) BackgroundRunning() bool {
 	return r.Mode == ModeBackground && r.State == StateReviewing && r.BGID != ""
 }
 
+// InBackgroundSession reports whether the record's review is running as a
+// background session, whether or not its id has been captured yet. A launch
+// records StateReviewing before the id arrives, so a record still carries no
+// BGID while it is genuinely running or while recoverLost is still looking for
+// it. Refresh and RefreshAll refuse such a record: the poll owns it until the
+// session ends. Archiving it here could stop a session still writing to its
+// clone with no id to stop it by.
+func (r Record) InBackgroundSession() bool {
+	return r.Mode == ModeBackground && r.State == StateReviewing
+}
+
 // HasBackgroundSession reports whether an agent is holding a session for this
 // record, whatever state the review reached. Stopping asks this rather than
 // BackgroundRunning: the agent keeps holding a session after the review it ran

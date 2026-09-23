@@ -804,7 +804,7 @@ func (s *Service) Refresh(ctx context.Context, rec review.Record) (review.Record
 // that session finds no draft yet. On a merged pull request, the archive that
 // follows would stop the session and delete its clone.
 func refuseRefresh(rec review.Record) error {
-	if rec.BackgroundRunning() {
+	if rec.InBackgroundSession() {
 		return fmt.Errorf("%s is still reviewing in the background; docket reads GitHub for it when the session ends", rec.Ref)
 	}
 	if !detectable(rec) {
