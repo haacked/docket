@@ -10,6 +10,7 @@ internal/core/pr/           Ref{Org,Repo,Number}, ParseRef                      
 internal/core/reposconf/    Parse, Resolve                                         pure, filesystem via callback
 internal/core/tier/         Decide                                                 pure
 internal/core/review/       Record, Event, State, Fold, Decide                     pure
+internal/core/requests/     PR, Fetched, Group                                     pure
 internal/core/index/        Store: JSONL append under flock, Load, Compact, Stat/Changed for the watcher
 internal/core/config/       config.toml, DOCKET_HOME paths, review_code_dir, codex_sessions_dir
 internal/core/exec/         Runner: Real, Fake
@@ -17,11 +18,10 @@ internal/core/engine/       Engine interface and Paths; claude.go and codex.go i
 internal/core/gh/           GitHub interface; shells to `gh api`
 internal/core/git/          Git interface; shells to `git`
 internal/core/clone/        the tier-2 clone sequence
-internal/core/session/      Service: Prepare, LaunchSpec, AfterExit, Submit, Notes, Abandon, Refresh, StartBackground, PollBackground
+internal/core/session/      Service: Prepare, LaunchSpec, AfterExit, Submit, Notes, Abandon, Refresh, StartBackground, PollBackground, Requests
 internal/tui/               root model, its own messages, keymap, styles; the only package that runs a CommandSpec
 internal/tui/msg/           the intents the screens send up to the root
-internal/core/requests/     PR, Fetched, Group                                     pure
-internal/tui/screens/       dashboard, newreview, submit, notes, help, requests
+internal/tui/screens/       dashboard, newreview, submit, notes, help, inbox
 ```
 
 `internal/tui/msg` holds only the intents a screen sends up, and it imports nothing
@@ -106,4 +106,4 @@ M2 is in: the submit screen (`s`), the notes viewer (`v`, with `e` for `$EDITOR`
 
 M4 is in: the index watcher, the full key reference (`?`), and install docs. `Store.Changed` stats the index file every 2 seconds and compares mtime and size against the last check, so it costs no lock and no subprocess; a change reloads the dashboard the same way any other refresh does, which is what lets one instance pick up another's appends without either restarting. That reload path only ever adopts a stamp from `loadRecords`, which stats the index right before reading it; `reconcile` and `refreshAll` write to the index themselves partway through their own work, so they carry no stamp, and a local write no longer causes one redundant reload on the next tick the way it did at first. `?` is a screen like any other, `internal/tui/screens/help`, opened by `msg.OpenHelp` from dashboard and notes and closed by its own `esc`/`?`; new review and submit each hold a free-text field, so neither binds `?`. The footer (`keymap.go`'s `helpFor`) and the full help screen (`help.View`) both read from the same per-screen `help.Entry` tables, so the two key lists cannot drift the way they did before that table existed. Startup already compacts the log when it carries more than five events per record.
 
-M5 is in: the review requests screen (`i`). `session.Requests` runs one REST search for `user-review-requested:<login>` and one per `teams` entry in `config.toml`, and returns them raw as `requests.Fetched`. The root keeps that and regroups it through `requests.Group` whenever the records reload, so a record's state shows on its row without searching GitHub again. It uses `gh api search/issues` rather than `gh search prs`, because the latter goes through GraphQL and refused with a rate-limit error while the REST search still answered. `requests.PR` lives in the pure package rather than in `gh`, because a screen may not import `gh`. A batch runs `Prepare` and `StartBackground` for each marked pull request in turn inside one command and reports once, because each single start answers with a `detectedMsg` that would overwrite the status line.
+M5 is in: the review requests screen (`i`). `session.Requests` runs one REST search for `user-review-requested:<login>` and one per `teams` entry in `config.toml`, and returns them raw as `requests.Fetched`. A team whose search fails carries the error in `requests.Team.Err`, and the other searches still run, because GitHub answers 422 to a team slug it cannot resolve. It reads the cached login or asks `gh` for one, and never calls `Login`, because `Login` writes the login to `config.toml` and a dry run may open the screen. The root keeps that and regroups it through `requests.Group` whenever the records reload, so a record's state shows on its row without searching GitHub again. It uses `gh api search/issues` rather than `gh search prs`, because the latter goes through GraphQL and refused with a rate-limit error while the REST search still answered. `requests.PR` lives in the pure package rather than in `gh`, because a screen may not import `gh`. A batch runs `Prepare` and `StartBackground` for each marked pull request in turn inside one command and reports once, because each single start answers with a `detectedMsg` that would overwrite the status line.

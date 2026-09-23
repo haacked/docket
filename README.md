@@ -37,7 +37,7 @@ Only `claude` runs background reviews. `codex` 0.150.1 has no background mode, s
 teams = ["PostHog/team-feature-flags"]
 ```
 
-A pull request that asks for both you and a team appears only under you. `space` marks rows, and `enter` starts every marked pull request as a background review, one after another, under the default engine when it has a background mode and under `claude` otherwise. With nothing marked, `enter` opens the new review screen with the selected pull request filled in, so a single review can still run in this terminal or under `codex`. A pull request docket already has an open record for shows that record's state and cannot be marked.
+A pull request that asks for both you and a team appears only under you. `space` marks rows, and `enter` starts every marked pull request as a background review, one after another, under the default engine when it has a background mode and under `claude` otherwise. With nothing marked, `enter` opens the new review screen with the selected pull request filled in, so a single review can still run in this terminal or under `codex`. A pull request docket already has an open record for shows that record's state and cannot be marked, and `enter` on it opens that review, the same as on the dashboard. A team whose search fails shows GitHub's error under its heading, and the other sections still show.
 
 The list is a GitHub search, which allows 30 requests a minute, so docket searches when the screen opens and when you press `r`, and never on a timer.
 

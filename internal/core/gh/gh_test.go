@@ -144,7 +144,7 @@ func TestReviewRequestsReadsEverySearchPage(t *testing.T) {
 		`{"total_count":2,"items":[{"html_url":"https://github.com/PostHog/posthog/pull/42","title":"Fix it","draft":false,"user":{"login":"other"},"updated_at":"2026-09-21T10:00:00Z"}]}]`
 	fake := &exec.Fake{Results: map[string]exec.Result{"search/issues": {Stdout: body}}}
 
-	prs, err := New(fake).ReviewRequests(context.Background(), "user-review-requested:@me")
+	prs, err := New(fake).ReviewRequests(context.Background(), "user-review-requested:haacked")
 	if err != nil {
 		t.Fatalf("ReviewRequests: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestReviewRequestsPassesTheQualifierInsideTheQuery(t *testing.T) {
 func TestReviewRequestsWithNothingWaiting(t *testing.T) {
 	fake := &exec.Fake{Results: map[string]exec.Result{"search/issues": {Stdout: `[{"total_count":0,"items":[]}]`}}}
 
-	prs, err := New(fake).ReviewRequests(context.Background(), "user-review-requested:@me")
+	prs, err := New(fake).ReviewRequests(context.Background(), "user-review-requested:haacked")
 	if err != nil {
 		t.Fatalf("ReviewRequests: %v", err)
 	}
@@ -214,5 +214,32 @@ func TestReviewRequestsErrorNamesTheQualifier(t *testing.T) {
 	_, err := New(fake).ReviewRequests(context.Background(), "team-review-requested:PostHog/team-feature-flags")
 	if err == nil || !strings.Contains(err.Error(), "PostHog/team-feature-flags") {
 		t.Errorf("error = %v, want it to name the search", err)
+	}
+}
+
+func TestReviewRequestsFailsOnOutputThatIsNotJSON(t *testing.T) {
+	fake := &exec.Fake{Results: map[string]exec.Result{"search/issues": {Stdout: "<html>502 Bad Gateway</html>"}}}
+
+	_, err := New(fake).ReviewRequests(context.Background(), "team-review-requested:PostHog/team-feature-flags")
+	if err == nil || !strings.Contains(err.Error(), "PostHog/team-feature-flags") {
+		t.Errorf("error = %v, want a parse error that names the qualifier", err)
+	}
+}
+
+// Every row is a pull request docket may clone or start a session in, so one
+// result it cannot read as a pull request fails the whole search rather than
+// dropping that row without a word.
+func TestReviewRequestsFailsOnAResultThatIsNotAPullRequest(t *testing.T) {
+	body := `[{"items":[` +
+		`{"html_url":"https://github.com/haacked/docket/pull/7","title":"Add a thing","user":{"login":"someone"},"updated_at":"2026-09-20T10:00:00Z"},` +
+		`{"html_url":"https://github.com/haacked/docket/issues/8","title":"Not a pull request","user":{"login":"someone"},"updated_at":"2026-09-20T10:00:00Z"}]}]`
+	fake := &exec.Fake{Results: map[string]exec.Result{"search/issues": {Stdout: body}}}
+
+	prs, err := New(fake).ReviewRequests(context.Background(), "user-review-requested:haacked")
+	if err == nil || !strings.Contains(err.Error(), "https://github.com/haacked/docket/issues/8") {
+		t.Errorf("error = %v, want it to name the URL it could not read", err)
+	}
+	if prs != nil {
+		t.Errorf("prs = %v, want none from a failed search", prs)
 	}
 }

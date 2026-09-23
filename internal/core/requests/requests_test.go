@@ -1,6 +1,7 @@
 package requests
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -44,6 +45,38 @@ func TestGroupListsAPullRequestAskedOfMeAndATeamOnlyUnderMe(t *testing.T) {
 	}
 }
 
+func TestGroupListsAPullRequestAskedOfTwoTeamsOnlyUnderTheFirst(t *testing.T) {
+	f := Fetched{
+		Teams: []Team{
+			{Slug: "o/zeta", PRs: []PR{request("o", "r", 1, 0)}},
+			{Slug: "o/alpha", PRs: []PR{request("o", "r", 1, 0), request("o", "r", 2, 0)}},
+		},
+	}
+
+	sections := Group(f, nil)
+
+	if len(sections) != 3 {
+		t.Fatalf("sections = %d, want me and two teams", len(sections))
+	}
+	if got := refs(sections[1].Rows); len(got) != 1 || got[0].Number != 1 {
+		t.Errorf("first team = %v, want #1", got)
+	}
+	if got := refs(sections[2].Rows); len(got) != 1 || got[0].Number != 2 {
+		t.Errorf("second team = %v, want only #2", got)
+	}
+}
+
+func TestGroupKeepsATeamsSearchError(t *testing.T) {
+	failure := errors.New("422")
+	f := Fetched{Teams: []Team{{Slug: "o/typo", Err: failure}}}
+
+	sections := Group(f, nil)
+
+	if len(sections) != 2 || !errors.Is(sections[1].Err, failure) {
+		t.Errorf("sections = %+v, want the team's section to carry its error", sections)
+	}
+}
+
 func TestGroupPutsMeFirstAndTeamsInTheOrderGiven(t *testing.T) {
 	f := Fetched{
 		Mine: []PR{request("o", "r", 1, 0)},
@@ -82,11 +115,11 @@ func TestGroupAttachesTheStateOfAnOpenRecord(t *testing.T) {
 
 	rows := Group(f, records)[0].Rows
 
-	if rows[0].State != review.StateDrafted {
-		t.Errorf("#1 state = %q, want drafted", rows[0].State)
+	if rows[0].State != review.StateDrafted || rows[0].RecordID != "a" {
+		t.Errorf("#1 = %q on %q, want drafted on record a", rows[0].State, rows[0].RecordID)
 	}
-	if rows[1].State != "" {
-		t.Errorf("#2 state = %q, want none without a record", rows[1].State)
+	if rows[1].State != "" || rows[1].RecordID != "" {
+		t.Errorf("#2 = %q on %q, want no record", rows[1].State, rows[1].RecordID)
 	}
 }
 
@@ -117,7 +150,7 @@ func TestGroupPrefersTheOpenRecordOverAnArchivedOne(t *testing.T) {
 
 	rows := Group(f, records)[0].Rows
 
-	if rows[0].State != review.StateReviewing {
-		t.Errorf("state = %q, want reviewing from the open record", rows[0].State)
+	if rows[0].State != review.StateReviewing || rows[0].RecordID != "new" {
+		t.Errorf("row = %q on %q, want reviewing on the open record", rows[0].State, rows[0].RecordID)
 	}
 }

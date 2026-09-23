@@ -20,10 +20,11 @@ type PR struct {
 	UpdatedAt time.Time
 }
 
-// Team is what one team's search returned.
+// Team is what one team's search returned. Err is set when the search failed.
 type Team struct {
 	Slug string
 	PRs  []PR
+	Err  error
 }
 
 // Fetched is what one refresh read from GitHub: the requests that name the user
@@ -34,18 +35,20 @@ type Fetched struct {
 	Teams []Team
 }
 
-// Row is a pull request with the state of docket's open record for it. State is
+// Row is a pull request with docket's open record for it. State and RecordID are
 // empty when docket has no open record.
 type Row struct {
 	PR
-	State review.State
+	State    review.State
+	RecordID string
 }
 
 // Section is one heading on the screen. Team is empty for the requests that name
-// the user.
+// the user. Err is the reason the team's search failed.
 type Section struct {
 	Team string
 	Rows []Row
+	Err  error
 }
 
 // Group builds the requests that name the user as the first section and then a
@@ -62,7 +65,11 @@ func Group(f Fetched, records []review.Record) []Section {
 				continue
 			}
 			seen = append(seen, p.Ref)
-			s.Rows = append(s.Rows, Row{PR: p, State: openState(p.Ref, records)})
+			row := Row{PR: p}
+			if rec, ok := openRecord(p.Ref, records); ok {
+				row.State, row.RecordID = rec.State, rec.ID
+			}
+			s.Rows = append(s.Rows, row)
 		}
 		slices.SortStableFunc(s.Rows, func(a, b Row) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
 		return s
@@ -70,19 +77,21 @@ func Group(f Fetched, records []review.Record) []Section {
 
 	sections := []Section{section("", f.Mine)}
 	for _, t := range f.Teams {
-		sections = append(sections, section(t.Slug, t.PRs))
+		s := section(t.Slug, t.PRs)
+		s.Err = t.Err
+		sections = append(sections, s)
 	}
 	return sections
 }
 
-// openState is the state of the open record for ref. The index holds one record
-// per review. A pull request that was reviewed, archived, and asked for again has
-// two records, and only the open one counts.
-func openState(ref pr.Ref, records []review.Record) review.State {
+// openRecord is the open record for ref. The index holds one record per review.
+// A pull request that was reviewed, archived, and asked for again has two
+// records, and only the open one counts.
+func openRecord(ref pr.Ref, records []review.Record) (review.Record, bool) {
 	for _, rec := range records {
 		if rec.State.Open() && rec.Ref.Equal(ref) {
-			return rec.State
+			return rec, true
 		}
 	}
-	return ""
+	return review.Record{}, false
 }

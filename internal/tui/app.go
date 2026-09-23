@@ -27,9 +27,9 @@ import (
 	"github.com/haacked/docket/internal/tui/msg"
 	"github.com/haacked/docket/internal/tui/screens/dashboard"
 	"github.com/haacked/docket/internal/tui/screens/help"
+	"github.com/haacked/docket/internal/tui/screens/inbox"
 	"github.com/haacked/docket/internal/tui/screens/newreview"
 	"github.com/haacked/docket/internal/tui/screens/notes"
-	reqscreen "github.com/haacked/docket/internal/tui/screens/requests"
 	"github.com/haacked/docket/internal/tui/screens/submit"
 )
 
@@ -46,7 +46,7 @@ type App struct {
 	sub    submit.Model
 	notes  notes.Model
 	help   help.Model
-	reqs   reqscreen.Model
+	reqs   inbox.Model
 	// fetched is the last search for review requests. regroup reads it whenever
 	// the records change.
 	fetched *requests.Fetched
@@ -90,7 +90,7 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 		sub:   submit.New(submit.Styles{Label: s.Label, Dim: s.Dim, Selected: s.Selected}),
 		notes: notes.New(notes.Styles{Label: s.Label, Dim: s.Dim}),
 		help:  help.New(help.Styles{Group: s.Group, Label: s.Label}),
-		reqs: reqscreen.New(reqscreen.Styles{
+		reqs: inbox.New(inbox.Styles{
 			Group:    s.Group,
 			Row:      s.Row,
 			Selected: s.Selected,
@@ -179,6 +179,9 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case msg.OpenRequests:
 		a.screen = msg.Requests
 		a.err = nil
+		if a.reqs.Loading {
+			return a, nil
+		}
 		a.reqs.Loading = true
 		return a, a.searchRequests()
 
@@ -644,7 +647,7 @@ func (a App) paneHeight() int {
 	return max(a.height-paneChrome, 1)
 }
 
-// searchRequests reads GitHub, so a dry run may run it. The screen keeps the
+// searchRequests only reads GitHub, so a dry run may run it. The screen keeps the
 // rows it already has while the search runs.
 func (a App) searchRequests() tea.Cmd {
 	svc := a.svc

@@ -121,13 +121,21 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 
 // Requests searches GitHub for the open pull requests that ask for the user's
 // review, and for each configured team's. It writes nothing, so a dry run may
-// call it. The searches run one after another because GitHub's search API allows
-// 30 a minute. The query names the login rather than @me, because the REST
-// search answers 422 to @me under some gh credentials.
+// call it. It asks GitHub for the login rather than calling Login, because Login
+// caches the login in config.toml. The searches run one after another because
+// GitHub's secondary rate limits ask that one user's requests not run
+// concurrently. The query names the login rather than @me, because the REST
+// search answers 422 to @me under some gh credentials. A team whose search fails
+// carries the error and the other searches still run. GitHub answers 422 to a
+// team it cannot resolve, so one misspelled slug would otherwise hide every
+// request.
 func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
-	me, err := s.Login(ctx)
-	if err != nil {
-		return requests.Fetched{}, err
+	me := s.Cfg.GitHubUser
+	if me == "" {
+		var err error
+		if me, err = s.GH.Login(ctx); err != nil {
+			return requests.Fetched{}, err
+		}
 	}
 	mine, err := s.GH.ReviewRequests(ctx, "user-review-requested:"+me)
 	if err != nil {
@@ -136,10 +144,7 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 	f := requests.Fetched{Mine: mine}
 	for _, team := range s.Cfg.Teams {
 		prs, err := s.GH.ReviewRequests(ctx, "team-review-requested:"+team)
-		if err != nil {
-			return requests.Fetched{}, err
-		}
-		f.Teams = append(f.Teams, requests.Team{Slug: team, PRs: prs})
+		f.Teams = append(f.Teams, requests.Team{Slug: team, PRs: prs, Err: err})
 	}
 	return f, nil
 }

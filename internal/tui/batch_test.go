@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -125,5 +128,56 @@ func TestADryRunBatchExplainsEachPullRequestWithoutPreparing(t *testing.T) {
 		if strings.Contains(line, "claude") {
 			t.Errorf("a dry run ran %s", line)
 		}
+	}
+}
+
+// onPath puts an executable of each name on PATH, because a batch checks the
+// engine's binary before it prepares anything. The fake runner is what answers
+// the commands, so the files only have to exist.
+func onPath(t *testing.T, names ...string) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+}
+
+// A pull request docket already has open fails in Prepare. The batch counts it
+// and still starts the pull request after it.
+func TestABatchStartsThePullRequestsAfterOneThatFails(t *testing.T) {
+	onPath(t, "claude")
+	svc, runner := batchService(t)
+	svc.Cfg.GitHubUser = "haacked"
+	// No repos.conf entry makes each review a tier-2 clone, which checks that the
+	// clone landed on the head branch with files in it.
+	runner.Results["branch --show-current"] = exec.Result{Stdout: "haacked/a-thing\n"}
+	runner.Results["ls-files"] = exec.Result{Stdout: "README.md\n"}
+	runner.Results["--bg"] = exec.Result{Stdout: "backgrounded · 0a1b2c3d\n"}
+	open := "https://github.com/haacked/docket/pull/7"
+	if err := startOne(context.Background(), svc, open, "claude"); err != nil {
+		t.Fatalf("starting the first review: %v", err)
+	}
+
+	next := "https://github.com/haacked/docket/pull/8"
+	got, ok := New(svc, svc.Cfg, "", false).startBatch([]string{open, next}, "claude")().(batchStartedMsg)
+	if !ok {
+		t.Fatalf("the batch did not report a batchStartedMsg")
+	}
+
+	if got.started != 1 {
+		t.Errorf("started = %d, want the pull request after the failure", got.started)
+	}
+	if len(got.failed) != 1 || !strings.Contains(got.failed[0], "haacked/docket#7") {
+		t.Errorf("failed = %q, want one line naming #7", got.failed)
+	}
+	records, err := svc.Store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(records) != 2 {
+		t.Errorf("records = %d, want #7 once and #8", len(records))
 	}
 }

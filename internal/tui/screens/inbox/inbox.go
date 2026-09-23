@@ -1,7 +1,7 @@
-// Package requests lists the pull requests waiting on the user's review and turns
+// Package inbox lists the pull requests waiting on the user's review and turns
 // keys into intents. It holds no service and runs no commands, so its Update is
 // testable with synthetic key messages.
-package requests
+package inbox
 
 import (
 	"fmt"
@@ -119,7 +119,12 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		if urls := m.markedURLs(); len(urls) > 0 {
 			return m, msg.Send(msg.StartBatch{URLs: urls, Engine: m.Engine})
 		}
-		if row, ok := m.Selected(); ok {
+		row, ok := m.Selected()
+		switch {
+		case !ok:
+		case row.RecordID != "":
+			return m, msg.Send(msg.Resume{ID: row.RecordID})
+		default:
 			return m, msg.Send(msg.PrefillReview{URL: row.Ref.URL()})
 		}
 	case "r":
@@ -161,7 +166,12 @@ func (m Model) View() string {
 			title = s.Team
 		}
 		lines = append(lines, m.Styles.Group.Render(fmt.Sprintf("%s (%d)", title, len(s.Rows))))
-		if len(s.Rows) == 0 {
+		switch {
+		case s.Err != nil:
+			// gh's error carries its stderr, which can run over several lines.
+			reason := strings.Join(strings.Fields(s.Err.Error()), " ")
+			lines = append(lines, m.Styles.Dim.Render(format.Truncate("  "+reason, format.Width(m.Width))))
+		case len(s.Rows) == 0:
 			lines = append(lines, m.Styles.Dim.Render("  none"))
 		}
 		for _, row := range s.Rows {
