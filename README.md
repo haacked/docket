@@ -12,6 +12,8 @@ A review takes five manual steps today. Create a worktree for a scratch reposito
 
 docket keeps one record per PR and moves it through `preparing`, `reviewing`, `drafted`, `submitted`, and `archived`. Every transition comes from something docket observed, either a GitHub API response or a child process exit, never from what you said you would do. After the session exits, docket asks GitHub whether you have a review on that PR and whether it is still pending, then sets the state from the answer.
 
+docket also asks whether the PR is still open. A record whose PR merged or closed is archived, unless you still have a pending review there: GitHub accepts a review on a merged PR, so that row stays, tagged `merged`, for you to submit or abandon. docket refuses to start a review on a PR that has already merged or closed. A record is only archived when docket reads GitHub for it: after a session exits, when a background review finishes, or when you press `r` or `R`.
+
 Where docket launches the session depends on whether `review-code` already knows the repository, which it reads from `repos.conf`.
 
 - **Repository listed in `repos.conf`.** docket makes no clone. It launches the session from its own scratch directory, so `review-code` takes its cross-repo path and provisions and tears down a worktree off your local clone, exactly as it does today.

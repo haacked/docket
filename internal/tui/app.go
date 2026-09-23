@@ -243,6 +243,10 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			a.status = fmt.Sprintf("%s is still %s", rec.Ref, rec.State)
 			return a, nil
 		}
+		if err := session.RefuseClosed(rec.Ref, rec.PRState); err != nil {
+			a.status = err.Error()
+			return a, nil
+		}
 		a.newrev = a.newrev.Reset().SetExisting(newreview.Existing{
 			Ref:      rec.Ref.String(),
 			Engine:   rec.Engine,
@@ -924,7 +928,7 @@ func (a App) rereview(rec review.Record, intent review.Intent, mode review.Mode)
 func (a App) explainRereview(rec review.Record, intent review.Intent, mode review.Mode) tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
-		spec, err := svc.ExplainRereview(rec, intent, mode)
+		spec, err := svc.ExplainRereview(context.Background(), rec, intent, mode)
 		if err != nil {
 			return errMsg{err: err}
 		}
@@ -1010,8 +1014,14 @@ func wouldAbandon(rec review.Record) string {
 func describe(rec review.Record) string {
 	switch rec.State {
 	case review.StateArchived:
+		if rec.SubmittedAt == nil && rec.PRState.Closed() {
+			return fmt.Sprintf("%s is %s, so docket archived it. Notes stay at %s", rec.Ref, rec.PRState.Label(), rec.NotesPath)
+		}
 		return fmt.Sprintf("%s submitted and archived. Notes stay at %s", rec.Ref, rec.NotesPath)
 	case review.StateDrafted:
+		if rec.PRState.Closed() {
+			return fmt.Sprintf("%s is %s and your review is still pending. Press s to submit it or x to abandon", rec.Ref, rec.PRState.Label())
+		}
 		if rec.Adopted() {
 			return fmt.Sprintf("%s has a pending review. Press s to submit it or c to ask about it", rec.Ref)
 		}
@@ -1019,7 +1029,7 @@ func describe(rec review.Record) string {
 	case review.StateReviewed:
 		return fmt.Sprintf("%s has your review notes. Press c to ask about them or u to review it again", rec.Ref)
 	case review.StateUnreviewed:
-		return fmt.Sprintf("%s has no review of yours on GitHub. Nothing was cleaned up", rec.Ref)
+		return fmt.Sprintf("%s: the session ended without posting a review. Press enter to resume it, u to review again, or x to abandon", rec.Ref)
 	case review.StateAbandoned:
 		return fmt.Sprintf("%s abandoned", rec.Ref)
 	default:

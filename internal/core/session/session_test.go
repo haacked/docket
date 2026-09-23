@@ -201,6 +201,16 @@ func newService(t *testing.T, ghc *fakeGH, gitc *fakeGit) (*Service, config.Path
 	return svc, paths
 }
 
+// sequentialIDs hands out ids in order, so a test can hold more than one record.
+func sequentialIDs(svc *Service, ids ...string) {
+	next := 0
+	svc.NewID = func() string {
+		id := ids[next]
+		next++
+		return id
+	}
+}
+
 func prInfo() gh.PRInfo {
 	info := gh.PRInfo{Number: 7, Title: "Add a thing", HeadRefName: "haacked/a-thing"}
 	info.Author.Login = "someone"
@@ -657,13 +667,7 @@ func TestRefreshAllReReadsEveryRecordWhoseSessionIsOver(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	ids := []string{"rec-1", "rec-2"}
-	next := 0
-	svc.NewID = func() string {
-		id := ids[next]
-		next++
-		return id
-	}
+	sequentialIDs(svc, "rec-1", "rec-2")
 	first := launched(t, svc, unlisted)
 	second := launched(t, svc, listed)
 

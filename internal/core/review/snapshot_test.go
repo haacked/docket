@@ -50,6 +50,7 @@ func TestFoldClearsFieldsASnapshotZeroes(t *testing.T) {
 		Intent:         review.IntentAppend,
 		AskSessionID:   "ask-1",
 		AskStartedAt:   submitted.Add(-time.Minute),
+		PRState:        review.PRMerged,
 	}
 
 	cleared := review.Record{ID: "rec-1", State: review.StateReviewing}

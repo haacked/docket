@@ -3,6 +3,7 @@
 package review
 
 import (
+	"strings"
 	"time"
 
 	"github.com/haacked/docket/internal/core/pr"
@@ -82,6 +83,48 @@ func (r Record) Adopted() bool {
 	return r.Intent == IntentAsk
 }
 
+// Finished reports whether the record's pull request merged or closed and left
+// the user nothing to do. A pending review is not finished, because GitHub still
+// accepts a review on a merged pull request. Only the user can choose to submit it
+// or drop it. A record in progress is not finished until its session ends.
+func (r Record) Finished() bool {
+	if !r.PRState.Closed() {
+		return false
+	}
+	return r.State == StateUnreviewed || r.State == StateReviewed
+}
+
+// PRState is the pull request's state as `gh pr view --json state` reports it.
+// An empty PRState is unknown. docket wrote such a record before it read the
+// state.
+type PRState string
+
+const (
+	PROpen   PRState = "OPEN"
+	PRMerged PRState = "MERGED"
+	PRClosed PRState = "CLOSED"
+)
+
+// Closed reports whether the pull request merged or closed without merging.
+func (s PRState) Closed() bool {
+	return s == PRMerged || s == PRClosed
+}
+
+// Label is the state as the user reads it.
+func (s PRState) Label() string {
+	return strings.ToLower(string(s))
+}
+
+// Label is the state as the screens name it. The unreviewed state means that the
+// last session posted nothing new of mine. It does not mean that the user never
+// reviewed the pull request, so its label is "no review posted".
+func (s State) Label() string {
+	if s == StateUnreviewed {
+		return "no review posted"
+	}
+	return string(s)
+}
+
 // Open reports whether the record still wants the user's attention.
 func (s State) Open() bool {
 	switch s {
@@ -133,4 +176,6 @@ type Record struct {
 	// review session that enter resumes.
 	AskSessionID string    `json:"ask_session_id"`
 	AskStartedAt time.Time `json:"ask_started_at"`
+	// PRState is the pull request's state when docket last read GitHub.
+	PRState PRState `json:"pr_state"`
 }

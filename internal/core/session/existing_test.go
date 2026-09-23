@@ -384,47 +384,6 @@ func TestPrepareToAskRefusesAPullRequestAlreadyOpen(t *testing.T) {
 	}
 }
 
-func TestAReviewedRecordIsNotDetectable(t *testing.T) {
-	if detectable(review.Record{State: review.StateReviewed}) {
-		t.Error("a reviewed record is detectable, so a refresh moves it to unreviewed")
-	}
-}
-
-func TestRefreshRefusesAReviewedRecord(t *testing.T) {
-	ghc := &fakeGH{login: "haacked", info: prInfo()}
-	svc, _ := newService(t, ghc, newFakeGit())
-	notesFor(t, svc, unlisted)
-	rec := prepareWith(t, svc, unlisted, "claude", review.IntentAsk)
-	before := ghc.reads
-
-	if _, err := svc.Refresh(context.Background(), rec); err == nil {
-		t.Error("Refresh read GitHub for a reviewed record")
-	}
-	if ghc.reads != before {
-		t.Errorf("Refresh read GitHub's reviews %d times, want none", ghc.reads-before)
-	}
-}
-
-func TestRefreshAllLeavesAReviewedRecordAlone(t *testing.T) {
-	ghc := &fakeGH{login: "haacked", info: prInfo()}
-	svc, _ := newService(t, ghc, newFakeGit())
-	notesFor(t, svc, unlisted)
-	rec := prepareWith(t, svc, unlisted, "claude", review.IntentAsk)
-	before := ghc.reads
-
-	records, err := svc.RefreshAll(context.Background())
-	if err != nil {
-		t.Fatalf("RefreshAll: %v", err)
-	}
-
-	if ghc.reads != before {
-		t.Errorf("RefreshAll read GitHub's reviews %d times for a reviewed record, want none", ghc.reads-before)
-	}
-	if got := records[0]; got.ID != rec.ID || got.State != review.StateReviewed {
-		t.Errorf("record = %q in %q, want %q still reviewed", got.ID, got.State, rec.ID)
-	}
-}
-
 // An adopted record has no review session. Starting review-code fresh would pass
 // neither --append nor --overwrite, and it would stop at the prompt the user
 // already answered.
@@ -988,7 +947,7 @@ func TestExplainRereviewReportsWithoutRecording(t *testing.T) {
 	before := stored(t, svc)
 	readsBefore := ghc.reads
 
-	spec, err := svc.ExplainRereview(rec, review.IntentOverwrite, review.ModeInteractive)
+	spec, err := svc.ExplainRereview(context.Background(), rec, review.IntentOverwrite, review.ModeInteractive)
 	if err != nil {
 		t.Fatalf("ExplainRereview: %v", err)
 	}
