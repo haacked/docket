@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#/ Usage: bin/start [docket arguments]
+#/ Description: Builds and runs docket from source. Every argument passes through to docket, as in bin/start --dry-run org/repo#123.
+
+set -euo pipefail
+
+# shellcheck source=bin/helpers/_utils.sh
+source "$(dirname "$0")/helpers/_utils.sh"
+caller_dir=$PWD
+set_source_and_root_dir
+
+go build -o docket ./cmd/docket
+
+# docket resolves a relative --home or DOCKET_HOME against its working directory.
+# This runs docket from the caller's directory, where such a path resolves the
+# same way it does for an installed docket.
+cd "$caller_dir"
+exec "$root_dir/docket" "$@"

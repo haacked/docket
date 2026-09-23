@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#/ Usage: bin/fmt [options]
+#/ Description: Formats the Go code, and the scripts in bin/ when shfmt is installed. shfmt reads its style from .editorconfig.
+#/ Options:
+#/   -c, --check  List what needs formatting and exit 1 instead of rewriting files
+
+set -euo pipefail
+
+# shellcheck source=bin/helpers/_utils.sh
+source "$(dirname "$0")/helpers/_utils.sh"
+set_source_and_root_dir
+parse_common_args "$@"
+
+check=false
+for arg in "$@"; do
+    case "$arg" in
+        -c | --check) check=true ;;
+        *) fatal "Unknown option: $arg" ;;
+    esac
+done
+
+# gofmt walks hidden directories such as .notes, which the go tool skips.
+# This passes gofmt the source directories instead of the repo root.
+go_dirs=(cmd internal)
+
+if $check; then
+    unformatted=$(gofmt -l "${go_dirs[@]}")
+    if [[ -n "$unformatted" ]]; then
+        error "These Go files need formatting. Run bin/fmt to fix them."
+        echo "$unformatted" >&2
+        exit 1
+    fi
+else
+    gofmt -l -w "${go_dirs[@]}"
+fi
+
+if ! command_exists shfmt; then
+    warning "shfmt is not installed, so the scripts in bin/ were not checked. Install it with: brew install shfmt"
+elif $check; then
+    shfmt -d bin
+else
+    shfmt -l -w bin
+fi

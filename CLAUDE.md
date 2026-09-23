@@ -5,6 +5,7 @@ A terminal app that runs PR reviews through the `review-code` skill in a `claude
 ## Layout
 
 ```
+bin/                        setup, update, build, start, test, fmt; `-h` prints usage, except that start passes it to docket
 cmd/docket/main.go          flags and the URL argument; the only file that imports both core and tui
 internal/core/pr/           Ref{Org,Repo,Number}, ParseRef                         pure
 internal/core/reposconf/    Parse, Resolve                                         pure, filesystem via callback
@@ -82,7 +83,7 @@ These were verified while planning and shape the design. Don't rediscover them.
 
 ## Testing
 
-`go test ./...`. The pure packages (`pr`, `reposconf`, `tier`, `review`, `index`) carry the bulk of the coverage. Use `t.TempDir()` and the `exec.Fake` runner rather than touching the network, the real `~/.docket`, or a real clone.
+`bin/test` runs `bin/fmt --check`, `go vet ./...`, and `go test ./...`, and passes its own flags through to `go test`. The pure packages (`pr`, `reposconf`, `tier`, `review`, `index`) carry the bulk of the coverage. Use `t.TempDir()` and the `exec.Fake` runner rather than touching the network, the real `~/.docket`, or a real clone.
 
 Two tests are worth knowing about. `internal/core/index/lock_test.go` races `Compact` against concurrent `Append` calls, and it fails when `Compact` drops its lock, so it is the test that actually covers the locking. `internal/core/session/smoke_test.go` runs against a real pull request and is skipped unless you name one:
 

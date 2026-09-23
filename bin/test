@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#/ Usage: bin/test [go test flags]
+#/ Description: Checks formatting, runs go vet, and runs every test. Flags pass through to go test, as in bin/test -run Submit -count=1.
+
+set -euo pipefail
+
+# shellcheck source=bin/helpers/_utils.sh
+source "$(dirname "$0")/helpers/_utils.sh"
+set_source_and_root_dir
+parse_common_args "$@"
+
+echo "Checking formatting…"
+bin/fmt --check
+echo "Running go vet…"
+go vet ./...
+echo "Running tests…"
+go test ./... "$@"
