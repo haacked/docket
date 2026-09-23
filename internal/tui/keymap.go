@@ -19,6 +19,8 @@ func helpFor(screen msg.Screen, showArchived bool) string {
 		return join(append(help.Footer(help.Submit), "ctrl+c quit")...)
 	case msg.Notes:
 		return join(append(help.Footer(help.Notes), "ctrl+c quit")...)
+	case msg.Requests:
+		return join(append(help.Footer(help.Requests), "ctrl+c quit")...)
 	case msg.Help:
 		return join("↑/↓ scroll", "esc/? back", "ctrl+c quit")
 	default:

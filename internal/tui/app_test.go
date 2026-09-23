@@ -9,6 +9,7 @@ import (
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/engine"
 	"github.com/haacked/docket/internal/core/pr"
+	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/tier"
 	"github.com/haacked/docket/internal/tui/msg"
@@ -393,5 +394,78 @@ func TestAPollThatWorksClearsTheLastFailure(t *testing.T) {
 	next, _ := failed.(App).Update(bgPolledMsg{records: running})
 	if next.(App).err != nil {
 		t.Errorf("the error survived a poll that worked: %v", next.(App).err)
+	}
+}
+
+func TestBatchEnginePrefersTheDefaultAndFallsBackToOneWithABackgroundMode(t *testing.T) {
+	if got := batchEngine("claude"); got != "claude" {
+		t.Errorf("batchEngine(claude) = %q", got)
+	}
+	if got := batchEngine("codex"); got != "claude" {
+		t.Errorf("batchEngine(codex) = %q, want claude: codex has no background mode", got)
+	}
+}
+
+// A review started from the requests screen lands in the index, and its row must
+// show that without another search.
+func TestTheRequestsScreenRegroupsWhenTheRecordsReload(t *testing.T) {
+	ref := pr.Ref{Org: "o", Repo: "r", Number: 1}
+	next, _ := app().Update(requestsLoadedMsg{fetched: requests.Fetched{Mine: []requests.PR{{Ref: ref}}}})
+	a := next.(App)
+
+	next, _ = a.Update(recordsLoadedMsg{records: []review.Record{{ID: "a", Ref: ref, State: review.StateReviewing}}})
+	a = next.(App)
+
+	if row, ok := a.reqs.Selected(); !ok || row.State != review.StateReviewing {
+		t.Errorf("row = %+v (ok=%v), want it to carry the open record's state", row, ok)
+	}
+}
+
+func TestAFailedSearchLeavesTheRequestsScreenRefreshable(t *testing.T) {
+	next, _ := app().Update(msg.OpenRequests{})
+	a := next.(App)
+	if !a.reqs.Loading {
+		t.Fatal("opening the screen should start a search")
+	}
+
+	next, _ = a.Update(errMsg{err: errNotFound})
+	a = next.(App)
+
+	if a.reqs.Loading {
+		t.Error("a failed search left the screen loading, so r does nothing")
+	}
+}
+
+func TestReopeningTheRequestsScreenDuringASearchStartsNoSecondSearch(t *testing.T) {
+	next, _ := app().Update(msg.OpenRequests{})
+	a := next.(App)
+	next, _ = a.Update(msg.Goto{Screen: msg.Dashboard})
+	a = next.(App)
+
+	next, cmd := a.Update(msg.OpenRequests{})
+
+	if next.(App).screen != msg.Requests {
+		t.Errorf("screen = %v, want requests", next.(App).screen)
+	}
+	if cmd != nil {
+		t.Error("reopening the screen started a second search")
+	}
+}
+
+// r is how the user retries a failed search, so the failure must not stay on
+// screen above the rows the retry found.
+func TestRefreshingTheRequestsScreenClearsTheLastError(t *testing.T) {
+	next, _ := app().Update(msg.OpenRequests{})
+	a := next.(App)
+	next, _ = a.Update(errMsg{err: errNotFound})
+	a = next.(App)
+
+	next, _ = a.Update(msg.RefreshRequests{})
+	a = next.(App)
+	next, _ = a.Update(requestsLoadedMsg{})
+	a = next.(App)
+
+	if a.err != nil {
+		t.Errorf("err = %v, want it cleared by the refresh that succeeded", a.err)
 	}
 }

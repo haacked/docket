@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -156,16 +155,6 @@ func TestASubmittedRecordIsVisibleAndSelectable(t *testing.T) {
 	}
 	if m.View() == "" {
 		t.Error("the dashboard renders nothing while holding a submitted record")
-	}
-}
-
-func TestTruncateCutsOnRuneBoundaries(t *testing.T) {
-	got := truncate("Fix the café résumé parser ✨ and the widgets", 22)
-	if !utf8.ValidString(got) {
-		t.Errorf("truncate returned invalid UTF-8: %q", got)
-	}
-	if r := []rune(got); len(r) > 22 {
-		t.Errorf("truncate returned %d runes, want at most 22", len(r))
 	}
 }
 

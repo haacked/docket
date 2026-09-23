@@ -16,6 +16,7 @@ import (
 	"github.com/haacked/docket/internal/core/gh"
 	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/pr"
+	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/tier"
 )
@@ -40,6 +41,10 @@ type fakeGH struct {
 	// GitHub has to count calls: the canned answer below is never written by
 	// one, so comparing against it would pass however many were made.
 	reads int
+	// requested and requestErrs are the canned search answers, keyed by qualifier.
+	requested   map[string][]requests.PR
+	requestErrs map[string]error
+	searches    []string
 }
 
 // submitCall is one POST to the reviews events endpoint.
@@ -68,6 +73,11 @@ func (f *fakeGH) PR(context.Context, pr.Ref) (gh.PRInfo, error) { return f.info,
 func (f *fakeGH) Reviews(context.Context, pr.Ref) ([]review.GHReview, error) {
 	f.reads++
 	return f.reviews, f.reviewErr
+}
+
+func (f *fakeGH) ReviewRequests(_ context.Context, qualifier string) ([]requests.PR, error) {
+	f.searches = append(f.searches, qualifier)
+	return f.requested[qualifier], f.requestErrs[qualifier]
 }
 
 // SubmitReview records the call and, on success, leaves the review the way
@@ -953,5 +963,100 @@ func TestResumeSpecRefusesWhenTheReviewSnapshotCannotRefresh(t *testing.T) {
 	}
 	if len(after) != len(before) || after[0].StartedAt != before[0].StartedAt {
 		t.Error("a refused resume still recorded a new detection window")
+	}
+}
+
+func TestRequestsSearchesForTheUserAndThenEachTeamInOrder(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a", "PostHog/team-b"}
+	mine := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}
+	teamB := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}
+	fake.requested = map[string][]requests.PR{
+		"user-review-requested:haacked":        {mine},
+		"team-review-requested:PostHog/team-b": {teamB},
+	}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	want := []string{"user-review-requested:haacked", "team-review-requested:PostHog/team-a", "team-review-requested:PostHog/team-b"}
+	if !slices.Equal(fake.searches, want) {
+		t.Errorf("searches = %v, want %v", fake.searches, want)
+	}
+	if len(f.Mine) != 1 || f.Mine[0].Ref != mine.Ref {
+		t.Errorf("mine = %v", f.Mine)
+	}
+	if len(f.Teams) != 2 || f.Teams[0].Slug != "PostHog/team-a" || len(f.Teams[1].PRs) != 1 {
+		t.Errorf("teams = %+v", f.Teams)
+	}
+}
+
+// A dry run may open the requests screen, so a search must not cache the login.
+func TestRequestsLeavesTheConfigUntouchedWhenNoLoginIsCached(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, paths := newService(t, fake, newFakeGit())
+	svc.Cfg.GitHubUser = ""
+
+	if _, err := svc.Requests(context.Background()); err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if want := []string{"user-review-requested:haacked"}; !slices.Equal(fake.searches, want) {
+		t.Errorf("searches = %v, want %v", fake.searches, want)
+	}
+	cfg, err := config.Load(paths.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GitHubUser != "" {
+		t.Errorf("config.toml caches github_user %q, want nothing written", cfg.GitHubUser)
+	}
+}
+
+// With no answer to the search that names the user, there is nothing to show.
+func TestRequestsFailsWhenTheUsersSearchFails(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	fake.requestErrs = map[string]error{"user-review-requested:haacked": errors.New("rate limited")}
+
+	if _, err := svc.Requests(context.Background()); err == nil {
+		t.Error("Requests succeeded after the user's search failed")
+	}
+}
+
+// GitHub answers 422 to a team it cannot resolve, so one misspelled slug in the
+// config must not hide the requests every other search found.
+func TestATeamSearchThatFailsKeepsEverySearchThatSucceeded(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a", "PostHog/typo", "PostHog/team-b"}
+	mine := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}
+	teamB := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}
+	fake.requested = map[string][]requests.PR{
+		"user-review-requested:haacked":        {mine},
+		"team-review-requested:PostHog/team-b": {teamB},
+	}
+	failure := errors.New("422")
+	fake.requestErrs = map[string]error{"team-review-requested:PostHog/typo": failure}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if len(f.Mine) != 1 {
+		t.Errorf("mine = %v, want the user's request kept", f.Mine)
+	}
+	if len(f.Teams) != 3 {
+		t.Fatalf("teams = %+v, want all three", f.Teams)
+	}
+	if !errors.Is(f.Teams[1].Err, failure) || f.Teams[1].Slug != "PostHog/typo" {
+		t.Errorf("typo team = %+v, want it to carry the failure", f.Teams[1])
+	}
+	if f.Teams[2].Err != nil || len(f.Teams[2].PRs) != 1 {
+		t.Errorf("team after the failure = %+v, want it searched", f.Teams[2])
 	}
 }

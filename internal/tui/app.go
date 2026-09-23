@@ -17,14 +17,17 @@ import (
 
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/engine"
+	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/pr"
+	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
 	"github.com/haacked/docket/internal/core/tier"
 	"github.com/haacked/docket/internal/tui/msg"
 	"github.com/haacked/docket/internal/tui/screens/dashboard"
 	"github.com/haacked/docket/internal/tui/screens/help"
+	"github.com/haacked/docket/internal/tui/screens/inbox"
 	"github.com/haacked/docket/internal/tui/screens/newreview"
 	"github.com/haacked/docket/internal/tui/screens/notes"
 	"github.com/haacked/docket/internal/tui/screens/submit"
@@ -43,6 +46,10 @@ type App struct {
 	sub    submit.Model
 	notes  notes.Model
 	help   help.Model
+	reqs   inbox.Model
+	// fetched is the last search for review requests. regroup reads it whenever
+	// the records change.
+	fetched *requests.Fetched
 
 	width  int
 	height int
@@ -83,6 +90,12 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 		sub:   submit.New(submit.Styles{Label: s.Label, Dim: s.Dim, Selected: s.Selected}),
 		notes: notes.New(notes.Styles{Label: s.Label, Dim: s.Dim}),
 		help:  help.New(help.Styles{Group: s.Group, Label: s.Label}),
+		reqs: inbox.New(inbox.Styles{
+			Group:    s.Group,
+			Row:      s.Row,
+			Selected: s.Selected,
+			Dim:      s.Dim,
+		}, batchEngine(cfg.DefaultEngine)),
 	}
 	if initialInput != "" {
 		app.screen = msg.NewReview
@@ -128,8 +141,9 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			a.notes = a.notes.SetSize(message.Width, a.notesHeight())
 		}
 		if a.screen == msg.Help {
-			a.help = a.help.SetSize(message.Width, a.helpHeight())
+			a.help = a.help.SetSize(message.Width, a.paneHeight())
 		}
+		a.reqs.Width, a.reqs.Height = message.Width, a.paneHeight()
 		return a, nil
 
 	case tea.BackgroundColorMsg:
@@ -157,10 +171,51 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case msg.OpenHelp:
-		a.help = a.help.For(a.screen).SetSize(a.width, a.helpHeight())
+		a.help = a.help.For(a.screen).SetSize(a.width, a.paneHeight())
 		a.screen = msg.Help
 		a.err = nil
 		return a, nil
+
+	case msg.OpenRequests:
+		a.screen = msg.Requests
+		a.err = nil
+		if a.reqs.Loading {
+			return a, nil
+		}
+		a.reqs.Loading = true
+		return a, a.searchRequests()
+
+	case msg.RefreshRequests:
+		a.err = nil
+		a.reqs.Loading = true
+		return a, a.searchRequests()
+
+	case requestsLoadedMsg:
+		a.fetched = &message.fetched
+		a.reqs.Loading = false
+		return a.regroup(), nil
+
+	case msg.PrefillReview:
+		a.screen = msg.NewReview
+		a.newrev = a.newrev.Reset().SetValue(message.URL)
+		a.err = nil
+		return a, nil
+
+	case msg.StartBatch:
+		if a.dryRun {
+			return a, a.explainBatch(message.URLs, message.Engine)
+		}
+		a.screen = msg.Dashboard
+		a.status = fmt.Sprintf("starting %d background reviews…", len(message.URLs))
+		a.reqs.Marked = map[string]bool{}
+		return a, a.startBatch(message.URLs, message.Engine)
+
+	case batchStartedMsg:
+		a.status = fmt.Sprintf("Started %d background reviews", message.started)
+		if len(message.failed) > 0 {
+			a.status += fmt.Sprintf("; %d failed:\n%s", len(message.failed), strings.Join(message.failed, "\n"))
+		}
+		return a, tea.Batch(a.loadRecords(), a.pollBackground())
 
 	case msg.StartReview:
 		if a.dryRun {
@@ -269,6 +324,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case recordsLoadedMsg:
 		a.dash = a.dash.SetRecords(message.records)
+		a = a.regroup()
 		// A zero stamp means this load came from reconcile or refreshAll,
 		// which carry none. Leaving indexStamp alone there is what keeps the
 		// next watch tick from wrongly treating their writes as already seen.
@@ -335,6 +391,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.dash.Busy = map[string]string{}
 		a.newrev = a.newrev.ClearBusy()
 		a.sub = a.sub.ClearBusy()
+		a.reqs.Loading = false
 		return a, a.loadRecords()
 	}
 
@@ -386,6 +443,8 @@ func (a App) routeToScreen(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.notes, cmd = a.notes.Update(message)
 	case msg.Help:
 		a.help, cmd = a.help.Update(message)
+	case msg.Requests:
+		a.reqs, cmd = a.reqs.Update(message)
 	default:
 		a.dash, cmd = a.dash.Update(message)
 	}
@@ -423,6 +482,8 @@ func (a App) View() tea.View {
 		b.WriteString(a.notes.View() + "\n")
 	case msg.Help:
 		b.WriteString(a.help.View() + "\n")
+	case msg.Requests:
+		b.WriteString(a.reqs.View() + "\n")
 	default:
 		b.WriteString(a.dash.View() + "\n")
 	}
@@ -575,17 +636,117 @@ func (a App) notesHeight() int {
 	return max(a.height-notesChrome, 1)
 }
 
-// helpChrome is what View draws around the help pane: the title, the blank
-// line under it, the blank line below the pane, the status line and its
-// blank line, and the footer. Changing View's layout means changing this
-// count.
-const helpChrome = 6
+// paneChrome is what View draws around the help pane and the requests list:
+// the title, the blank line under it, the blank line below the pane, the status
+// line and its blank line, and the footer. Changing View's layout means changing
+// this count.
+const paneChrome = 6
 
-// helpHeight is the room the help pane gets. The full reference is long
-// enough to overflow an ordinary terminal on its own, which is what the
-// pane's viewport is for.
-func (a App) helpHeight() int {
-	return max(a.height-helpChrome, 1)
+// paneHeight is the room the help pane and the requests list get. Either is
+// long enough to overflow an ordinary terminal on its own.
+func (a App) paneHeight() int {
+	return max(a.height-paneChrome, 1)
+}
+
+// searchRequests only reads GitHub, so a dry run may run it. The screen keeps the
+// rows it already has while the search runs.
+func (a App) searchRequests() tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		fetched, err := svc.Requests(context.Background())
+		if err != nil {
+			return errMsg{err: err}
+		}
+		return requestsLoadedMsg{fetched: fetched}
+	}
+}
+
+// startBatch prepares and starts each pull request in turn. It does not run them
+// side by side, because each Prepare makes several calls to GitHub and may clone
+// a repository. Starting one is quick, since the engine's background mode
+// returns straight away. It reports once for the whole batch, because the
+// detectedMsg a single start answers with would overwrite the status line once
+// per pull request.
+func (a App) startBatch(urls []string, engineName string) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		if err := checkEngine(engineName); err != nil {
+			return errMsg{err: err}
+		}
+		ctx := context.Background()
+		var done batchStartedMsg
+		for _, url := range urls {
+			if err := startOne(ctx, svc, url, engineName); err != nil {
+				done.failed = append(done.failed, err.Error())
+				continue
+			}
+			done.started++
+		}
+		return done
+	}
+}
+
+func startOne(ctx context.Context, svc *session.Service, url, engineName string) error {
+	ref, err := pr.ParseRef(url, "")
+	if err != nil {
+		return err
+	}
+	rec, _, err := svc.Prepare(ctx, ref, engineName, review.ModeBackground)
+	if err != nil {
+		return fmt.Errorf("%s: %w", ref, err)
+	}
+	if _, err := svc.StartBackground(ctx, rec); err != nil {
+		return fmt.Errorf("%s: %w", ref, err)
+	}
+	return nil
+}
+
+// explainBatch is the dry-run counterpart of startBatch. Like startBatch, it
+// reports a pull request that fails and goes on to the next.
+func (a App) explainBatch(urls []string, engineName string) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		var lines []string
+		for _, url := range urls {
+			lines = append(lines, explainOne(svc, url, engineName))
+		}
+		return statusMsg{text: strings.Join(lines, "\n")}
+	}
+}
+
+func explainOne(svc *session.Service, url, engineName string) string {
+	ref, err := pr.ParseRef(url, "")
+	if err != nil {
+		return err.Error()
+	}
+	plan, spec, err := svc.Explain(context.Background(), ref, engineName, review.ModeBackground)
+	if err != nil {
+		return fmt.Sprintf("%s: %v", ref, err)
+	}
+	return ref.String() + ": " + explainLine(plan, spec)
+}
+
+// regroup rebuilds the requests screen from the last search and the records as
+// they now stand. It does nothing before the first search.
+func (a App) regroup() App {
+	if a.fetched != nil {
+		a.reqs = a.reqs.SetSections(requests.Group(*a.fetched, a.dash.Records))
+	}
+	return a
+}
+
+// batchEngine is the engine a batch of background reviews runs under: the
+// default engine when it has a background mode, and otherwise the first engine
+// that does. It is empty when no engine has one.
+func batchEngine(defaultEngine string) string {
+	names := engine.BackgroundNames()
+	if slices.Contains(names, defaultEngine) {
+		return defaultEngine
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
 }
 
 func (a App) prepare(input, engineName string, background bool) tea.Cmd {
@@ -595,15 +756,8 @@ func (a App) prepare(input, engineName string, background bool) tea.Cmd {
 		if err != nil {
 			return errMsg{err: err}
 		}
-		// Startup checks the default engine's binary, and the new review screen
-		// offers the others too. Looking this one up before Prepare is what keeps
-		// a missing binary from costing a tier-2 clone first.
-		eng, err := engine.For(engineName)
-		if err != nil {
+		if err := checkEngine(engineName); err != nil {
 			return errMsg{err: err}
-		}
-		if _, err := osexec.LookPath(eng.Binary()); err != nil {
-			return errMsg{err: fmt.Errorf("%s is not on your PATH", eng.Binary())}
 		}
 		rec, plan, err := svc.Prepare(context.Background(), ref, engineName, modeFor(background))
 		if err != nil {
@@ -641,8 +795,27 @@ func (a App) explainStart(input, engineName string, background bool) tea.Cmd {
 		if err != nil {
 			return errMsg{err: err}
 		}
-		return statusMsg{text: plan.Description() + "\nWould run: " + spec.String()}
+		return statusMsg{text: explainLine(plan, spec)}
 	}
+}
+
+// explainLine is what a dry run reports for one review it would start.
+func explainLine(plan session.Plan, spec exec.CommandSpec) string {
+	return plan.Description() + "\nWould run: " + spec.String()
+}
+
+// checkEngine finds the engine's binary. Startup checks only the default engine,
+// and the new review screen offers the others too. Looking the binary up before
+// Prepare is what keeps a missing one from costing a tier-2 clone first.
+func checkEngine(name string) error {
+	eng, err := engine.For(name)
+	if err != nil {
+		return err
+	}
+	if _, err := osexec.LookPath(eng.Binary()); err != nil {
+		return fmt.Errorf("%s is not on your PATH", eng.Binary())
+	}
+	return nil
 }
 
 func (a App) explainResume(rec review.Record) tea.Cmd {

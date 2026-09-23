@@ -21,6 +21,7 @@ import (
 	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/reposconf"
+	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/tier"
 )
@@ -118,6 +119,36 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 	return login, nil
 }
 
+// Requests searches GitHub for the open pull requests that ask for the user's
+// review or for a configured team's review. It writes nothing, so a dry run may
+// call it. It asks GitHub for the login rather than calling Login, because Login
+// caches the login in config.toml. The searches run one after another because
+// GitHub's secondary rate limits ask that one user's requests not run
+// concurrently. The query names the login rather than @me, because the REST
+// search answers 422 to @me under some gh credentials. A team whose search fails
+// carries the error and the other searches still run. GitHub answers 422 to a
+// team it cannot resolve, so one misspelled slug would otherwise hide every
+// request.
+func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
+	me := s.Cfg.GitHubUser
+	if me == "" {
+		var err error
+		if me, err = s.GH.Login(ctx); err != nil {
+			return requests.Fetched{}, err
+		}
+	}
+	mine, err := s.GH.ReviewRequests(ctx, "user-review-requested:"+me)
+	if err != nil {
+		return requests.Fetched{}, err
+	}
+	f := requests.Fetched{Mine: mine}
+	for _, team := range s.Cfg.Teams {
+		prs, err := s.GH.ReviewRequests(ctx, "team-review-requested:"+team)
+		f.Teams = append(f.Teams, requests.Team{Slug: team, PRs: prs, Err: err})
+	}
+	return f, nil
+}
+
 // Prepare resolves the pull request, works out the tier, provisions the
 // directory the session will run in, and snapshots the reviews that already
 // exist. The record is written before provisioning, so a clone that fails leaves
@@ -141,7 +172,7 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mo
 		return review.Record{}, Plan{}, err
 	}
 	if slices.ContainsFunc(records, func(r review.Record) bool {
-		return sameRef(r.Ref, ref) && r.State.Open()
+		return r.Ref.Equal(ref) && r.State.Open()
 	}) {
 		return review.Record{}, Plan{}, fmt.Errorf("%s is already open; abandon it first", ref)
 	}
@@ -431,13 +462,6 @@ func (s *Service) Refresh(ctx context.Context, rec review.Record) (review.Record
 // request is the mistake worth avoiding.
 func ownPR(author, me string) bool {
 	return me != "" && strings.EqualFold(author, me)
-}
-
-// sameRef reports whether two references name one pull request. GitHub compares an
-// owner and a repository name without case, so o/r#7 and O/R#7 are one review and
-// one clone directory.
-func sameRef(a, b pr.Ref) bool {
-	return a.Number == b.Number && strings.EqualFold(a.Org, b.Org) && strings.EqualFold(a.Repo, b.Repo)
 }
 
 // detectable reports whether a record has a session to measure GitHub against. A

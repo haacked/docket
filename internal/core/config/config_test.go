@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -111,6 +112,7 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 		DefaultEngine:    "codex",
 		GitHubUser:       "haacked",
 		DefaultRepo:      "haacked/docket",
+		Teams:            []string{"PostHog/team-feature-flags"},
 	}
 
 	if err := Save(path, want); err != nil {
@@ -120,7 +122,7 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
