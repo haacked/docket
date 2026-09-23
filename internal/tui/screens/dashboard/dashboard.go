@@ -36,6 +36,7 @@ var groups = []struct {
 }{
 	{Title: "Reviewing", States: []review.State{review.StateReviewing, review.StatePreparing}},
 	{Title: "Drafted", States: []review.State{review.StateDrafted}},
+	{Title: "Reviewed", States: []review.State{review.StateReviewed}},
 	// A submitted record is one whose archiving did not finish. Listing it keeps
 	// it selectable, so a refresh retries the archive.
 	{Title: "Submitted", States: []review.State{review.StateSubmitted}},
@@ -123,7 +124,20 @@ func (m Model) handleKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, msg.Send(msg.OpenRequests{})
 	case "enter":
 		if rec, ok := m.Selected(); ok {
+			// An adopted record has no review session to resume, so enter offers
+			// to review it again instead.
+			if rec.Adopted() {
+				return m, msg.Send(msg.OpenRereview{ID: rec.ID})
+			}
 			return m, msg.Send(msg.Resume{ID: rec.ID})
+		}
+	case "c":
+		if rec, ok := m.Selected(); ok {
+			return m, msg.Send(msg.Ask{ID: rec.ID})
+		}
+	case "u":
+		if rec, ok := m.Selected(); ok {
+			return m, msg.Send(msg.OpenRereview{ID: rec.ID})
 		}
 	case "x":
 		if rec, ok := m.Selected(); ok {

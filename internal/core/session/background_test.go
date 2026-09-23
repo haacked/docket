@@ -41,7 +41,7 @@ func startedBackground(t *testing.T, svc *Service, runner *exec.Fake) review.Rec
 	t.Helper()
 	svc.Runner = runner
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestPrepareMintsNoSessionIdForABackgroundReview(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestStartBackgroundRecordsTheReviewBeforeLaunchingIt(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	svc.Runner = &exec.Fake{Errs: map[string]error{"--bg": errors.New("claude is not logged in")}}
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestAStartThatReportedNoIdIsNotWaitedOn(t *testing.T) {
 	}
 	svc.Runner = runner
 
-	rec, _, _ := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground)
+	rec, _, _ := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
 	rec, _ = svc.StartBackground(context.Background(), rec)
 
 	if rec.BackgroundRunning() {
@@ -390,6 +390,52 @@ func TestAbandonClosesTheRecordEvenWhenTheStopFails(t *testing.T) {
 	}
 }
 
+// A re-review starts a new session. claude would otherwise hold the finished one
+// with no record naming it.
+func TestRereviewStopsTheHeldBackgroundSession(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner(bgListing("6d681a76", bgSession, "done", true))
+	rec := startedBackground(t, svc, runner)
+	rec.State = review.StateDrafted
+
+	again, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive)
+	if err != nil {
+		t.Fatalf("Rereview: %v", err)
+	}
+	if lines := runner.Lines(); !slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, "claude stop 6d681a76") }) {
+		t.Fatalf("the held session was never stopped: %v", lines)
+	}
+	if again.BGID != "" {
+		t.Errorf("background id = %q, want none after the stop", again.BGID)
+	}
+	if got := storedByID(t, svc, rec.ID); got.BGID != "" || got.Mode != review.ModeInteractive {
+		t.Errorf("stored record has background id %q in mode %q, want none in interactive", got.BGID, got.Mode)
+	}
+}
+
+// A session that would not stop is still held, so the record keeps the id that
+// names it and the mode that says how to reach it.
+func TestRereviewLeavesTheRecordWhenTheStopFails(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner(bgListing("6d681a76", bgSession, "done", true))
+	rec := startedBackground(t, svc, runner)
+	rec.State = review.StateDrafted
+	runner.Errs = map[string]error{"stop": errors.New("no such session")}
+
+	if _, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive); err == nil {
+		t.Fatal("Rereview went ahead although the held session did not stop")
+	}
+	got := storedByID(t, svc, rec.ID)
+	if got.BGID != "6d681a76" || got.Mode != review.ModeBackground || got.Intent != review.IntentReview {
+		t.Errorf("stored record has background id %q, mode %q, intent %q, want it unchanged", got.BGID, got.Mode, got.Intent)
+	}
+	if !strings.Contains(got.Err, "no such session") {
+		t.Errorf("the row does not say the stop failed: %q", got.Err)
+	}
+}
+
 // A background session outlives the docket that started it, so the startup pass
 // that re-detects abandoned interactive sessions must leave it alone.
 func TestReconcileLeavesABackgroundSessionToThePoll(t *testing.T) {
@@ -415,7 +461,7 @@ func TestExplainBackgroundRecordsNothing(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	svc.Runner = bgRunner("[]")
 
-	_, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeBackground)
+	_, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
 	if err != nil {
 		t.Fatalf("ExplainBackground: %v", err)
 	}
@@ -437,7 +483,7 @@ func TestBackgroundIsRefusedForAnEngineThatHasNone(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	svc.Runner = bgRunner("[]")
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "codex", review.ModeBackground)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "codex", review.ModeBackground, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -485,7 +531,7 @@ func TestAbandoningAnInteractiveReviewStopsNothing(t *testing.T) {
 	runner := bgRunner("[]")
 	svc.Runner = runner
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +587,7 @@ func TestPrepareMarksYourOwnPullRequest(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: mine}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -551,7 +597,7 @@ func TestPrepareMarksYourOwnPullRequest(t *testing.T) {
 
 	theirs := &fakeGH{login: "haacked", info: prInfo()}
 	other, _ := newService(t, theirs, newFakeGit())
-	rec, _, err = other.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive)
+	rec, _, err = other.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

@@ -22,11 +22,25 @@ type Goto struct{ Screen Screen }
 
 // StartReview asks for a review of whatever the user typed. Background asks for
 // one that runs without the terminal.
+//
+// Intent is the user's answer when the pull request already has a review, as
+// one of review.Intent's values. It is empty on the first request, which is
+// the one that asks what is already there. RecordID names the dashboard record
+// to review again instead of the typed input.
 type StartReview struct {
 	Input      string
 	Engine     string
 	Background bool
+	Intent     string
+	RecordID   string
 }
+
+// Ask opens a question-and-answer session about a record's notes.
+type Ask struct{ ID string }
+
+// OpenRereview asks for the choice between appending to a record's review and
+// overwriting it.
+type OpenRereview struct{ ID string }
 
 // Resume reopens the session behind a record.
 type Resume struct{ ID string }
