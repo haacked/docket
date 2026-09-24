@@ -348,6 +348,19 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.sub = a.sub.For(rec, review.SubmitEventsFor(rec.Author, a.login()))
 		a.screen = msg.Submit
 		a.err = nil
+		return a, a.loadDraft(rec)
+
+	case draftLoadedMsg:
+		// The read runs in a command. It can land after the user left the screen,
+		// opened another record's, or reopened this one for a newer draft.
+		if a.screen != msg.Submit || message.record.ID != a.sub.Record.ID || message.record.ReviewID != a.sub.Record.ReviewID {
+			return a, nil
+		}
+		if message.err != nil {
+			a.status = fmt.Sprintf("Could not read the draft's summary: %v", message.err)
+			return a, nil
+		}
+		a.sub = a.sub.SetDraft(message.body)
 		return a, nil
 
 	case msg.SubmitReview:
@@ -733,6 +746,14 @@ func (a App) submitReview(rec review.Record, event, body string) tea.Cmd {
 			return errMsg{err: err}
 		}
 		return detectedMsg{record: updated, submitted: true}
+	}
+}
+
+func (a App) loadDraft(rec review.Record) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		body, err := svc.DraftBody(context.Background(), rec)
+		return draftLoadedMsg{record: rec, body: body, err: err}
 	}
 }
 
