@@ -86,9 +86,10 @@ bin/start     run docket from source; arguments pass through, as in bin/start --
 bin/test      check formatting, run go vet, and run the tests; flags pass through to go test
 bin/fmt       format the Go code, and the scripts in bin/ when shfmt is installed
 bin/update    download the modules go.mod names, after a pull
+bin/install   build docket and install it on your PATH; run it again after a pull
 ```
 
-To put docket on your PATH, run `go install ./cmd/docket` from the clone, or `go install github.com/haacked/docket/cmd/docket@latest`.
+To put docket on your PATH, run `bin/install` from the clone, or `go install github.com/haacked/docket/cmd/docket@latest`.
 
 ## License
 

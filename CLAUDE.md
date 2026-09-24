@@ -5,7 +5,7 @@ A terminal app that runs PR reviews through the `review-code` skill in a `claude
 ## Layout
 
 ```
-bin/                        setup, update, build, start, test, fmt; `-h` prints usage, except that start passes it to docket
+bin/                        setup, update, build, install, start, test, fmt; `-h` prints usage, except that start passes it to docket
 cmd/docket/main.go          flags and the URL argument; the only file that imports both core and tui
 internal/core/pr/           Ref{Org,Repo,Number}, ParseRef                         pure
 internal/core/reposconf/    Parse, Resolve                                         pure, filesystem via callback

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#/ Usage: bin/install
+#/ Description: Builds docket from this clone and installs it into GOBIN, or GOPATH/bin when GOBIN is unset. Run it after a pull to update the docket on your PATH.
+
+set -euo pipefail
+
+# shellcheck source=bin/helpers/_utils.sh
+source "$(dirname "$0")/helpers/_utils.sh"
+set_source_and_root_dir
+parse_common_args "$@"
+
+command_exists go || fatal "go is not on PATH. Install Go 1.26 or later."
+
+go install ./cmd/docket
+
+# go install writes to the first GOPATH entry when GOBIN is unset.
+bin_dir=$(go env GOBIN)
+if [[ -z "$bin_dir" ]]; then
+    gopath=$(go env GOPATH)
+    bin_dir="${gopath%%:*}/bin"
+fi
+bin_dir=${bin_dir%/}
+installed="$bin_dir/docket"
+echo "Installed $installed"
+
+on_path=$(command -v docket || true)
+if [[ -z "$on_path" ]]; then
+    warning "$bin_dir is not on your PATH. Add it to run docket by name."
+elif [[ ! "$on_path" -ef "$installed" ]]; then
+    warning "The docket on your PATH is $on_path, not $installed. Put $bin_dir ahead of $(dirname "$on_path") on your PATH."
+fi
