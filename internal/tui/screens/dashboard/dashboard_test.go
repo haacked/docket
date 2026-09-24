@@ -192,22 +192,6 @@ func TestTheCursorFollowsTheRecordWhenDetectionReordersRows(t *testing.T) {
 	}
 }
 
-func TestABackgroundRowSaysWhatItsSessionIsDoing(t *testing.T) {
-	m := New(Styles{}).SetRecords([]review.Record{{
-		ID:     "rec-1",
-		Ref:    pr.Ref{Org: "haacked", Repo: "docket", Number: 7},
-		Title:  "Add a thing",
-		Engine: "claude",
-		Mode:   review.ModeBackground,
-		State:  review.StateReviewing,
-	}})
-	m.Background = map[string]string{"rec-1": "working busy"}
-
-	if view := m.View(); !strings.Contains(view, "background working busy") {
-		t.Errorf("the row does not say what the session is doing:\n%s", view)
-	}
-}
-
 // A running record the last poll said nothing about is one whose session the
 // agent no longer lists. The row still says it is a background review.
 func TestABackgroundRowWithNoStatusStillSaysSo(t *testing.T) {

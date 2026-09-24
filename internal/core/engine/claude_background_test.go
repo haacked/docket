@@ -111,9 +111,6 @@ func TestParseStatusKeepsOnlyTheSessionsDocketCouldHaveStarted(t *testing.T) {
 	if working.Done {
 		t.Errorf("state %q should not read as finished", working.State)
 	}
-	if working.Activity != "busy" {
-		t.Errorf("activity = %q, want what the session is doing", working.Activity)
-	}
 }
 
 func TestParseStatusRefusesOutputThatIsNotTheListing(t *testing.T) {

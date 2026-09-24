@@ -43,6 +43,9 @@ type launchMsg struct {
 	record review.Record
 	spec   exec.CommandSpec
 	kind   launchKind
+	// waiting are the launches a trust prompt answers for. Only launchTrust
+	// sets it.
+	waiting []review.Record
 }
 
 // launchKind is what a launch hands the terminal to, which decides what its exit
@@ -57,6 +60,9 @@ const (
 	// launchAsk is a question-and-answer session. Its exit records the session
 	// and then reads GitHub for anything posted during it.
 	launchAsk
+	// launchTrust is the agent's trust prompt for a directory. Its exit starts
+	// the launches that were waiting on it.
+	launchTrust
 )
 
 // askExitedMsg reports that a question-and-answer session ended.
@@ -100,12 +106,11 @@ type editorExitedMsg struct {
 type bgTickMsg struct{}
 
 // bgPolledMsg carries the index after a poll, with what each running background
-// session is doing. The note is already formatted: the dashboard holds no engine
-// to ask.
+// session is doing. The dashboard holds no engine to ask.
 type bgPolledMsg struct {
-	records []review.Record
-	notes   map[string]string
-	err     error
+	records  []review.Record
+	progress map[string]review.Progress
+	err      error
 }
 
 // indexTickMsg asks the root to check whether another docket process appended
@@ -121,11 +126,28 @@ type requestsLoadedMsg struct{ fetched requests.Fetched }
 
 // batchStartedMsg reports a batch of background reviews. skipped holds each pull
 // request left alone because it already has a review. failed holds one line per
-// pull request that did not start.
+// pull request that did not start. untrusted holds the records the agent
+// refused because it does not trust their directories yet. retry marks the
+// report of the launches that follow a trust prompt.
 type batchStartedMsg struct {
-	started int
-	skipped []string
-	failed  []string
+	started   int
+	skipped   []string
+	failed    []string
+	untrusted []review.Record
+	retry     bool
+}
+
+// trustNeededMsg names background launches the agent refused because it does
+// not trust their directories yet.
+type trustNeededMsg struct{ records []review.Record }
+
+// trustExitedMsg reports that the agent's trust prompt for the first record's
+// directory closed. A nil err means the user trusted that directory. records are
+// every launch still waiting on a trust prompt, including the ones in other
+// directories.
+type trustExitedMsg struct {
+	records []review.Record
+	err     error
 }
 
 // statusMsg is a line for the footer.

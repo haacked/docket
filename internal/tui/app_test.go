@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -243,7 +244,7 @@ func backgroundRecord(state review.State) review.Record {
 // background review finishing.
 func polled(t *testing.T, records []review.Record) (App, bool) {
 	t.Helper()
-	next, cmd := app().Update(bgPolledMsg{records: records, notes: map[string]string{}})
+	next, cmd := app().Update(bgPolledMsg{records: records, progress: map[string]review.Progress{}})
 	return next.(App), cmd != nil
 }
 
@@ -278,10 +279,10 @@ func TestAnInteractiveReviewIsNeverPolled(t *testing.T) {
 
 func TestAPollPutsWhatTheSessionIsDoingOnTheRow(t *testing.T) {
 	next, _ := app().Update(bgPolledMsg{
-		records: []review.Record{backgroundRecord(review.StateReviewing)},
-		notes:   map[string]string{"rec-1": "working busy"},
+		records:  []review.Record{backgroundRecord(review.StateReviewing)},
+		progress: map[string]review.Progress{"rec-1": {Detail: "dispatching agents"}},
 	})
-	if got := next.(App).dash.Background["rec-1"]; got != "working busy" {
+	if got := next.(App).dash.Background["rec-1"].Detail; got != "dispatching agents" {
 		t.Errorf("the row carries %q", got)
 	}
 }
@@ -351,20 +352,20 @@ func TestLeavingAWorkingSessionStartsWatchingItAgain(t *testing.T) {
 	}
 }
 
-func TestNotesForJoinsWhatTheAgentReported(t *testing.T) {
-	notes := notesFor(map[string]engine.BGStatus{
-		"a": {State: "working", Activity: "busy"},
-		"b": {State: "done"},
-		"c": {},
-	})
-	if notes["a"] != "working busy" {
-		t.Errorf("a = %q", notes["a"])
+func TestProgressForCarriesWhatTheAgentReported(t *testing.T) {
+	want := review.Progress{Detail: "running reviewers", Needs: "your input", Agents: 3, UpdatedAt: time.Date(2026, 9, 24, 17, 0, 0, 0, time.UTC)}
+	got := progressFor(map[string]engine.BGStatus{"a": {State: "working", Progress: want}})
+	if got["a"] != want {
+		t.Errorf("a = %+v, want %+v", got["a"], want)
 	}
-	if notes["b"] != "done" {
-		t.Errorf("b = %q, want no trailing separator", notes["b"])
-	}
-	if notes["c"] != "" {
-		t.Errorf("c = %q, want nothing when the agent said nothing", notes["c"])
+}
+
+// claude's status file can be missing or unreadable. The row still says
+// something, so it falls back to the state the listing reported.
+func TestProgressForFallsBackToTheAgentsState(t *testing.T) {
+	got := progressFor(map[string]engine.BGStatus{"a": {State: "working"}})
+	if got["a"].Detail != "working" {
+		t.Errorf("detail = %q, want the listing's state", got["a"].Detail)
 	}
 }
 

@@ -20,6 +20,10 @@ const DefaultReviewCodeDir = "~/.agents/skills/review-code"
 // session id on the command line.
 const DefaultCodexSessionsDir = "~/.codex/sessions"
 
+// DefaultClaudeJobsDir is where claude's background service keeps a status file
+// for each background session. docket reads it to show what a session is doing.
+const DefaultClaudeJobsDir = "~/.claude/jobs"
+
 // EngineClaude is the engine docket uses when config.toml names none.
 const EngineClaude = "claude"
 
@@ -27,6 +31,7 @@ const EngineClaude = "claude"
 type Config struct {
 	ReviewCodeDir    string `toml:"review_code_dir"`
 	CodexSessionsDir string `toml:"codex_sessions_dir"`
+	ClaudeJobsDir    string `toml:"claude_jobs_dir"`
 	DefaultEngine    string `toml:"default_engine"`
 	GitHubUser       string `toml:"github_user"`
 	DefaultRepo      string `toml:"default_repo"`
@@ -93,6 +98,7 @@ func Load(path string) (Config, error) {
 	cfg := Config{
 		ReviewCodeDir:    DefaultReviewCodeDir,
 		CodexSessionsDir: DefaultCodexSessionsDir,
+		ClaudeJobsDir:    DefaultClaudeJobsDir,
 		DefaultEngine:    EngineClaude,
 	}
 	data, err := os.ReadFile(path)
@@ -113,6 +119,7 @@ func Load(path string) (Config, error) {
 func expand(cfg Config) Config {
 	cfg.ReviewCodeDir = ExpandHome(cmp.Or(cfg.ReviewCodeDir, DefaultReviewCodeDir))
 	cfg.CodexSessionsDir = ExpandHome(cmp.Or(cfg.CodexSessionsDir, DefaultCodexSessionsDir))
+	cfg.ClaudeJobsDir = ExpandHome(cmp.Or(cfg.ClaudeJobsDir, DefaultClaudeJobsDir))
 	cfg.DefaultEngine = cmp.Or(cfg.DefaultEngine, EngineClaude)
 	return cfg
 }

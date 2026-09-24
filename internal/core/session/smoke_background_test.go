@@ -130,7 +130,7 @@ func pollUntilDone(t *testing.T, svc *Service, rec review.Record) review.Record 
 		// had learned rather than the record as it was before the first one.
 		rec = current
 		if status, running := statuses[rec.ID]; running {
-			t.Logf("  %s %s/%s session=%s", time.Now().Format("15:04:05"), status.State, status.Activity, rec.SessionID)
+			t.Logf("  %s %s %q session=%s", time.Now().Format("15:04:05"), status.State, status.Progress.Detail, rec.SessionID)
 			continue
 		}
 		return rec

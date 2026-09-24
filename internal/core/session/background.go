@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/haacked/docket/internal/core/engine"
@@ -16,11 +17,8 @@ import (
 // The id arrives afterwards. claude mints its own for a background session, so
 // the record carries none until the command reports one.
 func (s *Service) StartBackground(ctx context.Context, rec review.Record) (review.Record, error) {
-	bg, ok := engine.Background(rec.Engine)
-	if !ok {
-		return rec, fmt.Errorf("%s cannot run a review in the background", rec.Engine)
-	}
-	if err := checkDir(rec); err != nil {
+	bg, err := background(rec)
+	if err != nil {
 		return rec, err
 	}
 
@@ -34,14 +32,84 @@ func (s *Service) StartBackground(ctx context.Context, rec review.Record) (revie
 
 	res, err := s.Runner.Run(ctx, bg.StartBackground(rec, s.enginePaths()))
 	if err != nil {
+		if bg.Untrusted(res) {
+			err = fmt.Errorf("%s %w %s yet", rec.Engine, ErrUntrusted, rec.Dir)
+		}
+		// No session ran, so the record leaves StateReviewing. The poll and a
+		// refresh then leave the record and the reason alone.
+		rec.State = review.StateNotStarted
 		return s.recordErr(rec, err)
 	}
+	// A launch that exited zero may have started a session even when docket
+	// cannot read its id. The record therefore stays reviewing, and recoverLost
+	// looks for the session.
 	id, err := bg.ParseBackgroundID(res)
 	if err != nil {
 		return s.recordErr(rec, err)
 	}
 	rec.BGID = id
 	return rec, s.append(rec)
+}
+
+// ErrUntrusted marks a background launch the agent refused because nobody has
+// told it to trust the directory. The agent asks that question only on a
+// terminal. The caller can hand the terminal over with TrustSpec and launch
+// again.
+var ErrUntrusted = errors.New("does not trust")
+
+// background returns the engine that runs rec in the background, once rec's
+// directory is there to run in.
+func background(rec review.Record) (engine.BackgroundEngine, error) {
+	bg, ok := engine.Background(rec.Engine)
+	if !ok {
+		return nil, fmt.Errorf("%s runs no background sessions", rec.Engine)
+	}
+	return bg, checkDir(rec)
+}
+
+// TrustSpec puts the agent's trust prompt for the record's directory on the
+// terminal. It runs after a launch fails with ErrUntrusted.
+func (s *Service) TrustSpec(rec review.Record) (exec.CommandSpec, error) {
+	bg, err := background(rec)
+	if err != nil {
+		return exec.CommandSpec{}, err
+	}
+	return bg.TrustSpec(rec.Dir), nil
+}
+
+// Restart launches again a background review the agent refused. It reads
+// GitHub first, as Rereview does. A refresh skips a row that never started, so
+// the stored pull request state and the snapshot of my earlier reviews are as old
+// as the refused launch.
+func (s *Service) Restart(ctx context.Context, rec review.Record) (review.Record, error) {
+	if rec.State != review.StateNotStarted {
+		return rec, fmt.Errorf("%s is %s, so there is no refused launch to start again", rec.Ref, rec.State)
+	}
+	pull, err := s.openPR(ctx, rec.Ref)
+	if err != nil {
+		return rec, err
+	}
+	ids, err := s.priorIDs(ctx, rec.Ref)
+	if err != nil {
+		return rec, err
+	}
+	rec.PRState = pull.State
+	rec.PriorReviewIDs = ids
+	return s.StartBackground(ctx, rec)
+}
+
+// ExplainRestart is the command Restart would run, without recording anything.
+// It reads the pull request's state the way Restart does, so the dry run refuses
+// what the real run refuses.
+func (s *Service) ExplainRestart(ctx context.Context, rec review.Record) (exec.CommandSpec, error) {
+	if _, err := s.openPR(ctx, rec.Ref); err != nil {
+		return exec.CommandSpec{}, err
+	}
+	bg, err := background(rec)
+	if err != nil {
+		return exec.CommandSpec{}, err
+	}
+	return bg.StartBackground(rec, s.enginePaths()), nil
 }
 
 // PollBackground asks each agent how its sessions are doing and reads GitHub for
@@ -76,6 +144,7 @@ func (s *Service) PollBackground(ctx context.Context) ([]review.Record, map[stri
 	records, byEngine = s.recoverLost(ctx, records, byEngine)
 
 	statuses := make(map[string]engine.BGStatus)
+	paths := s.enginePaths()
 	var failure error
 	for name, indexes := range byEngine {
 		bg, ok := engine.Background(name)
@@ -93,6 +162,7 @@ func (s *Service) PollBackground(ctx context.Context) ([]review.Record, map[stri
 			rec, status, running := s.applyStatus(ctx, records[i], found)
 			records[i] = rec
 			if running {
+				status.Progress = bg.Progress(rec.BGID, paths)
 				statuses[rec.ID] = status
 			}
 		}
@@ -197,11 +267,8 @@ func readStatus(rec review.Record, found map[string]engine.BGStatus) (engine.BGS
 // GitHub, which a resume does. This is the session the record already describes,
 // so the window detection measures against is still the right one.
 func (s *Service) OpenBackgroundSpec(ctx context.Context, rec review.Record) (exec.CommandSpec, error) {
-	bg, ok := engine.Background(rec.Engine)
-	if !ok {
-		return exec.CommandSpec{}, fmt.Errorf("%s runs no background sessions", rec.Engine)
-	}
-	if err := checkDir(rec); err != nil {
+	bg, err := background(rec)
+	if err != nil {
 		return exec.CommandSpec{}, err
 	}
 

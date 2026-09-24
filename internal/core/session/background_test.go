@@ -39,17 +39,23 @@ func bgRunner(listing string) *exec.Fake {
 // startedBackground is a tier-2 review already running in the background.
 func startedBackground(t *testing.T, svc *Service, runner *exec.Fake) review.Record {
 	t.Helper()
-	svc.Runner = runner
-
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
-	if err != nil {
-		t.Fatalf("Prepare: %v", err)
-	}
-	rec, err = svc.StartBackground(context.Background(), rec)
+	rec, err := launchBackground(t, svc, runner)
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
 	return rec
+}
+
+// launchBackground prepares a tier-2 background review and starts it against
+// runner, returning what the start returned.
+func launchBackground(t *testing.T, svc *Service, runner *exec.Fake) (review.Record, error) {
+	t.Helper()
+	svc.Runner = runner
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	return svc.StartBackground(context.Background(), rec)
 }
 
 // claude refuses the --session-id a background start passes and mints its own,
@@ -120,7 +126,6 @@ func TestStartBackgroundRecordsTheReviewBeforeLaunchingIt(t *testing.T) {
 
 // A start that never reported an id leaves no session to wait on. The record
 // must not read as a running one, or the tick would spin over it for ever.
-// Recovery is what settles it, one way or the other.
 func TestAStartThatReportedNoIdIsNotWaitedOn(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
@@ -166,8 +171,8 @@ func TestPollLearnsTheSessionIdAndKeepsWaiting(t *testing.T) {
 	if records[0].SessionID != bgSession {
 		t.Errorf("session id = %q, want the one claude reported", records[0].SessionID)
 	}
-	if status, ok := statuses[rec.ID]; !ok || status.Activity != "busy" {
-		t.Errorf("status = %+v, want what the session is doing", status)
+	if status, ok := statuses[rec.ID]; !ok || status.State != "working" {
+		t.Errorf("status = %+v, want the state claude reported", status)
 	}
 }
 

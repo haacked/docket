@@ -109,6 +109,7 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 	want := Config{
 		ReviewCodeDir:    "/opt/review-code",
 		CodexSessionsDir: "/opt/codex/sessions",
+		ClaudeJobsDir:    "/opt/claude/jobs",
 		DefaultEngine:    "codex",
 		GitHubUser:       "haacked",
 		DefaultRepo:      "haacked/docket",
@@ -169,37 +170,48 @@ func TestNewPathsExpandsALeadingTilde(t *testing.T) {
 	}
 }
 
-// docket reads the codex sessions directory to recover the id of a session it
-// just ran. It is the user's own, so it is configuration with a default rather
-// than a path docket knows.
-func TestTheCodexSessionsDirectoryIsConfiguration(t *testing.T) {
-	t.Run("the default when config.toml names none", func(t *testing.T) {
-		cfg, err := Load(filepath.Join(t.TempDir(), "config.toml"))
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
+// Each of these directories belongs to an agent, not to docket, so each is
+// configuration with a default rather than a path docket knows. docket reads the
+// codex sessions directory to recover the id of a session it just ran, and
+// claude's jobs directory to show what a background review is doing.
+func TestAgentDirectoriesAreConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		key    string
+		field  func(Config) string
+		suffix string
+	}{
+		{key: "codex_sessions_dir", field: func(c Config) string { return c.CodexSessionsDir }, suffix: filepath.Join(".codex", "sessions")},
+		{key: "claude_jobs_dir", field: func(c Config) string { return c.ClaudeJobsDir }, suffix: filepath.Join(".claude", "jobs")},
+	} {
+		t.Run(tc.key+" defaults to the agent's installed path", func(t *testing.T) {
+			cfg, err := Load(filepath.Join(t.TempDir(), "config.toml"))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
 
-		if strings.HasPrefix(cfg.CodexSessionsDir, "~") {
-			t.Errorf("codex_sessions_dir = %q, want the tilde expanded", cfg.CodexSessionsDir)
-		}
-		if !strings.HasSuffix(cfg.CodexSessionsDir, filepath.Join(".codex", "sessions")) {
-			t.Errorf("codex_sessions_dir = %q, want codex's installed path", cfg.CodexSessionsDir)
-		}
-	})
+			got := tc.field(cfg)
+			if strings.HasPrefix(got, "~") {
+				t.Errorf("%s = %q, want the tilde expanded", tc.key, got)
+			}
+			if !strings.HasSuffix(got, tc.suffix) {
+				t.Errorf("%s = %q, want the agent's installed path", tc.key, got)
+			}
+		})
 
-	t.Run("the file wins", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "config.toml")
-		if err := os.WriteFile(path, []byte("codex_sessions_dir = \"/opt/codex/sessions\"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		t.Run(tc.key+" from the file wins", func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(tc.key+" = \"/opt/agent/dir\"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
 
-		cfg, err := Load(path)
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
 
-		if cfg.CodexSessionsDir != "/opt/codex/sessions" {
-			t.Errorf("codex_sessions_dir = %q, want the configured path", cfg.CodexSessionsDir)
-		}
-	})
+			if got := tc.field(cfg); got != "/opt/agent/dir" {
+				t.Errorf("%s = %q, want the configured path", tc.key, got)
+			}
+		})
+	}
 }

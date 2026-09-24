@@ -81,7 +81,6 @@ type agentEntry struct {
 	SessionID string `json:"sessionId"`
 	Kind      string `json:"kind"`
 	State     string `json:"state"`
-	Status    string `json:"status"`
 	PID       int    `json:"pid"`
 	CWD       string `json:"cwd"`
 	StartedAt int64  `json:"startedAt"`
@@ -103,7 +102,6 @@ func (Claude) ParseStatus(res exec.Result) (map[string]BGStatus, error) {
 		out[entry.ID] = BGStatus{
 			SessionID: entry.SessionID,
 			State:     entry.State,
-			Activity:  entry.Status,
 			// A session claude is no longer holding is over whatever its state
 			// says. `claude stop` on a session still working leaves it as
 			// "stopped", which is not "done" and would otherwise be polled for

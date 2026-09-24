@@ -35,6 +35,7 @@ var groups = []struct {
 	Closed bool
 }{
 	{Title: "Reviewing", States: []review.State{review.StateReviewing, review.StatePreparing}},
+	{Title: "Did not start", States: []review.State{review.StateNotStarted}},
 	{Title: "Drafted", States: []review.State{review.StateDrafted}},
 	{Title: "Reviewed", States: []review.State{review.StateReviewed}},
 	// A submitted record is one whose archiving did not finish. Listing it keeps
@@ -52,15 +53,20 @@ type Model struct {
 	ShowArchived bool
 	Busy         map[string]string
 	// Background is what each running background session is doing, keyed by
-	// record. The root formats it, because a screen holds no engine to ask.
-	Background map[string]string
+	// record. The root fills it in, because a screen holds no engine to ask.
+	Background map[string]review.Progress
 	Styles     Styles
 	Width      int
 	Now        func() time.Time
 }
 
+// quietAfter is how long a session may go without the agent updating its
+// account before the row says so. A review's agents can run for several
+// minutes with no update, so a shorter wait would flag healthy sessions.
+const quietAfter = 10 * time.Minute
+
 func New(styles Styles) Model {
-	return Model{Styles: styles, Busy: map[string]string{}, Background: map[string]string{}}
+	return Model{Styles: styles, Busy: map[string]string{}, Background: map[string]review.Progress{}}
 }
 
 // SetRecords replaces the list and keeps the cursor on the record it was on. The
@@ -221,44 +227,77 @@ func (m Model) row(rec review.Record, selected bool) string {
 		style = m.Styles.Selected
 	}
 
-	title := cmp.Or(rec.Title, rec.URL)
-	line := fmt.Sprintf("%s%s  %s", marker, rec.Ref, title)
+	head := fmt.Sprintf("%s%s  ", marker, rec.Ref)
+	left, meta := format.Row(head, cmp.Or(rec.Title, rec.URL), "· "+strings.Join(m.meta(rec), " · "), m.width())
+	rendered := style.Render(left)
+	if meta != "" {
+		rendered += " " + m.Styles.Dim.Render(meta)
+	}
 
+	if line, blocked := m.activity(rec); line != "" {
+		lineStyle := m.Styles.Dim
+		if blocked {
+			lineStyle = m.Styles.Err
+		}
+		rendered += "\n" + lineStyle.Render(format.Truncate("    "+line, m.width()))
+	}
+	if rec.Err != "" {
+		rendered += "\n" + m.Styles.Err.Render(format.Truncate("    "+rec.Err, m.width()))
+	}
+	return rendered
+}
+
+func (m Model) meta(rec review.Record) []string {
 	meta := []string{rec.Engine, rec.Tier.String(), m.age(rec)}
 	if rec.PRState.Closed() {
 		meta = append(meta, rec.PRState.Label())
 	}
 	if rec.Mode == review.ModeBackground {
-		meta = append(meta, m.background(rec))
+		meta = append(meta, "background")
 	}
 	if note, busy := m.Busy[rec.ID]; busy {
 		meta = append(meta, note)
 	}
-	rendered := style.Render(format.Truncate(line, m.titleWidth())) + " " + m.Styles.Dim.Render("· "+strings.Join(meta, " · "))
-	if rec.Err != "" {
-		rendered += "\n" + m.Styles.Err.Render("    "+format.Truncate(rec.Err, m.width()-4))
+	return meta
+}
+
+// activity is the line under a running background row that says what its
+// session is doing, and whether the session is waiting for the user. It is
+// empty for any other row, and for a session the last poll said nothing about.
+func (m Model) activity(rec review.Record) (string, bool) {
+	act, ok := m.Background[rec.ID]
+	if !ok || !rec.BackgroundRunning() {
+		return "", false
 	}
-	return rendered
+	if act.Needs != "" {
+		return "waiting for you: " + act.Needs + " · enter opens it", true
+	}
+
+	var parts []string
+	if act.Detail != "" {
+		parts = append(parts, act.Detail)
+	}
+	if act.Agents > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", act.Agents, format.Plural(act.Agents, "agent")))
+	}
+	if quiet := m.now().Sub(act.UpdatedAt); !act.UpdatedAt.IsZero() && quiet >= quietAfter {
+		parts = append(parts, "no update for "+format.Duration(quiet))
+	}
+	return strings.Join(parts, " · "), false
 }
 
 func (m Model) age(rec review.Record) string {
 	if rec.StartedAt.IsZero() {
 		return "not started"
 	}
-	now := time.Now()
+	return format.Ago(m.now().Sub(rec.StartedAt))
+}
+
+func (m Model) now() time.Time {
 	if m.Now != nil {
-		now = m.Now()
+		return m.Now()
 	}
-	return format.Ago(now.Sub(rec.StartedAt))
+	return time.Now()
 }
 
 func (m Model) width() int { return format.Width(m.Width) }
-
-func (m Model) titleWidth() int { return max(20, m.width()-34) }
-
-// background says what the session behind a record is doing. A record the last
-// poll said nothing about is one the agent no longer lists or one whose review
-// is over, so the row names the mode and nothing more.
-func (m Model) background(rec review.Record) string {
-	return strings.TrimSpace("background " + m.Background[rec.ID])
-}

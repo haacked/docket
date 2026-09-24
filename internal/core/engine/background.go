@@ -14,10 +14,6 @@ type BGStatus struct {
 	// State is how far the session got, in the agent's own words. It is for the
 	// screen. Done is what docket reads.
 	State string
-	// Activity is what the session is doing now. A session stopped at a
-	// permission prompt still reports a live state. This is the only sign the
-	// user gets that it is waiting for them.
-	Activity string
 	// Live reports whether the agent still holds the process. An agent holding a
 	// session refuses a plain resume, so this decides how the session reopens.
 	Live bool
@@ -25,6 +21,9 @@ type BGStatus struct {
 	// reads GitHub for what it left behind. Each engine names its own states, so
 	// its ParseStatus decides this rather than a word compared here.
 	Done bool
+	// Progress is what the agent says the session is doing, beyond the listing.
+	// The poll fills it in for a session that is still running.
+	Progress review.Progress
 }
 
 // BackgroundEngine is an engine that can run a review with nobody at the
@@ -58,6 +57,16 @@ type BackgroundEngine interface {
 	// StopSpec ends the session while keeping its conversation. The caller has
 	// already established that there is one to end.
 	StopSpec(rec review.Record, paths Paths) exec.CommandSpec
+	// Progress reads what the agent says the session with this background id is
+	// doing. It is zero when the agent left nothing docket can read.
+	Progress(id string, paths Paths) review.Progress
+	// Untrusted reports whether a failed StartBackground failed because the
+	// agent has not been told to trust the directory. The agent asks that
+	// question only on a terminal, which a background start does not have.
+	Untrusted(res exec.Result) bool
+	// TrustSpec puts the agent's trust prompt for dir on the terminal and ends
+	// once the user answers it. It exits zero only when the user trusted dir.
+	TrustSpec(dir string) exec.CommandSpec
 }
 
 // Background returns the engine's background support, or false when it has

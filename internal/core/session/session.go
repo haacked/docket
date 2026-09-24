@@ -82,6 +82,7 @@ func (s *Service) enginePaths() engine.Paths {
 	return engine.Paths{
 		Grant:         s.Cfg.AgentDirs(),
 		CodexSessions: s.Cfg.CodexSessionsDir,
+		ClaudeJobs:    s.Cfg.ClaudeJobsDir,
 	}
 }
 
