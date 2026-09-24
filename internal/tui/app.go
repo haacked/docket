@@ -89,6 +89,7 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 			engine.BackgroundNames(),
 			cfg.DefaultEngine,
 			cfg.DefaultRepo,
+			cfg.RunsInBackground(),
 		),
 		sub:   submit.New(submit.Styles{Label: s.Label, Dim: s.Dim, Selected: s.Selected}),
 		notes: notes.New(notes.Styles{Label: s.Label, Dim: s.Dim}),

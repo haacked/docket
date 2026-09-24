@@ -73,6 +73,9 @@ func TestLoadAMissingFileGivesDefaults(t *testing.T) {
 	if cfg.DefaultEngine != EngineClaude {
 		t.Errorf("default engine = %q, want claude", cfg.DefaultEngine)
 	}
+	if cfg.DefaultRun != RunBackground {
+		t.Errorf("default run = %q, want background", cfg.DefaultRun)
+	}
 	if strings.HasPrefix(cfg.ReviewCodeDir, "~") {
 		t.Errorf("review_code_dir = %q, want the tilde expanded", cfg.ReviewCodeDir)
 	}
@@ -102,6 +105,54 @@ func TestLoadReadsTheFileAndFillsTheGaps(t *testing.T) {
 	if cfg.DefaultEngine != EngineClaude {
 		t.Errorf("default engine = %q, want the default to fill in", cfg.DefaultEngine)
 	}
+	if cfg.DefaultRun != RunBackground {
+		t.Errorf("default run = %q, want the default to fill in", cfg.DefaultRun)
+	}
+}
+
+func TestLoadReadsATerminalDefaultRun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("default_run = \"terminal\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.DefaultRun != RunTerminal {
+		t.Errorf("default run = %q, want terminal", cfg.DefaultRun)
+	}
+}
+
+func TestLoadRefusesADefaultRunItDoesNotKnow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("default_run = \"bg\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+
+	if err == nil {
+		t.Fatal("Load accepted default_run = \"bg\"")
+	}
+	// The temporary path can hold any letters. The test removes it from the
+	// message before it searches for the value.
+	if message := strings.ReplaceAll(err.Error(), path, ""); !strings.Contains(message, "bg") {
+		t.Errorf("error = %q, want it to name the value bg", err)
+	}
+}
+
+// A Config built without Load has an empty DefaultRun. It has to mean the
+// background, which is the value Load fills in.
+func TestAnEmptyDefaultRunRunsInTheBackground(t *testing.T) {
+	if !(Config{}).RunsInBackground() {
+		t.Error("an empty default_run did not run in the background")
+	}
+	if (Config{DefaultRun: RunTerminal}).RunsInBackground() {
+		t.Error("default_run = terminal ran in the background")
+	}
 }
 
 func TestSaveThenLoadRoundTrips(t *testing.T) {
@@ -111,6 +162,7 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 		CodexSessionsDir: "/opt/codex/sessions",
 		ClaudeJobsDir:    "/opt/claude/jobs",
 		DefaultEngine:    "codex",
+		DefaultRun:       RunTerminal,
 		GitHubUser:       "haacked",
 		DefaultRepo:      "haacked/docket",
 		Teams:            []string{"PostHog/team-feature-flags"},

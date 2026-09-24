@@ -27,12 +27,20 @@ const DefaultClaudeJobsDir = "~/.claude/jobs"
 // EngineClaude is the engine docket uses when config.toml names none.
 const EngineClaude = "claude"
 
+// The values of default_run. The new review screen starts a review where
+// default_run says, unless the engine has no background mode.
+const (
+	RunBackground = "background"
+	RunTerminal   = "terminal"
+)
+
 // Config is config.toml.
 type Config struct {
 	ReviewCodeDir    string `toml:"review_code_dir"`
 	CodexSessionsDir string `toml:"codex_sessions_dir"`
 	ClaudeJobsDir    string `toml:"claude_jobs_dir"`
 	DefaultEngine    string `toml:"default_engine"`
+	DefaultRun       string `toml:"default_run"`
 	GitHubUser       string `toml:"github_user"`
 	DefaultRepo      string `toml:"default_repo"`
 	// Teams are the "org/team" slugs whose review requests the requests screen
@@ -100,6 +108,7 @@ func Load(path string) (Config, error) {
 		CodexSessionsDir: DefaultCodexSessionsDir,
 		ClaudeJobsDir:    DefaultClaudeJobsDir,
 		DefaultEngine:    EngineClaude,
+		DefaultRun:       RunBackground,
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -111,7 +120,11 @@ func Load(path string) (Config, error) {
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse %s: %w", path, err)
 	}
-	return expand(cfg), nil
+	cfg = expand(cfg)
+	if cfg.DefaultRun != RunBackground && cfg.DefaultRun != RunTerminal {
+		return cfg, fmt.Errorf("%s: default_run is %q, want %q or %q", path, cfg.DefaultRun, RunBackground, RunTerminal)
+	}
+	return cfg, nil
 }
 
 // expand fills in the defaults a config.toml left out and resolves the ~ in
@@ -121,6 +134,7 @@ func expand(cfg Config) Config {
 	cfg.CodexSessionsDir = ExpandHome(cmp.Or(cfg.CodexSessionsDir, DefaultCodexSessionsDir))
 	cfg.ClaudeJobsDir = ExpandHome(cmp.Or(cfg.ClaudeJobsDir, DefaultClaudeJobsDir))
 	cfg.DefaultEngine = cmp.Or(cfg.DefaultEngine, EngineClaude)
+	cfg.DefaultRun = cmp.Or(cfg.DefaultRun, RunBackground)
 	return cfg
 }
 
@@ -144,6 +158,13 @@ func Save(path string, cfg Config) error {
 		return fmt.Errorf("replace %s: %w", path, err)
 	}
 	return nil
+}
+
+// RunsInBackground reports whether the new review screen starts a review in the
+// background. It reads an empty DefaultRun as RunBackground, which is the value
+// expand fills in.
+func (c Config) RunsInBackground() bool {
+	return c.DefaultRun != RunTerminal
 }
 
 // ReposConfPath is review-code's repos.conf.

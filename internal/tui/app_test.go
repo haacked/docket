@@ -435,6 +435,18 @@ func TestBatchEnginePrefersTheDefaultAndFallsBackToOneWithABackgroundMode(t *tes
 	}
 }
 
+func TestTheConfiguredDefaultRunDecidesWhereTheNewReviewScreenStarts(t *testing.T) {
+	background := New(nil, config.Config{DefaultEngine: "claude", DefaultRun: config.RunBackground}, "", false)
+	if !background.newrev.Background {
+		t.Error("default_run = background opened the new review screen on this terminal")
+	}
+
+	terminal := New(nil, config.Config{DefaultEngine: "claude", DefaultRun: config.RunTerminal}, "", false)
+	if terminal.newrev.Background {
+		t.Error("default_run = terminal opened the new review screen on the background")
+	}
+}
+
 // A review started from the requests screen lands in the index, and its row must
 // show that without another search.
 func TestTheRequestsScreenRegroupsWhenTheRecordsReload(t *testing.T) {
