@@ -19,7 +19,7 @@ internal/core/engine/       Engine interface and Paths; claude.go and codex.go i
 internal/core/gh/           GitHub interface; shells to `gh api`
 internal/core/git/          Git interface; shells to `git`
 internal/core/clone/        the tier-2 clone sequence
-internal/core/session/      Service: Prepare, LaunchSpec, AfterExit, Submit, DraftBody, Notes, Abandon, Refresh, StartBackground, Restart, TrustSpec, PollBackground, Requests
+internal/core/session/      Service: Prepare, LaunchSpec, AfterExit, Submit, DraftBody, Notes, Browse, Abandon, Refresh, StartBackground, Restart, TrustSpec, PollBackground, Requests
 internal/tui/               root model, its own messages, keymap, styles; the only package that runs a CommandSpec
 internal/tui/msg/           the intents the screens send up to the root
 internal/tui/screens/       dashboard, newreview, submit, notes, help, inbox
@@ -37,7 +37,7 @@ Dependency direction is `tui -> session -> {engine, gh, git, index, clone, tier,
 ## Rules
 
 - Nothing under `internal/core` imports Charm or `internal/tui`. `internal/tui/deps_test.go` asserts this with `go list -deps`.
-- `os/exec` is called in three places only: `internal/core/exec`'s `Real` runner, which runs the commands that need nothing but their output; `internal/tui`, which runs the one command that needs the terminal; and `cmd/docket` for the `LookPath` check at startup. Every other core package builds an `exec.CommandSpec{Path, Args, Dir, Unset}` and hands it over. `deps_test.go` asserts this by reading direct imports, because `go list -deps` reports `os/exec` for every core package: they all reach it transitively through `internal/core/exec`.
+- `os/exec` is called in three places only: `internal/core/exec`'s `Real` runner, which runs the commands that need nothing but their output and starts the browser, waiting only long enough to catch an opener that fails at once; `internal/tui`, which runs the one command that needs the terminal; and `cmd/docket` for the `LookPath` check at startup. Every other core package builds an `exec.CommandSpec{Path, Args, Dir, Unset}` and hands it over. `deps_test.go` asserts this by reading direct imports, because `go list -deps` reports `os/exec` for every core package: they all reach it transitively through `internal/core/exec`.
 - Core packages reach the filesystem, git, and GitHub through interfaces, so tests use fakes instead of a real repo or network.
 - Installed `review-code` paths are configuration with defaults, never hardcoded constants.
 - docket never uses an Anthropic or OpenAI API key. It drives the `claude` and `codex` CLIs under the user's subscription.

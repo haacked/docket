@@ -977,11 +977,6 @@ const DefaultEditor = "vi"
 
 // EditorSpec builds the command that opens path in editor, which is $EDITOR.
 //
-// $EDITOR is a shell command line rather than an executable and its arguments.
-// git and crontab read it the same way. Running it through sh accepts both
-// "code --wait" and an executable whose path contains a space. The path is a
-// positional parameter, so the shell never reads it as code.
-//
 // The spec names no directory. The path is absolute, and the notes file may not
 // exist yet. Pointing the child at its parent would fail to start the editor on
 // exactly the record that has no notes to read.
@@ -989,9 +984,18 @@ func EditorSpec(editor, path string) exec.CommandSpec {
 	if strings.TrimSpace(editor) == "" {
 		editor = DefaultEditor
 	}
+	return shellSpec(editor, path)
+}
+
+// shellSpec runs line with arg after it. line is $EDITOR or $BROWSER, which is
+// a shell command line rather than an executable and its arguments. git and
+// crontab read $EDITOR the same way. Running it through sh accepts both
+// "code --wait" and an executable whose path contains a space. arg is a
+// positional parameter, so the shell never reads it as code.
+func shellSpec(line, arg string) exec.CommandSpec {
 	return exec.CommandSpec{
 		Path: "sh",
-		Args: []string{"-c", editor + ` "$1"`, "sh", path},
+		Args: []string{"-c", line + ` "$1"`, "sh", arg},
 	}
 }
 

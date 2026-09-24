@@ -41,6 +41,7 @@ var (
 		{Key: "enter", Short: "resume", Long: "resume or open the selected record"},
 		{Key: "s", Short: "submit", Long: "submit a drafted review"},
 		{Key: "v", Short: "notes", Long: "view the review notes"},
+		{Key: "o", Short: "github", Long: "open the review on GitHub, on the Files changed tab when it is a draft"},
 		{Key: "c", Short: "ask", Long: "ask questions about the review notes"},
 		{Key: "u", Short: "re-review", Long: "review again, appending to or overwriting the review"},
 		{Key: "x", Short: "abandon", Long: "abandon the selected record"},
@@ -66,6 +67,7 @@ var (
 	}
 	Notes = []Entry{
 		{Key: "e", Short: "edit", Long: "edit in $EDITOR"},
+		{Key: "o", Short: "github", Long: "open the review on GitHub"},
 		{Key: "↑/↓", Short: "scroll", Long: "scroll"},
 		{Key: "?", Short: "help", Long: "toggle this help"},
 		{Key: "esc/q", Short: "back", Long: "back to the dashboard"},

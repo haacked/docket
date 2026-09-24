@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 // CommandSpec is one command, complete enough to run or to print.
@@ -76,8 +77,13 @@ type Result struct {
 // terminal does not go through a Runner: internal/tui hands it to Bubble Tea,
 // which is also where a dry run is stopped, since most of what a dry run must not
 // do never reaches a Runner.
+//
+// Start launches a command that may outlive its caller, such as a browser. It
+// reports a command that fails within a short window and otherwise counts the
+// command as launched. Its output goes to /dev/null.
 type Runner interface {
 	Run(ctx context.Context, spec CommandSpec) (Result, error)
+	Start(spec CommandSpec) error
 }
 
 // Real runs commands.
@@ -102,6 +108,47 @@ func (Real) Run(ctx context.Context, spec CommandSpec) (Result, error) {
 		return res, fmt.Errorf("run %s: %w", spec.Path, err)
 	}
 	return res, nil
+}
+
+// startWindow is how long Start waits for a command that fails at once.
+// xdg-open with no handler and a $BROWSER that names a missing program both
+// exit non-zero well inside it.
+const startWindow = 2 * time.Second
+
+func (Real) Start(spec CommandSpec) error {
+	return start(spec, startWindow)
+}
+
+// start captures no output on purpose. Go reads a captured stream until every
+// process holding the pipe closes it. xdg-open and a $BROWSER command can run
+// the browser in the foreground, and the browser inherits the pipe, so a
+// captured command would not finish until the user quit the browser.
+func start(spec CommandSpec, window time.Duration) error {
+	cmd := osexec.Command(spec.Path, spec.Args...)
+	cmd.Dir = spec.Dir
+	cmd.Env = spec.Env(os.Environ())
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start %s: %w", spec.Path, err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	timer := time.NewTimer(window)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		var exitErr *osexec.ExitError
+		if errors.As(err, &exitErr) {
+			return fmt.Errorf("%s exited %d", spec.Path, exitErr.ExitCode())
+		}
+		if err != nil {
+			return fmt.Errorf("run %s: %w", spec.Path, err)
+		}
+		return nil
+	case <-timer.C:
+		return nil
+	}
 }
 
 // Fake records calls and replays canned results. It looks a result up by the
@@ -136,6 +183,12 @@ func (f *Fake) Run(_ context.Context, spec CommandSpec) (Result, error) {
 		}
 	}
 	return f.Default, nil
+}
+
+// Start records the call alongside Run's and fails the same way Run would.
+func (f *Fake) Start(spec CommandSpec) error {
+	_, err := f.Run(context.Background(), spec)
+	return err
 }
 
 // Lines returns every recorded call, for assertions.
