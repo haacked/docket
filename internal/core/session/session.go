@@ -292,6 +292,14 @@ func (s *Service) Existing(ctx context.Context, ref pr.Ref) (Found, error) {
 	}
 	found.PendingID = review.PendingReviewID(reviews, me)
 	found.Submitted = len(review.PriorSubmittedIDs(reviews, me)) > 0
+	// Prepare refuses a closed pull request. Refusing here first spares the user
+	// a choice about the existing review that Prepare would then refuse. Without
+	// a review the user has no choice to make, and the check skips the call.
+	if found.Any() {
+		if _, err := s.openPR(ctx, ref); err != nil {
+			return Found{}, err
+		}
+	}
 	return found, nil
 }
 
@@ -303,7 +311,7 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
 	}
 
-	info, err := s.GH.PR(ctx, ref)
+	info, err := s.openPR(ctx, ref)
 	if err != nil {
 		return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
 	}
@@ -347,6 +355,7 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		State:     review.StatePreparing,
 		NotesPath: plan.NotesPath,
 		Intent:    intent,
+		PRState:   info.State,
 		// The cached login, because Explain reaches here too and a dry run asks
 		// GitHub for nothing it can avoid. Prepare settles it properly below. A
 		// dry run on an install that has never cached a login therefore leaves
@@ -601,10 +610,12 @@ func (s *Service) AfterAsk(ctx context.Context, rec review.Record, childErr erro
 		return current, s.append(current)
 	}
 	// Decide reads a row with no new review of mine as unreviewed. After a Q&A
-	// session that only means nothing was posted, and an adopted row would lose
-	// the reviewed state that Decide cannot produce.
+	// session that only means that the session posted nothing. The row keeps its
+	// state. decide already keeps a reviewed row, so this rule matters for a
+	// drafted one.
 	if decided.State == review.StateUnreviewed {
-		return current, s.append(current)
+		decided.State = current.State
+		decided.ReviewID = current.ReviewID
 	}
 	return s.record(ctx, decided, reviews)
 }
@@ -645,6 +656,14 @@ func (s *Service) Rereview(ctx context.Context, rec review.Record, intent review
 	if err != nil {
 		return rec, err
 	}
+	// The stored state is only as fresh as the last detection. The pull request
+	// may have merged since. The check runs before the stop, so a refusal leaves a
+	// background session running.
+	pull, err := s.openPR(ctx, rec.Ref)
+	if err != nil {
+		return rec, err
+	}
+	rearmed.PRState = pull.State
 	// The stop reads the mode the session was started in, not the new one.
 	rec, ok := s.stopBackground(ctx, rec)
 	if !ok {
@@ -660,10 +679,14 @@ func (s *Service) Rereview(ctx context.Context, rec review.Record, intent review
 }
 
 // ExplainRereview is the command a re-review would run, without recording or
-// stopping anything.
-func (s *Service) ExplainRereview(rec review.Record, intent review.Intent, mode review.Mode) (exec.CommandSpec, error) {
+// stopping anything. It reads the pull request's state the way Rereview does, so
+// the dry run refuses what the real run refuses.
+func (s *Service) ExplainRereview(ctx context.Context, rec review.Record, intent review.Intent, mode review.Mode) (exec.CommandSpec, error) {
 	rec, err := s.rearm(rec, intent, mode)
 	if err != nil {
+		return exec.CommandSpec{}, err
+	}
+	if _, err := s.openPR(ctx, rec.Ref); err != nil {
 		return exec.CommandSpec{}, err
 	}
 	eng, err := engine.For(rec.Engine)
@@ -686,6 +709,23 @@ func refuseInProgress(rec review.Record) error {
 		return fmt.Errorf("%s is still %s", rec.Ref, rec.State)
 	}
 	return nil
+}
+
+// RefuseClosed refuses to review a pull request that merged or closed.
+func RefuseClosed(ref pr.Ref, state review.PRState) error {
+	if state.Closed() {
+		return fmt.Errorf("%s is %s, so there is nothing left to review", ref, state.Label())
+	}
+	return nil
+}
+
+// openPR reads the pull request and refuses it when it merged or closed.
+func (s *Service) openPR(ctx context.Context, ref pr.Ref) (gh.PRInfo, error) {
+	info, err := s.GH.PR(ctx, ref)
+	if err != nil {
+		return gh.PRInfo{}, err
+	}
+	return info, RefuseClosed(ref, info.State)
 }
 
 // rearm is the part of a re-review that writes nothing: the checks, and the
@@ -750,13 +790,27 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 
 // Refresh re-reads GitHub for a record whose session is over.
 func (s *Service) Refresh(ctx context.Context, rec review.Record) (review.Record, error) {
-	if !detectable(rec) {
-		return rec, fmt.Errorf("%s is %s, so there is no session to read GitHub against", rec.Ref, rec.State)
+	if err := refuseRefresh(rec); err != nil {
+		return rec, err
 	}
 	// The user asked for a fresh read, so drop what the last attempt recorded.
 	// detect writes a new Err through recordErr when this attempt fails too.
 	rec.Err = ""
 	return s.detect(ctx, rec)
+}
+
+// refuseRefresh refuses a record that a refresh must not read GitHub for. The
+// poll owns a background review that is still running. A read in the middle of
+// that session finds no draft yet. On a merged pull request, the archive that
+// follows would stop the session and delete its clone.
+func refuseRefresh(rec review.Record) error {
+	if rec.InBackgroundSession() {
+		return fmt.Errorf("%s is still reviewing in the background; docket reads GitHub for it when the session ends", rec.Ref)
+	}
+	if !detectable(rec) {
+		return fmt.Errorf("%s is %s, so there is no session to read GitHub against", rec.Ref, rec.State)
+	}
+	return nil
 }
 
 // ownPR reports whether the pull request is the signed-in user's own. An
@@ -768,10 +822,12 @@ func ownPR(author, me string) bool {
 
 // detectable reports whether a record has a session to measure GitHub against. A
 // record that never launched carries a zero StartedAt and no PriorReviewIDs, and
-// Decide then reads any earlier review of mine as this session's submission.
+// Decide then reads any earlier review of mine as this session's submission. An
+// adopted record never launched a review either. adopt stamps its StartedAt and
+// snapshots every submitted review, which gives it a window to measure against.
 func detectable(rec review.Record) bool {
 	switch rec.State {
-	case review.StateReviewing, review.StateDrafted, review.StateSubmitted, review.StateUnreviewed:
+	case review.StateReviewing, review.StateDrafted, review.StateSubmitted, review.StateUnreviewed, review.StateReviewed:
 		return true
 	default:
 		return false
@@ -787,25 +843,54 @@ func (s *Service) detect(ctx context.Context, rec review.Record) (review.Record,
 }
 
 // decide reads GitHub and works out where the review stands, writing nothing.
+//
+// It reads the pull request's state as well as its reviews, because record
+// archives a row whose pull request merged or closed. The two reads are
+// independent and run concurrently. A detection then takes about as long as one
+// read.
 func (s *Service) decide(ctx context.Context, rec review.Record) (review.Record, []review.GHReview, error) {
 	me, err := s.Login(ctx)
 	if err != nil {
 		return rec, nil, err
 	}
+	type prRead struct {
+		info gh.PRInfo
+		err  error
+	}
+	pull := make(chan prRead, 1)
+	go func() {
+		info, err := s.GH.PR(ctx, rec.Ref)
+		pull <- prRead{info: info, err: err}
+	}()
 	reviews, err := s.GH.Reviews(ctx, rec.Ref)
+	read := <-pull
 	if err != nil {
 		return rec, nil, err
 	}
+	if read.err != nil {
+		return rec, nil, read.err
+	}
 
+	rec.PRState = read.info.State
+	rec.NotesPath = s.Cfg.NotesPath(rec.Ref.Org, rec.Ref.Repo, rec.Ref.Number)
 	state, reviewID := review.Decide(reviews, me, rec.StartedAt, rec.PriorReviewIDs)
+	// Decide cannot produce reviewed. It reads an adopted row with nothing new on
+	// GitHub as unreviewed. Taking that state would drop the reviewed state that
+	// adopt gave the row.
+	if rec.State == review.StateReviewed && state == review.StateUnreviewed {
+		return rec, reviews, nil
+	}
 	rec.State = state
 	rec.ReviewID = reviewID
-	rec.NotesPath = s.Cfg.NotesPath(rec.Ref.Org, rec.Ref.Repo, rec.Ref.Number)
 	return rec, reviews, nil
 }
 
-// record writes what decide worked out, and archives a review that went in.
+// record writes what decide worked out. It archives a review that went in, and a
+// row whose pull request merged or closed with nothing pending.
 func (s *Service) record(ctx context.Context, rec review.Record, reviews []review.GHReview) (review.Record, error) {
+	if rec.Finished() {
+		return s.Archive(ctx, rec)
+	}
 	if rec.State != review.StateSubmitted {
 		return rec, s.append(rec)
 	}
@@ -952,7 +1037,7 @@ func (s *Service) Reconcile(ctx context.Context) ([]review.Record, error) {
 // RefreshAll re-reads GitHub for every record whose session is over, which is
 // what the dashboard's refresh-everything key asks for.
 func (s *Service) RefreshAll(ctx context.Context) ([]review.Record, error) {
-	return s.detectWhere(ctx, detectable)
+	return s.detectWhere(ctx, func(rec review.Record) bool { return refuseRefresh(rec) == nil })
 }
 
 // detectWhere re-reads GitHub for the records that match. A record whose

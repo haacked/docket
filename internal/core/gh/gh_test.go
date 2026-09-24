@@ -9,6 +9,7 @@ import (
 
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/pr"
+	"github.com/haacked/docket/internal/core/review"
 )
 
 var ref = pr.Ref{Org: "haacked", Repo: "docket", Number: 7}
@@ -34,7 +35,7 @@ func TestLoginFailsLoudlyWhenGhIsNotAuthenticated(t *testing.T) {
 }
 
 func TestPRReadsTheFieldsTheCloneNeeds(t *testing.T) {
-	body := `{"number":7,"title":"Add a thing","headRefName":"haacked/a-thing","headRefOid":"abc123","isDraft":false,"author":{"login":"haacked"}}`
+	body := `{"number":7,"title":"Add a thing","headRefName":"haacked/a-thing","headRefOid":"abc123","isDraft":false,"state":"MERGED","author":{"login":"haacked"}}`
 	fake := &exec.Fake{Results: map[string]exec.Result{"pr view": {Stdout: body}}}
 
 	info, err := New(fake).PR(context.Background(), ref)
@@ -48,8 +49,15 @@ func TestPRReadsTheFieldsTheCloneNeeds(t *testing.T) {
 	if info.Author.Login != "haacked" {
 		t.Errorf("author = %q", info.Author.Login)
 	}
-	if line := fake.Lines()[0]; !strings.Contains(line, "--repo haacked/docket") {
+	if info.State != review.PRMerged {
+		t.Errorf("state = %q, want %q", info.State, review.PRMerged)
+	}
+	line := fake.Lines()[0]
+	if !strings.Contains(line, "--repo haacked/docket") {
 		t.Errorf("command = %s", line)
+	}
+	if !strings.Contains(line, ",state") {
+		t.Errorf("command = %s, want it to ask for the state", line)
 	}
 }
 

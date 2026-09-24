@@ -237,3 +237,47 @@ func TestAnInteractiveRowNamesNoMode(t *testing.T) {
 		t.Errorf("an interactive row claims to be a background one:\n%s", view)
 	}
 }
+
+// The state's own name reads as "never reviewed", which misstates a pull request
+// the user may have reviewed many times before this session.
+func TestTheUnreviewedGroupSaysNoReviewWasPosted(t *testing.T) {
+	m := New(Styles{}).SetRecords([]review.Record{{
+		ID:    "rec-1",
+		Ref:   pr.Ref{Org: "haacked", Repo: "docket", Number: 7},
+		State: review.StateUnreviewed,
+	}})
+
+	view := m.View()
+	if !strings.Contains(view, "No review posted (1)") {
+		t.Errorf("the group is not titled for what happened:\n%s", view)
+	}
+	if strings.Contains(view, "Unreviewed") {
+		t.Errorf("the group still reads as never reviewed:\n%s", view)
+	}
+}
+
+func TestARowOnAMergedPullRequestSaysSo(t *testing.T) {
+	m := New(Styles{}).SetRecords([]review.Record{{
+		ID:      "rec-1",
+		Ref:     pr.Ref{Org: "haacked", Repo: "docket", Number: 7},
+		State:   review.StateDrafted,
+		PRState: review.PRMerged,
+	}})
+
+	if view := m.View(); !strings.Contains(view, "· merged") {
+		t.Errorf("the row does not say its pull request merged:\n%s", view)
+	}
+}
+
+func TestARowOnAnOpenPullRequestNamesNoState(t *testing.T) {
+	m := New(Styles{}).SetRecords([]review.Record{{
+		ID:      "rec-1",
+		Ref:     pr.Ref{Org: "haacked", Repo: "docket", Number: 7},
+		State:   review.StateDrafted,
+		PRState: review.PROpen,
+	}})
+
+	if view := m.View(); strings.Contains(view, "open") {
+		t.Errorf("the row names the state of an open pull request:\n%s", view)
+	}
+}

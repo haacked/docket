@@ -40,7 +40,9 @@ var groups = []struct {
 	// A submitted record is one whose archiving did not finish. Listing it keeps
 	// it selectable, so a refresh retries the archive.
 	{Title: "Submitted", States: []review.State{review.StateSubmitted}},
-	{Title: "Unreviewed", States: []review.State{review.StateUnreviewed}},
+	// Earlier reviews of mine may still be on GitHub. The title therefore does not
+	// say "unreviewed".
+	{Title: "No review posted", States: []review.State{review.StateUnreviewed}},
 	{Title: "Archived", States: []review.State{review.StateArchived, review.StateAbandoned}, Closed: true},
 }
 
@@ -223,6 +225,9 @@ func (m Model) row(rec review.Record, selected bool) string {
 	line := fmt.Sprintf("%s%s  %s", marker, rec.Ref, title)
 
 	meta := []string{rec.Engine, rec.Tier.String(), m.age(rec)}
+	if rec.PRState.Closed() {
+		meta = append(meta, rec.PRState.Label())
+	}
 	if rec.Mode == review.ModeBackground {
 		meta = append(meta, m.background(rec))
 	}

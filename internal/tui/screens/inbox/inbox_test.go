@@ -286,3 +286,14 @@ func TestWindow(t *testing.T) {
 		})
 	}
 }
+
+func TestARowWithNoReviewPostedSaysSo(t *testing.T) {
+	m := New(Styles{}, "claude").SetSections([]requests.Section{
+		{Rows: []requests.Row{row(1, review.StateUnreviewed)}},
+	})
+
+	view := m.View()
+	if !strings.Contains(view, "no review posted") || strings.Contains(view, "unreviewed") {
+		t.Errorf("the row does not say the session posted nothing:\n%s", view)
+	}
+}

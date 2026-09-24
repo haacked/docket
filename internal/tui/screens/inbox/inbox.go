@@ -237,7 +237,7 @@ func (m Model) row(row requests.Row, selected bool) string {
 		meta = append(meta, "draft")
 	}
 	if row.State != "" {
-		meta = append(meta, string(row.State))
+		meta = append(meta, row.State.Label())
 	}
 	return style.Render(format.Truncate(line, m.titleWidth())) + " " + m.Styles.Dim.Render("· "+strings.Join(meta, " · "))
 }

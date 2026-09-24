@@ -243,6 +243,8 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			a.status = fmt.Sprintf("%s is still %s", rec.Ref, rec.State)
 			return a, nil
 		}
+		// The stored PRState can be stale, so a closed pull request is not refused
+		// here. Rereview and ExplainRereview read GitHub again before acting.
 		a.newrev = a.newrev.Reset().SetExisting(newreview.Existing{
 			Ref:      rec.Ref.String(),
 			Engine:   rec.Engine,
@@ -444,11 +446,19 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case errMsg:
-		a.err = message.err
-		a.dash.Busy = map[string]string{}
-		a.newrev = a.newrev.ClearBusy()
-		a.sub = a.sub.ClearBusy()
-		a.reqs.Loading = false
+		a = a.resetBusy(message.err)
+		return a, a.loadRecords()
+
+	case bgStartFailedMsg:
+		a = a.resetBusy(message.err)
+		// A launch that recorded StateReviewing before it failed may still have
+		// started a session. The poll adopts that session or closes the record.
+		// r and R refuse the record until then. A poll that works clears a.err.
+		// The status line keeps the failure because the poll never writes to it.
+		if message.record.InBackgroundSession() {
+			a.status = fmt.Sprintf("%s did not start in the background: %v", message.record.Ref, message.err)
+			return a, tea.Batch(a.loadRecords(), a.pollBackground())
+		}
 		return a, a.loadRecords()
 	}
 
@@ -584,6 +594,18 @@ func (a App) record(id string) (review.Record, bool) {
 		return review.Record{}, false
 	}
 	return a.dash.Records[i], true
+}
+
+// resetBusy records a failure for the status line and clears every busy marker.
+// Nothing records which marker the failed work set. resetBusy therefore clears
+// all of them.
+func (a App) resetBusy(err error) App {
+	a.err = err
+	a.dash.Busy = map[string]string{}
+	a.newrev = a.newrev.ClearBusy()
+	a.sub = a.sub.ClearBusy()
+	a.reqs.Loading = false
+	return a
 }
 
 // loaded and detected give the commands below their one shared shape. Each runs
@@ -924,7 +946,7 @@ func (a App) rereview(rec review.Record, intent review.Intent, mode review.Mode)
 func (a App) explainRereview(rec review.Record, intent review.Intent, mode review.Mode) tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
-		spec, err := svc.ExplainRereview(rec, intent, mode)
+		spec, err := svc.ExplainRereview(context.Background(), rec, intent, mode)
 		if err != nil {
 			return errMsg{err: err}
 		}
@@ -1010,8 +1032,14 @@ func wouldAbandon(rec review.Record) string {
 func describe(rec review.Record) string {
 	switch rec.State {
 	case review.StateArchived:
+		if rec.SubmittedAt == nil && rec.PRState.Closed() {
+			return fmt.Sprintf("%s is %s, so docket archived it. Notes stay at %s", rec.Ref, rec.PRState.Label(), rec.NotesPath)
+		}
 		return fmt.Sprintf("%s submitted and archived. Notes stay at %s", rec.Ref, rec.NotesPath)
 	case review.StateDrafted:
+		if rec.PRState.Closed() {
+			return fmt.Sprintf("%s is %s and your review is still pending. Press s to submit it or x to abandon", rec.Ref, rec.PRState.Label())
+		}
 		if rec.Adopted() {
 			return fmt.Sprintf("%s has a pending review. Press s to submit it or c to ask about it", rec.Ref)
 		}
@@ -1019,7 +1047,7 @@ func describe(rec review.Record) string {
 	case review.StateReviewed:
 		return fmt.Sprintf("%s has your review notes. Press c to ask about them or u to review it again", rec.Ref)
 	case review.StateUnreviewed:
-		return fmt.Sprintf("%s has no review of yours on GitHub. Nothing was cleaned up", rec.Ref)
+		return fmt.Sprintf("%s: the session ended without posting a review. Press enter to resume it, u to review again, or x to abandon", rec.Ref)
 	case review.StateAbandoned:
 		return fmt.Sprintf("%s abandoned", rec.Ref)
 	default:
@@ -1118,14 +1146,21 @@ func notesFor(statuses map[string]engine.BGStatus) map[string]string {
 }
 
 // startBackground launches a review that runs without the terminal. The poll
-// that follows is the one detectedMsg arms for any record that comes back
-// running, so this adds none of its own: two would read the index and the agent
-// twice for one keystroke.
+// that follows a success is the one detectedMsg arms for any record that comes
+// back running, so this adds none of its own there: two would read the index
+// and the agent twice for one keystroke. A failure can come after StartBackground
+// recorded StateReviewing or started a session. detected would replace the
+// record with a bare errMsg. A failure therefore goes out as bgStartFailedMsg,
+// which carries the record.
 func (a App) startBackground(rec review.Record) tea.Cmd {
 	svc := a.svc
-	return detected(func() (review.Record, error) {
-		return svc.StartBackground(context.Background(), rec)
-	})
+	return func() tea.Msg {
+		out, err := svc.StartBackground(context.Background(), rec)
+		if err != nil {
+			return bgStartFailedMsg{record: out, err: err}
+		}
+		return detectedMsg{record: out}
+	}
 }
 
 // openBackground puts a running session on the terminal. Which command does that

@@ -18,11 +18,13 @@ import (
 	"github.com/haacked/docket/internal/core/review"
 )
 
-// PRInfo is the pull request metadata docket needs to clone and to label a row.
+// PRInfo is the pull request metadata docket needs to clone, to label a row, and
+// to tell whether the pull request is still open.
 type PRInfo struct {
-	Number      int    `json:"number"`
-	Title       string `json:"title"`
-	HeadRefName string `json:"headRefName"`
+	Number      int            `json:"number"`
+	Title       string         `json:"title"`
+	HeadRefName string         `json:"headRefName"`
+	State       review.PRState `json:"state"`
 	Author      struct {
 		Login string `json:"login"`
 	} `json:"author"`
@@ -65,7 +67,7 @@ func (c *CLI) PR(ctx context.Context, ref pr.Ref) (PRInfo, error) {
 	res, err := c.run(ctx,
 		"pr", "view", strconv.Itoa(ref.Number),
 		"--repo", ref.Slug(),
-		"--json", "number,title,author,headRefName",
+		"--json", "number,title,author,headRefName,state",
 	)
 	if err != nil {
 		return PRInfo{}, fmt.Errorf("gh pr view %s: %w", ref, err)
