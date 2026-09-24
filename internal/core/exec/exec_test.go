@@ -54,15 +54,39 @@ func TestRealRunsACommand(t *testing.T) {
 	}
 }
 
-func TestRealStartDoesNotWaitForTheCommand(t *testing.T) {
+// A browser that xdg-open or $BROWSER runs in the foreground is still running
+// when the window closes. That counts as launched.
+func TestStartCountsACommandStillRunningAsLaunched(t *testing.T) {
 	began := time.Now()
 
-	if err := (Real{}).Start(CommandSpec{Path: "sleep", Args: []string{"5"}}); err != nil {
-		t.Fatalf("Start: %v", err)
+	if err := start(CommandSpec{Path: "sleep", Args: []string{"5"}}, 200*time.Millisecond); err != nil {
+		t.Fatalf("start: %v", err)
 	}
 
 	if waited := time.Since(began); waited > 2*time.Second {
-		t.Errorf("Start took %s, want it to return before the command ends", waited)
+		t.Errorf("start took %s, want it to return when the window closes", waited)
+	}
+}
+
+// xdg-open with no handler, or a $BROWSER naming a missing program, starts
+// and then exits non-zero at once.
+func TestStartReportsACommandThatFailsStraightAway(t *testing.T) {
+	err := start(CommandSpec{Path: "sh", Args: []string{"-c", "exit 3"}}, 5*time.Second)
+
+	if err == nil || !strings.Contains(err.Error(), "exited 3") {
+		t.Errorf("start = %v, want the exit code reported", err)
+	}
+}
+
+func TestStartReturnsOnceTheCommandSucceeds(t *testing.T) {
+	began := time.Now()
+
+	if err := start(CommandSpec{Path: "true"}, 5*time.Second); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	if waited := time.Since(began); waited > 2*time.Second {
+		t.Errorf("start took %s, want it to return when the command exits", waited)
 	}
 }
 
