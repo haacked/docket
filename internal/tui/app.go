@@ -5,6 +5,7 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
 	"github.com/haacked/docket/internal/core/tier"
+	"github.com/haacked/docket/internal/tui/format"
 	"github.com/haacked/docket/internal/tui/msg"
 	"github.com/haacked/docket/internal/tui/screens/dashboard"
 	"github.com/haacked/docket/internal/tui/screens/help"
@@ -212,14 +214,28 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.startBatch(message.URLs, message.Engine)
 
 	case batchStartedMsg:
-		a.status = fmt.Sprintf("Started %d background reviews", message.started)
+		status := fmt.Sprintf("Started %d background %s", message.started, format.Plural(message.started, "review"))
 		if len(message.skipped) > 0 {
-			a.status += fmt.Sprintf("\n%d already reviewed, start each with n to append or overwrite:\n%s", len(message.skipped), strings.Join(message.skipped, "\n"))
+			status += fmt.Sprintf("\n%d already reviewed, start each with n to append or overwrite:\n%s", len(message.skipped), strings.Join(message.skipped, "\n"))
 		}
 		if len(message.failed) > 0 {
-			a.status += fmt.Sprintf("\n%d failed:\n%s", len(message.failed), strings.Join(message.failed, "\n"))
+			status += fmt.Sprintf("\n%d failed:\n%s", len(message.failed), strings.Join(message.failed, "\n"))
 		}
-		return a, tea.Batch(a.loadRecords(), a.pollBackground())
+		a = a.report(status, message.retry)
+		cmds := []tea.Cmd{a.loadRecords(), a.pollBackground()}
+		if len(message.untrusted) > 0 {
+			cmds = append(cmds, a.trust(message.untrusted))
+		}
+		return a, tea.Batch(cmds...)
+
+	case trustNeededMsg:
+		for _, rec := range message.records {
+			delete(a.dash.Busy, rec.ID)
+		}
+		return a, tea.Batch(a.loadRecords(), a.trust(message.records))
+
+	case trustExitedMsg:
+		return a.trusted(message)
 
 	case msg.StartReview:
 		return a.startReview(message)
@@ -285,6 +301,20 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// agent's listing is a read, which is all a dry run is allowed.
 		if rec.HasBackgroundSession() {
 			return a, a.openBackground(rec, a.dryRun)
+		}
+		// No session ran, so there is nothing to resume. Only a background
+		// launch can be refused, so the launch runs again in the background.
+		if rec.State == review.StateNotStarted {
+			if a.dryRun {
+				return a, a.explainRestart(rec)
+			}
+			// A second enter before the launch returns would start a second
+			// session that nothing polls or stops.
+			if _, busy := a.dash.Busy[rec.ID]; busy {
+				return a, nil
+			}
+			a.dash.Busy[rec.ID] = "starting"
+			return a, a.restart(rec)
 		}
 		if a.dryRun {
 			return a, a.explainResume(rec)
@@ -535,6 +565,8 @@ func exited(launch launchMsg, err error) tea.Msg {
 		return editorExitedMsg{record: launch.record, err: err}
 	case launchAsk:
 		return askExitedMsg{record: launch.record, err: err}
+	case launchTrust:
+		return trustExitedMsg{records: launch.waiting, err: err}
 	default:
 		return childExitedMsg{record: launch.record, err: err}
 	}
@@ -599,6 +631,17 @@ func (a App) record(id string) (review.Record, bool) {
 // resetBusy records a failure for the status line and clears every busy marker.
 // Nothing records which marker the failed work set. resetBusy therefore clears
 // all of them.
+// report puts a line on the status. A trust prompt takes the terminal between a
+// batch's report and the reports that follow the prompt, so those add to the
+// status rather than replace the batch's list of what it skipped.
+func (a App) report(line string, after bool) App {
+	if after && a.status != "" {
+		line = a.status + "\n" + line
+	}
+	a.status = line
+	return a
+}
+
 func (a App) resetBusy(err error) App {
 	a.err = err
 	a.dash.Busy = map[string]string{}
@@ -768,10 +811,12 @@ func (a App) startBatch(urls []string, engineName string) tea.Cmd {
 		ctx := context.Background()
 		var done batchStartedMsg
 		for _, url := range urls {
-			ref, err := startOne(ctx, svc, url, engineName)
+			ref, rec, err := startOne(ctx, svc, url, engineName)
 			switch {
 			case errors.Is(err, errHasReview):
 				done.skipped = append(done.skipped, ref.String())
+			case errors.Is(err, session.ErrUntrusted):
+				done.untrusted = append(done.untrusted, rec)
 			case err != nil:
 				done.failed = append(done.failed, err.Error())
 			default:
@@ -788,22 +833,94 @@ func (a App) startBatch(urls []string, engineName string) tea.Cmd {
 // a background session where nobody can answer it.
 var errHasReview = errors.New("already has a review")
 
-func startOne(ctx context.Context, svc *session.Service, url, engineName string) (pr.Ref, error) {
+// startOne returns the record it started. When a start fails after Prepare wrote
+// the record, it returns that record too.
+func startOne(ctx context.Context, svc *session.Service, url, engineName string) (pr.Ref, review.Record, error) {
 	ref, err := pr.ParseRef(url, "")
 	if err != nil {
-		return ref, err
+		return ref, review.Record{}, err
 	}
 	if err := checkNoReview(ctx, svc, ref); err != nil {
-		return ref, err
+		return ref, review.Record{}, err
 	}
 	rec, _, err := svc.Prepare(ctx, ref, engineName, review.ModeBackground, review.IntentReview)
 	if err != nil {
-		return ref, fmt.Errorf("%s: %w", ref, err)
+		return ref, rec, fmt.Errorf("%s: %w", ref, err)
 	}
-	if _, err := svc.StartBackground(ctx, rec); err != nil {
-		return ref, fmt.Errorf("%s: %w", ref, err)
+	rec, err = svc.StartBackground(ctx, rec)
+	if err != nil {
+		return ref, rec, fmt.Errorf("%s: %w", ref, err)
 	}
-	return ref, nil
+	return ref, rec, nil
+}
+
+// trust hands the terminal to the agent's trust prompt for the first record's
+// directory. The prompt's exit starts the records in that directory again and
+// then asks about the next directory, so each directory is asked about once.
+func (a App) trust(records []review.Record) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		spec, err := svc.TrustSpec(records[0])
+		if err != nil {
+			// trusted reports this directory and still asks about the others.
+			return trustExitedMsg{records: records, err: err}
+		}
+		return launchMsg{record: records[0], spec: spec, kind: launchTrust, waiting: records}
+	}
+}
+
+// trusted starts again the launches that were waiting on the directory the
+// prompt asked about, and asks about the next directory. A user who declines one
+// directory may still trust the next, because each prompt names a different
+// repository.
+func (a App) trusted(exited trustExitedMsg) (tea.Model, tea.Cmd) {
+	dir := exited.records[0].Dir
+	var here, rest []review.Record
+	for _, rec := range exited.records {
+		if rec.Dir == dir {
+			here = append(here, rec)
+		} else {
+			rest = append(rest, rec)
+		}
+	}
+
+	// The prompt can leave the terminal dirty on its way out, so repaint before
+	// anything else draws.
+	cmds := []tea.Cmd{tea.ClearScreen}
+	if exited.err != nil {
+		reason := fmt.Sprintf("%s is still not trusted", dir)
+		// An exit status is the user declining. Any other error means the
+		// prompt never ran.
+		if exitErr := (*osexec.ExitError)(nil); !errors.As(exited.err, &exitErr) {
+			reason = fmt.Sprintf("the trust prompt for %s did not run: %v", dir, exited.err)
+		}
+		a = a.report(fmt.Sprintf("%s, so %d background %s did not start", reason, len(here), format.Plural(len(here), "review")), true)
+		cmds = append(cmds, a.loadRecords())
+	} else {
+		cmds = append(cmds, a.retryBackground(here))
+	}
+	if len(rest) > 0 {
+		cmds = append(cmds, a.trust(rest))
+	}
+	return a, tea.Batch(cmds...)
+}
+
+// retryBackground starts again the launches the agent refused for trust. A
+// second refusal counts as a failure and does not bring the prompt back.
+// Otherwise a prompt that did not help would return after every launch.
+func (a App) retryBackground(records []review.Record) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		done := batchStartedMsg{retry: true}
+		for _, rec := range records {
+			if _, err := svc.StartBackground(context.Background(), rec); err != nil {
+				done.failed = append(done.failed, fmt.Sprintf("%s: %v", rec.Ref, err))
+				continue
+			}
+			done.started++
+		}
+		return done
+	}
 }
 
 func checkNoReview(ctx context.Context, svc *session.Service, ref pr.Ref) error {
@@ -1011,6 +1128,17 @@ func checkEngine(name string) error {
 	return nil
 }
 
+func (a App) explainRestart(rec review.Record) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		spec, err := svc.ExplainRestart(context.Background(), rec)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		return statusMsg{text: "Would run: " + spec.String()}
+	}
+}
+
 func (a App) explainResume(rec review.Record) tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
@@ -1112,7 +1240,7 @@ func (a App) applyPoll(polled bgPolledMsg) (tea.Model, tea.Cmd) {
 	a.err = polled.err
 	if polled.records != nil {
 		a.dash = a.dash.SetRecords(polled.records)
-		a.dash.Background = polled.notes
+		a.dash.Background = polled.progress
 	}
 	if !a.watching() || a.polling {
 		return a, nil
@@ -1130,19 +1258,25 @@ func (a App) pollBackground() tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
 		records, statuses, err := svc.PollBackground(context.Background())
-		return bgPolledMsg{records: records, notes: notesFor(statuses), err: err}
+		return bgPolledMsg{records: records, progress: progressFor(statuses), err: err}
 	}
 }
 
-// notesFor renders each status for the dashboard, which holds no engine to ask.
-// The activity is what says a session is waiting at a permission prompt rather
-// than working, so both go on the row.
-func notesFor(statuses map[string]engine.BGStatus) map[string]string {
-	notes := make(map[string]string, len(statuses))
+// progressFor hands each session's progress to the dashboard, which holds no
+// engine to ask. The listing answers when claude's status file does not: a
+// session with no detail shows the agent's state, and a session the listing
+// reports blocked is waiting for the user.
+func progressFor(statuses map[string]engine.BGStatus) map[string]review.Progress {
+	progress := make(map[string]review.Progress, len(statuses))
 	for id, status := range statuses {
-		notes[id] = strings.TrimSpace(status.State + " " + status.Activity)
+		p := status.Progress
+		p.Detail = cmp.Or(p.Detail, status.State)
+		if status.Blocked {
+			p.Needs = cmp.Or(p.Needs, "your input")
+		}
+		progress[id] = p
 	}
-	return notes
+	return progress
 }
 
 // startBackground launches a review that runs without the terminal. The poll
@@ -1154,13 +1288,24 @@ func notesFor(statuses map[string]engine.BGStatus) map[string]string {
 // which carries the record.
 func (a App) startBackground(rec review.Record) tea.Cmd {
 	svc := a.svc
-	return func() tea.Msg {
-		out, err := svc.StartBackground(context.Background(), rec)
-		if err != nil {
-			return bgStartFailedMsg{record: out, err: err}
-		}
-		return detectedMsg{record: out}
+	return func() tea.Msg { return started(svc.StartBackground(context.Background(), rec)) }
+}
+
+// restart launches again a background review the agent refused.
+func (a App) restart(rec review.Record) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg { return started(svc.Restart(context.Background(), rec)) }
+}
+
+// started is the message a background launch answers with.
+func started(out review.Record, err error) tea.Msg {
+	if errors.Is(err, session.ErrUntrusted) {
+		return trustNeededMsg{records: []review.Record{out}}
 	}
+	if err != nil {
+		return bgStartFailedMsg{record: out, err: err}
+	}
+	return detectedMsg{record: out}
 }
 
 // openBackground puts a running session on the terminal. Which command does that

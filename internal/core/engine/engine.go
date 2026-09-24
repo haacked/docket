@@ -19,6 +19,9 @@ type Paths struct {
 	Grant []string
 	// CodexSessions is where codex records a session.
 	CodexSessions string
+	// ClaudeJobs is where claude's background service keeps a status file for
+	// each background session.
+	ClaudeJobs string
 }
 
 // Engine launches and resumes a review session.

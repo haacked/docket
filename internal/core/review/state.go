@@ -26,6 +26,10 @@ const (
 	// reads such a pull request as unreviewed, which misstates a review the user
 	// already did.
 	StateReviewed State = "reviewed"
+	// StateNotStarted is a background review whose launch the agent refused, so
+	// no session ran. Nothing on GitHub can say anything about it. Detection
+	// would read it as unreviewed and drop the reason it never ran.
+	StateNotStarted State = "not_started"
 )
 
 // Intent is what the user asked for when a pull request already had a review.
@@ -130,10 +134,14 @@ func (s PRState) Label() string {
 // last session posted nothing new of mine. It does not mean that the user never
 // reviewed the pull request, so its label is "no review posted".
 func (s State) Label() string {
-	if s == StateUnreviewed {
+	switch s {
+	case StateUnreviewed:
 		return "no review posted"
+	case StateNotStarted:
+		return "did not start"
+	default:
+		return string(s)
 	}
-	return string(s)
 }
 
 // Open reports whether the record still wants the user's attention.
@@ -144,6 +152,19 @@ func (s State) Open() bool {
 	default:
 		return true
 	}
+}
+
+// Progress is the agent's own account of a running background session.
+type Progress struct {
+	// Detail is the agent's one-line summary of what the session is doing.
+	Detail string
+	// Needs is what the session is waiting for the user to do. It is empty
+	// while the session works on its own.
+	Needs string
+	// Agents is how many sub-agents the session is running.
+	Agents int
+	// UpdatedAt is when the agent last rewrote its account of the session.
+	UpdatedAt time.Time
 }
 
 // Mode is how the session runs.
@@ -180,8 +201,12 @@ type Record struct {
 	NotesPath      string     `json:"notes_path"`
 	OwnPR          bool       `json:"own_pr"`
 	PriorReviewIDs []int64    `json:"prior_review_ids"`
-	Err            string     `json:"err"`
-	Intent         Intent     `json:"intent"`
+	// PriorPendingID is my pending review when the session launched, or 0.
+	// review-code replaces it only when it posts its own draft, so a session
+	// that is still running may leave it in place.
+	PriorPendingID int64  `json:"prior_pending_id"`
+	Err            string `json:"err"`
+	Intent         Intent `json:"intent"`
 	// AskSessionID names the question-and-answer session about the notes. docket
 	// keeps it apart from SessionID, so asking about a review never replaces the
 	// review session that enter resumes.

@@ -231,7 +231,7 @@ func (m Model) row(row requests.Row, selected bool) string {
 		mark = "   "
 	}
 
-	line := fmt.Sprintf("%s%s %s  %s", cursor, mark, row.Ref, row.Title)
+	head := fmt.Sprintf("%s%s %s  ", cursor, mark, row.Ref)
 	meta := []string{row.Author, m.age(row.UpdatedAt)}
 	if row.IsDraft {
 		meta = append(meta, "draft")
@@ -239,7 +239,11 @@ func (m Model) row(row requests.Row, selected bool) string {
 	if row.State != "" {
 		meta = append(meta, row.State.Label())
 	}
-	return style.Render(format.Truncate(line, m.titleWidth())) + " " + m.Styles.Dim.Render("· "+strings.Join(meta, " · "))
+	left, fitted := format.Row(head, row.Title, "· "+strings.Join(meta, " · "), format.Width(m.Width))
+	if fitted == "" {
+		return style.Render(left)
+	}
+	return style.Render(left) + " " + m.Styles.Dim.Render(fitted)
 }
 
 func (m Model) age(t time.Time) string {
@@ -249,5 +253,3 @@ func (m Model) age(t time.Time) string {
 	}
 	return format.Ago(now.Sub(t))
 }
-
-func (m Model) titleWidth() int { return max(20, format.Width(m.Width)-30) }

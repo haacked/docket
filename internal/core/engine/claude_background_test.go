@@ -111,9 +111,6 @@ func TestParseStatusKeepsOnlyTheSessionsDocketCouldHaveStarted(t *testing.T) {
 	if working.Done {
 		t.Errorf("state %q should not read as finished", working.State)
 	}
-	if working.Activity != "busy" {
-		t.Errorf("activity = %q, want what the session is doing", working.Activity)
-	}
 }
 
 func TestParseStatusRefusesOutputThatIsNotTheListing(t *testing.T) {
@@ -314,5 +311,23 @@ func TestRecoverIgnoresSessionsThatCannotBeThisRecords(t *testing.T) {
 
 	if _, ok := (Claude{}).RecoverBackgroundID(rec, exec.Result{Stdout: "[]"}); ok {
 		t.Error("a record adopted a session out of an empty listing")
+	}
+}
+
+// A session that ends its turn with a question keeps its process and reports
+// blocked. It is not done, and docket has to know it is waiting.
+func TestParseStatusReportsABlockedSession(t *testing.T) {
+	statuses, err := Claude{}.ParseStatus(exec.Result{
+		Stdout: `[{"id": "aaaaaaaa", "kind": "background", "state": "blocked", "status": "idle", "pid": 5}]`,
+	})
+	if err != nil {
+		t.Fatalf("ParseStatus: %v", err)
+	}
+	got := statuses["aaaaaaaa"]
+	if !got.Blocked {
+		t.Error("a blocked session did not read as blocked")
+	}
+	if got.Done {
+		t.Error("a blocked session read as finished")
 	}
 }

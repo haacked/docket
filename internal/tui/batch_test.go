@@ -79,6 +79,22 @@ func batchService(t *testing.T) (*session.Service, *exec.Fake) {
 	}, runner
 }
 
+// cloningService is batchService set up to start background reviews under
+// claude. No repos.conf entry makes each review a tier-2 clone, which checks
+// that the clone landed on the head branch with files in it. claude reports an
+// id for every start.
+func cloningService(t *testing.T) (*session.Service, *exec.Fake) {
+	t.Helper()
+	onPath(t, "claude")
+	svc, runner := batchService(t)
+	svc.Cfg.GitHubUser = "haacked"
+	runner.Results["branch --show-current"] = exec.Result{Stdout: "haacked/a-thing\n"}
+	runner.Results["ls-files"] = exec.Result{Stdout: "README.md\n"}
+	runner.Results["/reviews"] = exec.Result{Stdout: "[]"}
+	runner.Results["--bg"] = exec.Result{Stdout: "backgrounded · 0a1b2c3d\n"}
+	return svc, runner
+}
+
 // drain runs a command and every command a batch holds, and returns the
 // messages they produced.
 func drain(cmd tea.Cmd) []tea.Msg {
@@ -149,16 +165,9 @@ func onPath(t *testing.T, names ...string) {
 // A pull request docket already has open fails in Prepare. The batch counts it
 // and still starts the pull request after it.
 func TestABatchStartsThePullRequestsAfterOneThatFails(t *testing.T) {
-	onPath(t, "claude")
-	svc, runner := batchService(t)
-	svc.Cfg.GitHubUser = "haacked"
-	// No repos.conf entry makes each review a tier-2 clone, which checks that the
-	// clone landed on the head branch with files in it.
-	runner.Results["branch --show-current"] = exec.Result{Stdout: "haacked/a-thing\n"}
-	runner.Results["ls-files"] = exec.Result{Stdout: "README.md\n"}
-	runner.Results["--bg"] = exec.Result{Stdout: "backgrounded · 0a1b2c3d\n"}
+	svc, _ := cloningService(t)
 	open := "https://github.com/haacked/docket/pull/7"
-	if _, err := startOne(context.Background(), svc, open, "claude"); err != nil {
+	if _, _, err := startOne(context.Background(), svc, open, "claude"); err != nil {
 		t.Fatalf("starting the first review: %v", err)
 	}
 
@@ -200,12 +209,7 @@ func writeNotes(t *testing.T, svc *session.Service, number int) {
 // whether to overwrite them in a session nobody watches. The batch leaves it
 // alone and still starts the pull request after it.
 func TestABatchSkipsAPullRequestThatAlreadyHasAReview(t *testing.T) {
-	onPath(t, "claude")
-	svc, runner := batchService(t)
-	svc.Cfg.GitHubUser = "haacked"
-	runner.Results["branch --show-current"] = exec.Result{Stdout: "haacked/a-thing\n"}
-	runner.Results["ls-files"] = exec.Result{Stdout: "README.md\n"}
-	runner.Results["--bg"] = exec.Result{Stdout: "backgrounded · 0a1b2c3d\n"}
+	svc, _ := cloningService(t)
 	writeNotes(t, svc, 7)
 
 	reviewed, fresh := "https://github.com/haacked/docket/pull/7", "https://github.com/haacked/docket/pull/8"

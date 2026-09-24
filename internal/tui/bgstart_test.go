@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -11,18 +10,13 @@ import (
 	"github.com/haacked/docket/internal/core/review"
 )
 
-// A launch that fails after StartBackground recorded StateReviewing may have
-// started a session with no id recorded. r and R refuse that record. The poll has
-// to run now to adopt the session or close the record, not at the next restart.
+// A launch that exited zero without printing an id may have started a session
+// docket has no id for. r and R refuse that record. The poll has to run now to
+// adopt the session or close the record, not at the next restart.
 func TestAFailedLaunchThatRecordedReviewingPollsRightAway(t *testing.T) {
-	onPath(t, "claude")
-	svc, runner := batchService(t)
-	svc.Cfg.GitHubUser = "haacked"
-	runner.Results["branch --show-current"] = exec.Result{Stdout: "haacked/a-thing\n"}
-	runner.Results["ls-files"] = exec.Result{Stdout: "README.md\n"}
+	svc, runner := cloningService(t)
 	runner.Results["agents --json"] = exec.Result{Stdout: "[]"}
-	runner.Results["/reviews"] = exec.Result{Stdout: "[]"}
-	runner.Errs = map[string]error{"--bg": errors.New("claude exited 1")}
+	runner.Results["--bg"] = exec.Result{Stdout: "Starting background service…\n"}
 
 	ref, err := pr.ParseRef("https://github.com/haacked/docket/pull/7", "")
 	if err != nil {
@@ -65,7 +59,7 @@ func TestAFailedLaunchThatRecordedReviewingPollsRightAway(t *testing.T) {
 	// A poll that works clears a.err. The launch failure still has to be on screen.
 	next, _ = a.Update(*poll)
 	a = next.(App)
-	if a.err == nil && !strings.Contains(a.status, "claude exited 1") {
+	if a.err == nil && !strings.Contains(a.status, "started no background session") {
 		t.Errorf("the poll wiped the launch failure off the status line: status %q", a.status)
 	}
 }
