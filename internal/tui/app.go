@@ -351,9 +351,9 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.loadDraft(rec)
 
 	case draftLoadedMsg:
-		// The read runs in a command, so it can land after the user left the
-		// screen or opened another record's.
-		if a.screen != msg.Submit || message.record.ID != a.sub.Record.ID {
+		// The read runs in a command. It can land after the user left the screen,
+		// opened another record's, or reopened this one for a newer draft.
+		if a.screen != msg.Submit || message.record.ID != a.sub.Record.ID || message.record.ReviewID != a.sub.Record.ReviewID {
 			return a, nil
 		}
 		if message.err != nil {

@@ -100,6 +100,25 @@ func TestADraftSummaryForAnotherScreenIsIgnored(t *testing.T) {
 	}
 }
 
+// A new draft keeps the record's ID. A read of the old draft that lands after the
+// screen reopens would otherwise fill in the old draft's summary.
+func TestADraftSummaryForAnOlderDraftOfTheSameRecordIsIgnored(t *testing.T) {
+	old := draftedRecord()
+	newer := old
+	newer.ReviewID = old.ReviewID + 1
+
+	next, _ := liveApp(old).Update(msg.OpenSubmit{ID: old.ID})
+	a := next.(App)
+	a.dash = a.dash.SetRecords([]review.Record{newer})
+	next, _ = a.Update(msg.OpenSubmit{ID: newer.ID})
+
+	next, _ = next.(App).Update(draftLoadedMsg{record: old, body: "The summary of the older draft."})
+
+	if got := next.(App).sub.Body.Value(); got != "" {
+		t.Errorf("body = %q, want the older draft's summary dropped", got)
+	}
+}
+
 // The screen still submits without the summary, because an empty body keeps
 // whatever the draft holds. A failed read therefore goes to the status line. It
 // does not go through the error path, which clears the dashboard's busy markers.
