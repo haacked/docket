@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"time"
 
 	"github.com/haacked/docket/internal/core/engine"
 	"github.com/haacked/docket/internal/core/exec"
@@ -89,12 +91,11 @@ func (s *Service) Restart(ctx context.Context, rec review.Record) (review.Record
 	if err != nil {
 		return rec, err
 	}
-	ids, err := s.priorIDs(ctx, rec.Ref)
+	rec.PRState = pull.State
+	rec, err = s.snapshot(ctx, rec)
 	if err != nil {
 		return rec, err
 	}
-	rec.PRState = pull.State
-	rec.PriorReviewIDs = ids
 	return s.StartBackground(ctx, rec)
 }
 
@@ -160,9 +161,16 @@ func (s *Service) PollBackground(ctx context.Context) ([]review.Record, map[stri
 		}
 		for _, i := range indexes {
 			rec, status, running := s.applyStatus(ctx, records[i], found)
-			records[i] = rec
 			if running {
 				status.Progress = bg.Progress(rec.BGID, paths)
+				if status.Blocked {
+					rec, running = s.settleBlocked(ctx, rec, status)
+				} else {
+					s.forgetBlock(rec.BGID)
+				}
+			}
+			records[i] = rec
+			if running {
 				statuses[rec.ID] = status
 			}
 		}
@@ -246,6 +254,79 @@ func (s *Service) applyStatus(ctx context.Context, rec review.Record, found map[
 	return rec, status, true
 }
 
+// settleBlocked settles a session that is waiting on the user, and reports
+// whether the session is still running. It reads GitHub once for each stretch
+// the session stays blocked, keyed on the time the agent last updated its
+// account, because a session stays blocked until the user answers it.
+func (s *Service) settleBlocked(ctx context.Context, rec review.Record, status engine.BGStatus) (review.Record, bool) {
+	s.blockMu.Lock()
+	seen, checked := s.blockSeen[rec.BGID]
+	if checked && seen.Equal(status.Progress.UpdatedAt) {
+		s.blockMu.Unlock()
+		return rec, true
+	}
+	if s.blockSeen == nil {
+		s.blockSeen = map[string]time.Time{}
+	}
+	s.blockSeen[rec.BGID] = status.Progress.UpdatedAt
+	s.blockMu.Unlock()
+
+	settled, running, err := s.settle(ctx, rec)
+	if err != nil || !running {
+		// A failure is tried again on the next poll. A record that moved on
+		// may come back to running when the user opens its session, and the
+		// next block then has to be read.
+		s.forgetBlock(rec.BGID)
+	}
+	if err != nil {
+		return rec, true
+	}
+	return settled, running
+}
+
+func (s *Service) forgetBlock(id string) {
+	s.blockMu.Lock()
+	delete(s.blockSeen, id)
+	s.blockMu.Unlock()
+}
+
+// settle reads GitHub for a blocked session, and reports whether the session is
+// still running. review-code ends a background review by asking whether to
+// submit the draft it posted, and claude reports that session as blocked, not
+// done. The session's own draft or submission moves the record on, so the user
+// can act on it from docket. claude still holds the session, so enter opens it.
+// A session that blocked before posting anything keeps running.
+func (s *Service) settle(ctx context.Context, rec review.Record) (review.Record, bool, error) {
+	decided, reviews, err := s.decide(ctx, rec)
+	if err != nil {
+		return rec, true, err
+	}
+	if !ownWork(rec, decided) {
+		return rec, true, nil
+	}
+	saved, err := s.record(ctx, decided, reviews)
+	if err != nil {
+		return rec, true, err
+	}
+	return saved, false, nil
+}
+
+// ownWork reports whether what detection decided for a session that is still
+// running is that session's own draft or submission. Detection reads any
+// pending review as a draft, and it counts a submission a little before the
+// launch because of clock skew. A finished session is judged that way too, but
+// a running one may not have posted anything yet.
+func ownWork(rec, decided review.Record) bool {
+	switch decided.State {
+	case review.StateDrafted:
+		return decided.ReviewID != rec.PriorPendingID
+	case review.StateSubmitted:
+		return decided.ReviewID != rec.PriorPendingID && !slices.Contains(rec.PriorReviewIDs, decided.ReviewID)
+	default:
+		return false
+	}
+}
+
 // readStatus answers what a poll and a closed session both ask: is this session
 // over, and what has the agent said about it. A session the agent no longer
 // lists counts as over. A record waiting on a session nobody holds would wait
@@ -306,6 +387,12 @@ func (s *Service) afterBackgroundExit(ctx context.Context, rec review.Record) (r
 	rec.SessionID = status.SessionID
 	if over {
 		return s.detect(ctx, rec)
+	}
+	// A session the user left unanswered keeps the draft it posted.
+	if status.Blocked {
+		if settled, running, err := s.settle(ctx, rec); err == nil && !running {
+			return settled, nil
+		}
 	}
 	// The user left the session working. Opening it may also have restarted a
 	// review that detection had already closed, so the record goes back to

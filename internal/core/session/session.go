@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/haacked/docket/internal/core/clone"
@@ -41,6 +42,13 @@ type Service struct {
 	Runner exec.Runner
 	Now    func() time.Time
 	NewID  func() string
+
+	// blockSeen maps a background id to the agent's update time when docket
+	// last read GitHub for that session while it was blocked. A session stays
+	// blocked until the user answers it, so the poll reads GitHub once for each
+	// stretch instead of on every tick.
+	blockMu   sync.Mutex
+	blockSeen map[string]time.Time
 }
 
 // Plan is what Prepare worked out, for the UI to show before launching.
@@ -211,6 +219,7 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mo
 	rec.OwnPR = ownPR(rec.Author, me)
 
 	rec.PriorReviewIDs = review.PriorSubmittedIDs(reviews, me)
+	rec.PriorPendingID = review.PendingReviewID(reviews, me)
 	rec.Err = ""
 	if intent == review.IntentAsk {
 		rec = adopt(rec, reviews, me, s.now())
@@ -469,11 +478,10 @@ func (s *Service) launch(ctx context.Context, rec review.Record, resume bool) (r
 		// A stale snapshot is worse than a refused resume. Keeping the old list
 		// would leave out a review submitted since the last session. Detection
 		// would then read that review as this session's own and archive against it.
-		ids, err := s.priorIDs(ctx, rec.Ref)
+		rec, err = s.snapshot(ctx, rec)
 		if err != nil {
 			return rec, spec, fmt.Errorf("refresh the submitted reviews for %s: %w", rec.Ref, err)
 		}
-		rec.PriorReviewIDs = ids
 	}
 
 	if err := s.append(rec); err != nil {
@@ -670,11 +678,10 @@ func (s *Service) Rereview(ctx context.Context, rec review.Record, intent review
 	if !ok {
 		return s.recordErr(rec, errors.New(rec.Err))
 	}
-	ids, err := s.priorIDs(ctx, rec.Ref)
+	rearmed, err = s.snapshot(ctx, rearmed)
 	if err != nil {
 		return s.recordErr(rec, err)
 	}
-	rearmed.PriorReviewIDs = ids
 	rearmed.BGID = ""
 	return rearmed, s.append(rearmed)
 }
@@ -1081,14 +1088,16 @@ func (s *Service) fail(rec review.Record, plan Plan, cause error) (review.Record
 	return rec, plan, cause
 }
 
-// priorIDs is the snapshot that stops an older review of mine from looking like
-// this session's submission.
-func (s *Service) priorIDs(ctx context.Context, ref pr.Ref) ([]int64, error) {
-	me, reviews, err := s.myReviews(ctx, ref, s.Login)
+// snapshot records my reviews on GitHub as a launch finds them, so that an
+// older review of mine does not look like this session's.
+func (s *Service) snapshot(ctx context.Context, rec review.Record) (review.Record, error) {
+	me, reviews, err := s.myReviews(ctx, rec.Ref, s.Login)
 	if err != nil {
-		return nil, err
+		return rec, err
 	}
-	return review.PriorSubmittedIDs(reviews, me), nil
+	rec.PriorReviewIDs = review.PriorSubmittedIDs(reviews, me)
+	rec.PriorPendingID = review.PendingReviewID(reviews, me)
+	return rec, nil
 }
 
 // myReviews is the login docket compares authors against and every review on the

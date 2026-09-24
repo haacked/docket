@@ -201,8 +201,12 @@ type Record struct {
 	NotesPath      string     `json:"notes_path"`
 	OwnPR          bool       `json:"own_pr"`
 	PriorReviewIDs []int64    `json:"prior_review_ids"`
-	Err            string     `json:"err"`
-	Intent         Intent     `json:"intent"`
+	// PriorPendingID is my pending review when the session launched, or 0.
+	// review-code replaces it only when it posts its own draft, so a session
+	// that is still running may leave it in place.
+	PriorPendingID int64  `json:"prior_pending_id"`
+	Err            string `json:"err"`
+	Intent         Intent `json:"intent"`
 	// AskSessionID names the question-and-answer session about the notes. docket
 	// keeps it apart from SessionID, so asking about a review never replaces the
 	// review session that enter resumes.

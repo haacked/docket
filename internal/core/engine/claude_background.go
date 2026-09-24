@@ -74,6 +74,11 @@ func (Claude) StatusSpec(_ Paths) exec.CommandSpec {
 // A state docket has not seen therefore needs no entry here.
 const bgStateDone = "done"
 
+// bgStateBlocked is the state claude reports for a session that ended its turn
+// with a question for the user. The session keeps its process (verified on
+// 2.1.281).
+const bgStateBlocked = "blocked"
+
 // agentEntry is one element of `claude agents --json`. Interactive sessions
 // appear too and carry no ID.
 type agentEntry struct {
@@ -106,7 +111,8 @@ func (Claude) ParseStatus(res exec.Result) (map[string]BGStatus, error) {
 			// says. `claude stop` on a session still working leaves it as
 			// "stopped", which is not "done" and would otherwise be polled for
 			// ever, and the user can stop one from outside docket.
-			Done: entry.State == bgStateDone || entry.PID == 0,
+			Done:    entry.State == bgStateDone || entry.PID == 0,
+			Blocked: entry.State == bgStateBlocked,
 			// claude keeps the process after the session's turn ends, and drops
 			// it once the session is stopped. That is the difference between a
 			// session that has to be attached and one a plain resume reopens.
