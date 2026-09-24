@@ -2,8 +2,10 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/haacked/docket/internal/core/exec"
@@ -161,5 +163,26 @@ func TestABlockedSessionIsReadAgainAfterItWorks(t *testing.T) {
 
 	if got := poll("blocked")[0].State; got != review.StateDrafted {
 		t.Errorf("state = %q, want the second block read and the draft found", got)
+	}
+}
+
+// A failed read of a blocked session would otherwise leave nothing on screen to
+// say why the row has not moved. The error stays off the index, so the next poll
+// that works clears it.
+func TestAFailedReadOfABlockedSessionShowsOnTheRow(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := startedBackground(t, svc, bgRunner(bgListing("6d681a76", bgSession, "blocked", true)))
+	ghc.reviewErr = errors.New("github is down")
+
+	records, _, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatalf("PollBackground: %v", err)
+	}
+	if records[0].State != review.StateReviewing || !strings.Contains(records[0].Err, "github is down") {
+		t.Errorf("state %q, err %q, want the review running with the read error on the row", records[0].State, records[0].Err)
+	}
+	if got := storedByID(t, svc, rec.ID).Err; got != "" {
+		t.Errorf("the index kept %q, want the error on screen only", got)
 	}
 }

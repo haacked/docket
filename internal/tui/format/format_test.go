@@ -85,3 +85,18 @@ func TestRowFitsATerminalNarrowerThanTheMinimumTitle(t *testing.T) {
 		t.Errorf("meta = %q, want nothing on a row with no room for it", meta)
 	}
 }
+
+// An emoji takes two terminal columns. Counting runes would let a title that
+// carries one overflow the row by a column.
+func TestWideCharactersCountAsTwoColumns(t *testing.T) {
+	if got := Columns("✨ feat"); got != 7 {
+		t.Errorf("Columns = %d, want 7", got)
+	}
+	if got := Columns(Truncate("✨✨✨✨✨✨", 5)); got > 5 {
+		t.Errorf("Truncate left %d columns, want at most 5", got)
+	}
+	left, meta := Row("> o/r#1  ", strings.Repeat("✨ feat ", 10), "· claude", 40)
+	if got := Columns(left) + 1 + Columns(meta); got > 40 {
+		t.Errorf("the row is %d columns, want at most 40", got)
+	}
+}

@@ -1263,13 +1263,17 @@ func (a App) pollBackground() tea.Cmd {
 }
 
 // progressFor hands each session's progress to the dashboard, which holds no
-// engine to ask. A session whose agent gave no detail shows the agent's state
-// instead.
+// engine to ask. The listing answers when claude's status file does not: a
+// session with no detail shows the agent's state, and a session the listing
+// reports blocked is waiting for the user.
 func progressFor(statuses map[string]engine.BGStatus) map[string]review.Progress {
 	progress := make(map[string]review.Progress, len(statuses))
 	for id, status := range statuses {
 		p := status.Progress
 		p.Detail = cmp.Or(p.Detail, status.State)
+		if status.Blocked {
+			p.Needs = cmp.Or(p.Needs, "your input")
+		}
 		progress[id] = p
 	}
 	return progress

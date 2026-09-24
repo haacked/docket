@@ -279,6 +279,9 @@ func (s *Service) settleBlocked(ctx context.Context, rec review.Record, status e
 		s.forgetBlock(rec.BGID)
 	}
 	if err != nil {
+		// The error goes on the row the way detectPolled puts it there. It is
+		// not written to the index, so the next poll that works clears it.
+		rec.Err = err.Error()
 		return rec, true
 	}
 	return settled, running

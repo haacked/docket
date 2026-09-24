@@ -4,25 +4,22 @@ package format
 import (
 	"fmt"
 	"time"
-	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
-// Truncate counts runes, not bytes. width is a column budget, and a pull request
-// title carrying an accent or an emoji otherwise gets cut inside a character.
-// A budget with no room for even the ellipsis leaves nothing.
+// Truncate cuts s to width terminal columns, ending in an ellipsis when it cuts.
+// An emoji or a CJK character takes two columns, so a rune count would let a
+// title overflow. A budget with no room for even the ellipsis leaves nothing.
 func Truncate(s string, width int) string {
 	if width < 2 {
 		return ""
 	}
-	r := []rune(s)
-	if len(r) <= width {
-		return s
-	}
-	return string(r[:width-1]) + "…"
+	return ansi.Truncate(s, width, "…")
 }
 
-// Columns counts runes, the unit Truncate cuts by.
-func Columns(s string) int { return utf8.RuneCountInString(s) }
+// Columns is how many terminal columns s takes, the unit Truncate cuts by.
+func Columns(s string) int { return ansi.StringWidth(s) }
 
 // minTitle is the fewest columns Row shrinks a title to before it cuts the
 // metadata instead.

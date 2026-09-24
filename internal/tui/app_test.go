@@ -360,6 +360,21 @@ func TestProgressForCarriesWhatTheAgentReported(t *testing.T) {
 	}
 }
 
+// The listing reports a blocked session even when claude left no status file,
+// and the row has to warn that the session is waiting.
+func TestProgressForMarksABlockedSessionAsWaiting(t *testing.T) {
+	got := progressFor(map[string]engine.BGStatus{
+		"bare":  {State: "blocked", Blocked: true},
+		"named": {State: "blocked", Blocked: true, Progress: review.Progress{Needs: "permission to run gh"}},
+	})
+	if got["bare"].Needs == "" {
+		t.Error("a blocked session with no status file does not read as waiting")
+	}
+	if got["named"].Needs != "permission to run gh" {
+		t.Errorf("needs = %q, want what claude named", got["named"].Needs)
+	}
+}
+
 // claude's status file can be missing or unreadable. The row still says
 // something, so it falls back to the state the listing reported.
 func TestProgressForFallsBackToTheAgentsState(t *testing.T) {
