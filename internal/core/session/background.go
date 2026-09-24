@@ -394,9 +394,14 @@ func (s *Service) afterBackgroundExit(ctx context.Context, rec review.Record) (r
 	if over {
 		return s.detect(ctx, rec)
 	}
-	// A session the user left unanswered keeps the draft it posted.
+	// A session the user left unanswered keeps the draft it posted. A failed
+	// read keeps the row where it was, as detect does for a finished session.
 	if status.Idle {
-		if settled, running, err := s.settle(ctx, rec); err == nil && !running {
+		settled, running, err := s.settle(ctx, rec)
+		if err != nil {
+			return s.recordErr(rec, err)
+		}
+		if !running {
 			return settled, nil
 		}
 	}

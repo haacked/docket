@@ -14,9 +14,9 @@ import (
 	"github.com/haacked/docket/internal/core/review"
 )
 
-// bgListing is `claude agents --json --all`. The helpers below rewrite the state
-// and the process in it, which is all the poll reads. claude reports a session
-// busy only while it is working.
+// bgListing is `claude agents --json --all`. The helpers below set the state,
+// the status, and the process in it, which is all the poll reads. bgListing
+// reports a working session busy and any other idle, as claude does.
 func bgListing(id, sessionID, state string, live bool) string {
 	status := "idle"
 	if state == "working" {

@@ -184,6 +184,29 @@ func TestLeavingAnIdleSessionFindsItsDraft(t *testing.T) {
 	}
 }
 
+// A failed read when the user leaves an idle session keeps the row where it was
+// and puts the error on it, the way leaving a finished session does. Falling
+// back to reviewing would drop the draft until a poll could read GitHub again.
+func TestAFailedReadOnLeavingAnIdleSessionKeepsTheRow(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	startedBackground(t, svc, bgRunner(idleListing("6d681a76", bgSession)))
+	ghc.reviews = []review.GHReview{myPending()}
+	records, _, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatalf("PollBackground: %v", err)
+	}
+	ghc.reviewErr = errors.New("github is down")
+
+	if _, err := svc.AfterExit(context.Background(), records[0], nil); err == nil || !strings.Contains(err.Error(), "github is down") {
+		t.Errorf("err = %v, want the read error reported", err)
+	}
+	got := storedByID(t, svc, records[0].ID)
+	if got.State != review.StateDrafted || !strings.Contains(got.Err, "github is down") {
+		t.Errorf("stored %q with err %q, want the draft kept with the read error", got.State, got.Err)
+	}
+}
+
 // An append or overwrite re-review starts with my old pending draft still on
 // GitHub, and review-code replaces it only at the end. A session that blocks
 // before then has not posted anything of its own.
