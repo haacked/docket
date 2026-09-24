@@ -76,15 +76,10 @@ func (Claude) StatusSpec(_ Paths) exec.CommandSpec {
 // was still running, so done is still read as over.
 const bgStateDone = "done"
 
-// bgStateBlocked is the state claude reports for a session that ended its turn
-// with a question for the user. The session keeps its process (verified on
-// 2.1.281).
-const bgStateBlocked = "blocked"
-
 // bgStatusIdle is the status claude reports for a session that has ended its
-// turn, blocked sessions included. The state does not always say so. A session
-// can stay "working" with this status after its turn ends, for as long as
-// claude holds it (2.1.281).
+// turn. The state does not always say so. A session can stay "working" with this
+// status after its turn ends, for as long as claude holds it (2.1.281). claude
+// also reports it for a few seconds after launch, before the first turn starts.
 const bgStatusIdle = "idle"
 
 // agentEntry is one element of `claude agents --json`. Interactive sessions
@@ -120,9 +115,8 @@ func (Claude) ParseStatus(res exec.Result) (map[string]BGStatus, error) {
 			// says. `claude stop` on a session still working leaves it as
 			// "stopped", which is not "done" and would otherwise be polled for
 			// ever, and the user can stop one from outside docket.
-			Done:    entry.State == bgStateDone || entry.PID == 0,
-			Blocked: entry.State == bgStateBlocked,
-			Idle:    entry.Status == bgStatusIdle,
+			Done: entry.State == bgStateDone || entry.PID == 0,
+			Idle: entry.Status == bgStatusIdle,
 			// claude keeps the process after the session's turn ends, and drops
 			// it once the session is stopped. That is the difference between a
 			// session that has to be attached and one a plain resume reopens.

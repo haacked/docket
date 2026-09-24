@@ -315,7 +315,7 @@ func TestRecoverIgnoresSessionsThatCannotBeThisRecords(t *testing.T) {
 }
 
 // A session that ends its turn with a question keeps its process and reports
-// blocked. It is not done, and docket has to know it is waiting.
+// blocked. It reads as idle and not done.
 func TestParseStatusReportsABlockedSession(t *testing.T) {
 	statuses, err := Claude{}.ParseStatus(exec.Result{
 		Stdout: `[{"id": "aaaaaaaa", "kind": "background", "state": "blocked", "status": "idle", "pid": 5}]`,
@@ -324,9 +324,6 @@ func TestParseStatusReportsABlockedSession(t *testing.T) {
 		t.Fatalf("ParseStatus: %v", err)
 	}
 	got := statuses["aaaaaaaa"]
-	if !got.Blocked {
-		t.Error("a blocked session did not read as blocked")
-	}
 	if got.Done {
 		t.Error("a blocked session read as finished")
 	}
@@ -351,8 +348,8 @@ func TestParseStatusReportsASessionThatEndedItsTurnAsIdle(t *testing.T) {
 	if !idle.Idle {
 		t.Error("a session that ended its turn did not read as idle")
 	}
-	if idle.Done || idle.Blocked {
-		t.Errorf("done %v, blocked %v, want neither: claude still holds the session and it asked nothing", idle.Done, idle.Blocked)
+	if idle.Done {
+		t.Error("a session claude still holds read as finished")
 	}
 	if statuses["bbbbbbbb"].Idle {
 		t.Error("a busy session read as idle")

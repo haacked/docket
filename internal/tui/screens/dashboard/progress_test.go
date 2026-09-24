@@ -110,6 +110,9 @@ func TestABlockedSessionSaysItIsWaitingForYou(t *testing.T) {
 	if !strings.Contains(line, "permission to run gh") || !strings.Contains(line, "enter") {
 		t.Errorf("the line does not say what the session needs or how to answer:\n%s", line)
 	}
+	if !strings.Contains(line, "asking to run gh") {
+		t.Errorf("the line drops what the session last said it was doing:\n%s", line)
+	}
 }
 
 // Nothing tells docket that a session has hung. The time since the agent last
