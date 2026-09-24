@@ -186,7 +186,7 @@ func newService(t *testing.T, ghc *fakeGH, gitc *fakeGit) (*Service, config.Path
 		t.Fatal(err)
 	}
 
-	cfg := config.Config{ReviewCodeDir: reviewCode, DefaultEngine: "claude", GitHubUser: ghc.login}
+	cfg := config.Config{ReviewCodeDir: reviewCode, DefaultEngine: "claude", DefaultRun: config.RunBackground, GitHubUser: ghc.login}
 	svc := &Service{
 		Runner: &exec.Fake{},
 		Cfg:    cfg,

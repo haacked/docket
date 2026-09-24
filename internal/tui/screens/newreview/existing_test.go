@@ -191,6 +191,28 @@ func TestARereviewNamesTheRecordAndItsEngine(t *testing.T) {
 	}
 }
 
+// A codex record runs its re-review in the terminal. The next review typed on
+// the screen still runs in the background that the user chose.
+func TestARereviewOfACodexRecordKeepsTheBackgroundChoice(t *testing.T) {
+	m := New(Styles{}, []string{"claude", "codex"}, []string{"claude"}, "claude", "", true).SetExisting(Existing{
+		Ref:      "haacked/docket#4",
+		Engine:   "codex",
+		RecordID: "rec-4",
+		NotesAt:  notesWritten,
+	})
+
+	m, cmd := m.Update(press("a"))
+	if got := sent(t, cmd); got.Background {
+		t.Errorf("got %#v, want the codex re-review in the terminal", got)
+	}
+
+	m = typed(m.Reset(), typedURL)
+	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := sent(t, cmd); !got.Background {
+		t.Errorf("got %#v, want the next review in the background", got)
+	}
+}
+
 // A re-review offers append and overwrite. The dashboard's c is how a record
 // already there is asked about.
 func TestARereviewOffersNoAsk(t *testing.T) {

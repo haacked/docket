@@ -32,10 +32,13 @@ type Model struct {
 	// terminal. It is a list of names rather than anything richer because a
 	// screen holds no engine: it turns keys into intents and nothing else.
 	BackgroundEngines []string
-	Background        bool
-	DefaultRepo       string
-	Styles            Styles
-	Busy              string
+	// Background is the user's choice. An engine with no background mode runs
+	// in the terminal and leaves it set. A move back to an engine that has a
+	// background mode runs there again.
+	Background  bool
+	DefaultRepo string
+	Styles      Styles
+	Busy        string
 	// Existing holds what was found while the screen asks what to do with a
 	// review that is already there. It is nil while the screen takes a pull
 	// request.
@@ -63,7 +66,7 @@ func (e Existing) CanAsk() bool {
 	return e.RecordID == "" && !e.NotesAt.IsZero()
 }
 
-func New(styles Styles, engines, backgroundEngines []string, engine, defaultRepo string) Model {
+func New(styles Styles, engines, backgroundEngines []string, engine, defaultRepo string, background bool) Model {
 	input := textinput.New()
 	input.Placeholder = "https://github.com/org/repo/pull/123"
 	input.Prompt = "› "
@@ -77,6 +80,7 @@ func New(styles Styles, engines, backgroundEngines []string, engine, defaultRepo
 		Engine:            engine,
 		Engines:           engines,
 		BackgroundEngines: backgroundEngines,
+		Background:        background,
 		DefaultRepo:       defaultRepo,
 		Styles:            styles,
 	}
@@ -87,6 +91,11 @@ func New(styles Styles, engines, backgroundEngines []string, engine, defaultRepo
 // the pull request has already been resolved and cloned.
 func (m Model) CanBackground() bool {
 	return slices.Contains(m.BackgroundEngines, m.engine())
+}
+
+// background reports whether the review would run in the background.
+func (m Model) background() bool {
+	return m.Background && m.CanBackground()
 }
 
 // engine is the engine the review would run under. A re-review keeps the one
@@ -102,7 +111,6 @@ func (m Model) engine() string {
 func (m Model) SetExisting(found Existing) Model {
 	m.Existing = &found
 	m.Busy = ""
-	m.Background = m.Background && m.CanBackground()
 	return m
 }
 
@@ -143,9 +151,6 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			return m, msg.Send(msg.Goto{Screen: msg.Dashboard})
 		case "tab":
 			m.Engine = choice.Next(m.Engines, m.Engine)
-			// The engine that was chosen may not run background reviews, and
-			// leaving the flag set would start a review the engine refuses.
-			m.Background = m.Background && m.CanBackground()
 			return m, nil
 		case "ctrl+b":
 			if m.CanBackground() {
@@ -161,7 +166,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 				return m, nil
 			}
 			m.Busy = "resolving"
-			return m, msg.Send(msg.StartReview{Input: value, Engine: m.Engine, Background: m.Background})
+			return m, msg.Send(msg.StartReview{Input: value, Engine: m.Engine, Background: m.background()})
 		}
 	}
 
@@ -209,7 +214,7 @@ func (m Model) choose(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		Engine: m.engine(),
 		// A question-and-answer session needs the terminal. There is no draft for
 		// a background one to finish.
-		Background: m.Background && intent != review.IntentAsk,
+		Background: m.background() && intent != review.IntentAsk,
 		Intent:     string(intent),
 		RecordID:   found.RecordID,
 	})
@@ -264,7 +269,7 @@ func (m Model) existingView(found Existing) string {
 	b.WriteString("\n" + strings.Join(choices, " · ") + "\n")
 	b.WriteString("\n" + m.Styles.Label.Render("Engine") + " " + m.engine() + "\n")
 	b.WriteString(m.Styles.Label.Render("Run") + " " + m.runLine() + "\n")
-	if found.CanAsk() && m.Background {
+	if found.CanAsk() && m.background() {
 		b.WriteString(m.Styles.Dim.Render("view and ask runs in this terminal") + "\n")
 	}
 	if m.Busy != "" {

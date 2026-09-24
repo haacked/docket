@@ -10,7 +10,7 @@ import (
 )
 
 func model() Model {
-	return New(Styles{}, []string{"claude", "codex"}, []string{"claude"}, "claude", "")
+	return New(Styles{}, []string{"claude", "codex"}, []string{"claude"}, "claude", "", false)
 }
 
 func typed(m Model, text string) Model {
@@ -51,7 +51,7 @@ func TestEnterIgnoresABareNumberWithNoDefaultRepo(t *testing.T) {
 }
 
 func TestABareNumberWorksWithADefaultRepo(t *testing.T) {
-	m := typed(New(Styles{}, []string{"claude"}, []string{"claude"}, "claude", "haacked/docket"), "123")
+	m := typed(New(Styles{}, []string{"claude"}, []string{"claude"}, "claude", "haacked/docket", false), "123")
 
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
@@ -152,19 +152,59 @@ func TestBackgroundIsRefusedForAnEngineThatHasNone(t *testing.T) {
 	}
 }
 
-// Choosing an engine with no background mode has to drop a background choice
-// already made, or enter would start a review the engine refuses.
-func TestSwitchingToAnEngineWithNoBackgroundDropsTheChoice(t *testing.T) {
-	m, _ := model().Update(ctrlB)
-	if !m.Background {
-		t.Fatal("ctrl+b did not choose the background")
-	}
+// The background choice belongs to the user. An engine with no background mode
+// sends a terminal run and keeps the choice. A move back to an engine that has
+// one runs in the background again.
+func TestTheBackgroundChoiceWaitsOutAnEngineThatHasNone(t *testing.T) {
+	m, _ := typed(model(), typedURL).Update(ctrlB)
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if m.Engine != "codex" {
 		t.Fatalf("engine = %q, want the tab to have moved on", m.Engine)
 	}
-	if m.Background {
-		t.Error("the background choice survived a move to an engine that has none")
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if sent(t, cmd).Background {
+		t.Error("enter asked codex for a background run")
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.Engine != "claude" {
+		t.Fatalf("engine = %q, want the tab to have come back to claude", m.Engine)
+	}
+	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !sent(t, cmd).Background {
+		t.Error("the background choice did not survive a stop at codex")
+	}
+}
+
+func TestAScreenBuiltForTheBackgroundStartsThere(t *testing.T) {
+	m := typed(New(Styles{}, []string{"claude", "codex"}, []string{"claude"}, "claude", "", true), typedURL)
+
+	if view := m.View(); !strings.Contains(view, "in the background") {
+		t.Errorf("the view does not say the review runs in the background:\n%s", view)
+	}
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !sent(t, cmd).Background {
+		t.Error("enter did not ask for the background")
+	}
+}
+
+// A codex default with the background preference set runs codex in the
+// terminal. A tab to claude sends a background review again.
+func TestABackgroundScreenThatStartsOnCodexRunsInTheTerminal(t *testing.T) {
+	m := typed(New(Styles{}, []string{"claude", "codex"}, []string{"claude"}, "codex", "", true), typedURL)
+
+	if view := m.View(); !strings.Contains(view, "codex has no background mode") {
+		t.Errorf("the screen does not say why codex runs in the terminal:\n%s", view)
+	}
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if sent(t, cmd).Background {
+		t.Error("enter asked codex for a background run")
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := sent(t, cmd); got.Engine != "claude" || !got.Background {
+		t.Errorf("got %#v, want a background claude review", got)
 	}
 }
