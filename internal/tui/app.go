@@ -1309,16 +1309,21 @@ func (a App) pollBackground() tea.Cmd {
 }
 
 // progressFor hands each session's progress to the dashboard, which holds no
-// engine to ask. The listing answers when claude's status file does not: a
-// session with no detail shows the agent's state, and a session the listing
-// reports blocked is waiting for the user.
+// engine to ask. A session is waiting for the user when the listing reports it
+// idle and the status file does not report it active, which claude does at
+// launch before the first turn. claude's own reading of the conversation can
+// call a session blocked while its reviewer agents still run, so a working
+// session's need is dropped. A working session with no detail shows the agent's
+// state.
 func progressFor(statuses map[string]engine.BGStatus) map[string]review.Progress {
 	progress := make(map[string]review.Progress, len(statuses))
 	for id, status := range statuses {
 		p := status.Progress
-		p.Detail = cmp.Or(p.Detail, status.State)
-		if status.Blocked {
+		if status.Idle && !p.Active {
 			p.Needs = cmp.Or(p.Needs, "your input")
+		} else {
+			p.Needs = ""
+			p.Detail = cmp.Or(p.Detail, status.State)
 		}
 		progress[id] = p
 	}

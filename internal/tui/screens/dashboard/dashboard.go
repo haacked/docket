@@ -238,9 +238,9 @@ func (m Model) row(rec review.Record, selected bool) string {
 		rendered += " " + m.Styles.Dim.Render(meta)
 	}
 
-	if line, blocked := m.activity(rec); line != "" {
+	if line, waiting := m.activity(rec); line != "" {
 		lineStyle := m.Styles.Dim
-		if blocked {
+		if waiting {
 			lineStyle = m.Styles.Err
 		}
 		rendered += "\n" + lineStyle.Render(format.Truncate("    "+line, m.width()))
@@ -274,7 +274,11 @@ func (m Model) activity(rec review.Record) (string, bool) {
 		return "", false
 	}
 	if act.Needs != "" {
-		return "waiting for you: " + act.Needs + " · enter opens it", true
+		parts := []string{"waiting for you: " + act.Needs, "enter opens it"}
+		if act.Detail != "" {
+			parts = append(parts, act.Detail)
+		}
+		return strings.Join(parts, " · "), true
 	}
 
 	var parts []string

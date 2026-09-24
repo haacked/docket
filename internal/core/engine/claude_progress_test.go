@@ -74,6 +74,9 @@ func TestProgressReadsWhatClaudeSaysTheSessionIsDoing(t *testing.T) {
 	if got.Needs != "" {
 		t.Errorf("needs = %q, want nothing from a session working on its own", got.Needs)
 	}
+	if !got.Active {
+		t.Error("a session claude calls active does not read as active")
+	}
 	if got.Agents != 2 {
 		t.Errorf("agents = %d, want the 2 that have not finished", got.Agents)
 	}
@@ -82,18 +85,22 @@ func TestProgressReadsWhatClaudeSaysTheSessionIsDoing(t *testing.T) {
 	}
 }
 
-// A blocked session is waiting for the user. That is the case docket most needs
-// to show, so a blocked session reports a need even when claude named none.
-func TestProgressReportsWhatABlockedSessionNeeds(t *testing.T) {
+// The need is claude's own words. Whether the session is waiting at all is the
+// listing's to say, so a blocked session with no named need reports none here.
+func TestProgressReportsWhatClaudeSaysASessionNeeds(t *testing.T) {
 	jobs := t.TempDir()
 	writeJobState(t, jobs, "named", `{"state": "working", "tempo": "blocked", "needs": "permission to run gh"}`)
 	writeJobState(t, jobs, "unnamed", `{"state": "working", "tempo": "blocked", "needs": null}`)
 
-	if got := (Claude{}).Progress("named", Paths{ClaudeJobs: jobs}).Needs; got != "permission to run gh" {
-		t.Errorf("needs = %q, want what claude named", got)
+	named := (Claude{}).Progress("named", Paths{ClaudeJobs: jobs})
+	if named.Needs != "permission to run gh" {
+		t.Errorf("needs = %q, want what claude named", named.Needs)
 	}
-	if got := (Claude{}).Progress("unnamed", Paths{ClaudeJobs: jobs}).Needs; got == "" {
-		t.Error("a blocked session with no named need reports none")
+	if named.Active {
+		t.Error("a blocked session reads as active")
+	}
+	if got := (Claude{}).Progress("unnamed", Paths{ClaudeJobs: jobs}).Needs; got != "" {
+		t.Errorf("needs = %q, want none when claude named none", got)
 	}
 }
 

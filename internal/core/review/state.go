@@ -167,9 +167,13 @@ func (s State) Open() bool {
 type Progress struct {
 	// Detail is the agent's one-line summary of what the session is doing.
 	Detail string
-	// Needs is what the session is waiting for the user to do. It is empty
-	// while the session works on its own.
+	// Needs is what the agent says the session needs from the user. The agent
+	// can name one while the session still works, so the listing, not this,
+	// decides whether the session is waiting.
 	Needs string
+	// Active reports that the agent says the session is working. claude says so
+	// from launch, while its listing still reports the session idle.
+	Active bool
 	// Agents is how many sub-agents the session is running.
 	Agents int
 	// UpdatedAt is when the agent last rewrote its account of the session.

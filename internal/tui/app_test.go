@@ -354,24 +354,37 @@ func TestLeavingAWorkingSessionStartsWatchingItAgain(t *testing.T) {
 
 func TestProgressForCarriesWhatTheAgentReported(t *testing.T) {
 	want := review.Progress{Detail: "running reviewers", Needs: "your input", Agents: 3, UpdatedAt: time.Date(2026, 9, 24, 17, 0, 0, 0, time.UTC)}
-	got := progressFor(map[string]engine.BGStatus{"a": {State: "working", Progress: want}})
+	got := progressFor(map[string]engine.BGStatus{"a": {State: "working", Idle: true, Progress: want}})
 	if got["a"] != want {
 		t.Errorf("a = %+v, want %+v", got["a"], want)
 	}
 }
 
-// The listing reports a blocked session even when claude left no status file,
-// and the row has to warn that the session is waiting.
-func TestProgressForMarksABlockedSessionAsWaiting(t *testing.T) {
+// A session is waiting for the user only once the listing says its turn is
+// over. claude can name a need while the session still works. At launch the
+// listing reads idle before the session starts, while the status file already
+// says active.
+func TestProgressForMarksOnlyASessionThatEndedItsTurnAsWaiting(t *testing.T) {
 	got := progressFor(map[string]engine.BGStatus{
-		"bare":  {State: "blocked", Blocked: true},
-		"named": {State: "blocked", Blocked: true, Progress: review.Progress{Needs: "permission to run gh"}},
+		"bare":     {State: "working", Idle: true},
+		"named":    {State: "blocked", Idle: true, Progress: review.Progress{Needs: "permission to run gh"}},
+		"busy":     {State: "blocked", Progress: review.Progress{Needs: "results from 5 reviewers"}},
+		"starting": {State: "working", Idle: true, Progress: review.Progress{Detail: "starting…", Active: true}},
 	})
 	if got["bare"].Needs == "" {
-		t.Error("a blocked session with no status file does not read as waiting")
+		t.Error("a session that ended its turn with no status file does not read as waiting")
+	}
+	if got["bare"].Detail != "" {
+		t.Errorf("detail = %q, want no state word on a waiting row", got["bare"].Detail)
 	}
 	if got["named"].Needs != "permission to run gh" {
 		t.Errorf("needs = %q, want what claude named", got["named"].Needs)
+	}
+	if got["busy"].Needs != "" {
+		t.Errorf("needs = %q, want none while the session works", got["busy"].Needs)
+	}
+	if got["starting"].Needs != "" {
+		t.Errorf("needs = %q, want none while the session starts", got["starting"].Needs)
 	}
 }
 

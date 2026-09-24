@@ -18,7 +18,8 @@ import (
 // progress empty and does not fail the poll.
 type jobState struct {
 	Detail string `json:"detail"`
-	// Tempo is "blocked" while the session waits for the user.
+	// Tempo is claude's own reading of the session: "active", "idle", or
+	// "blocked". docket reads only whether it is "active".
 	Tempo string `json:"tempo"`
 	Needs string `json:"needs"`
 	// Fan lists the session's sub-agents. It keeps a finished one, with its
@@ -44,10 +45,6 @@ func (Claude) Progress(id string, paths Paths) review.Progress {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return review.Progress{}
 	}
-	needs := state.Needs
-	if state.Tempo == "blocked" && needs == "" {
-		needs = "your input"
-	}
 	running := 0
 	for _, agent := range state.Fan {
 		if agent.DoneAt == nil {
@@ -56,7 +53,8 @@ func (Claude) Progress(id string, paths Paths) review.Progress {
 	}
 	return review.Progress{
 		Detail:    state.Detail,
-		Needs:     needs,
+		Needs:     state.Needs,
+		Active:    state.Tempo == "active",
 		Agents:    running,
 		UpdatedAt: state.UpdatedAt,
 	}
