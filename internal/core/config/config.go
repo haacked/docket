@@ -120,11 +120,14 @@ func Load(path string) (Config, error) {
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse %s: %w", path, err)
 	}
-	cfg = expand(cfg)
+	// This runs right after unmarshal, before expand fills in a default.
+	// Unmarshal leaves an omitted key at the literal's default, so it always
+	// passes here. An explicit empty string overwrites that default, so it
+	// fails here.
 	if cfg.DefaultRun != RunBackground && cfg.DefaultRun != RunTerminal {
 		return cfg, fmt.Errorf("%s: default_run is %q, want %q or %q", path, cfg.DefaultRun, RunBackground, RunTerminal)
 	}
-	return cfg, nil
+	return expand(cfg), nil
 }
 
 // expand fills in the defaults a config.toml left out and resolves the ~ in

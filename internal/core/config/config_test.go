@@ -126,6 +126,19 @@ func TestLoadReadsATerminalDefaultRun(t *testing.T) {
 	}
 }
 
+// An explicit default_run = "" differs from an omitted key, which expand fills
+// in as RunBackground. Only the omitted key passes validation.
+func TestLoadRefusesAnExplicitlyEmptyDefaultRun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("default_run = \"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load accepted an explicit default_run = \"\"")
+	}
+}
+
 func TestLoadRefusesADefaultRunItDoesNotKnow(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("default_run = \"bg\"\n"), 0o644); err != nil {
