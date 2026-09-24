@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStringShowsDirectoryScrubbedEnvironmentAndQuoting(t *testing.T) {
@@ -50,6 +51,24 @@ func TestRealRunsACommand(t *testing.T) {
 	}
 	if strings.TrimSpace(res.Stdout) != "hello" {
 		t.Errorf("stdout = %q", res.Stdout)
+	}
+}
+
+func TestRealStartDoesNotWaitForTheCommand(t *testing.T) {
+	began := time.Now()
+
+	if err := (Real{}).Start(CommandSpec{Path: "sleep", Args: []string{"5"}}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if waited := time.Since(began); waited > 2*time.Second {
+		t.Errorf("Start took %s, want it to return before the command ends", waited)
+	}
+}
+
+func TestRealStartReportsAMissingCommand(t *testing.T) {
+	if err := (Real{}).Start(CommandSpec{Path: "docket-no-such-command"}); err == nil {
+		t.Error("Start succeeded, want the missing command reported")
 	}
 }
 

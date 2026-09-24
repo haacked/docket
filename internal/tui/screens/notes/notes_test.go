@@ -76,6 +76,17 @@ func TestEAsksForTheEditor(t *testing.T) {
 	}
 }
 
+func TestOAsksToOpenTheReviewOnGitHub(t *testing.T) {
+	_, cmd := opened(markdown, false).Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
+	if cmd == nil {
+		t.Fatal("o produced no command")
+	}
+
+	if got, want := cmd(), (msg.OpenOnGitHub{ID: "rec-1"}); got != want {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
 func TestQuestionMarkAsksForHelp(t *testing.T) {
 	_, cmd := opened(markdown, false).Update(tea.KeyPressMsg{Code: '?', Text: "?"})
 	if cmd == nil {

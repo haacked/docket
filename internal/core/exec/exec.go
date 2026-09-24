@@ -76,8 +76,12 @@ type Result struct {
 // terminal does not go through a Runner: internal/tui hands it to Bubble Tea,
 // which is also where a dry run is stopped, since most of what a dry run must not
 // do never reaches a Runner.
+//
+// Start launches a command and does not wait for it. It is for a command that
+// outlives its caller, such as a browser. Its output goes to /dev/null.
 type Runner interface {
 	Run(ctx context.Context, spec CommandSpec) (Result, error)
+	Start(spec CommandSpec) error
 }
 
 // Real runs commands.
@@ -102,6 +106,21 @@ func (Real) Run(ctx context.Context, spec CommandSpec) (Result, error) {
 		return res, fmt.Errorf("run %s: %w", spec.Path, err)
 	}
 	return res, nil
+}
+
+// Start captures no output on purpose. Go reads a captured stream until every
+// process holding the pipe closes it. xdg-open and a $BROWSER command can run
+// the browser in the foreground, and the browser inherits the pipe, so a
+// captured Start would not return until the user quit the browser.
+func (Real) Start(spec CommandSpec) error {
+	cmd := osexec.Command(spec.Path, spec.Args...)
+	cmd.Dir = spec.Dir
+	cmd.Env = spec.Env(os.Environ())
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start %s: %w", spec.Path, err)
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // Fake records calls and replays canned results. It looks a result up by the
@@ -136,6 +155,12 @@ func (f *Fake) Run(_ context.Context, spec CommandSpec) (Result, error) {
 		}
 	}
 	return f.Default, nil
+}
+
+// Start records the call alongside Run's and fails the same way Run would.
+func (f *Fake) Start(spec CommandSpec) error {
+	_, err := f.Run(context.Background(), spec)
+	return err
 }
 
 // Lines returns every recorded call, for assertions.

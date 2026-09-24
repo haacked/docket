@@ -159,6 +159,10 @@ func (m Model) handleKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		if rec, ok := m.Selected(); ok {
 			return m, msg.Send(msg.OpenNotes{ID: rec.ID})
 		}
+	case "o":
+		if rec, ok := m.Selected(); ok {
+			return m, msg.Send(msg.OpenOnGitHub{ID: rec.ID})
+		}
 	case "r":
 		if rec, ok := m.Selected(); ok {
 			return m, msg.Send(msg.RefreshRecords{ID: rec.ID})

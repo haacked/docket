@@ -85,6 +85,7 @@ func TestKeysEmitIntents(t *testing.T) {
 		{"refresh all", key("R"), msg.RefreshRecords{}},
 		{"submit", key("s"), msg.OpenSubmit{ID: "a"}},
 		{"notes", key("v"), msg.OpenNotes{ID: "a"}},
+		{"github", key("o"), msg.OpenOnGitHub{ID: "a"}},
 		{"help", key("?"), msg.OpenHelp{}},
 	}
 
@@ -106,7 +107,7 @@ func TestKeysEmitIntents(t *testing.T) {
 func TestNoRecordsMeansNoIntent(t *testing.T) {
 	m := New(Styles{})
 
-	for _, press := range []tea.KeyPressMsg{named(tea.KeyEnter), key("x"), key("s"), key("v"), key("r")} {
+	for _, press := range []tea.KeyPressMsg{named(tea.KeyEnter), key("x"), key("s"), key("v"), key("o"), key("r")} {
 		if _, cmd := m.Update(press); cmd != nil {
 			t.Errorf("%s with no records produced %#v", press, cmd())
 		}

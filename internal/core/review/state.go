@@ -53,6 +53,15 @@ func (r Record) Submittable() bool {
 	return r.State == StateDrafted && r.ReviewID != 0
 }
 
+// WebURL is the page that shows the record's review on GitHub. The Files
+// changed tab shows a pending review's comments inline, to its author only.
+func (r Record) WebURL() string {
+	if r.State == StateDrafted {
+		return r.Ref.URL() + "/files"
+	}
+	return r.Ref.URL()
+}
+
 // BackgroundRunning reports whether the record is a background session docket
 // should still be asking the agent about. The service polls on it and the UI
 // keeps its tick alive on it, so the rule is stated once: if the two disagreed,

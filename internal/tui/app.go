@@ -399,6 +399,19 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, a.editNotes(rec)
 
+	case msg.OpenOnGitHub:
+		rec, ok := a.record(message.ID)
+		if !ok {
+			return a, nil
+		}
+		a.err = nil
+		if a.dryRun {
+			a.status = "Would run: " + session.BrowseSpec(rec).String()
+			return a, nil
+		}
+		a.status = "Opening " + rec.WebURL()
+		return a, a.browse(rec)
+
 	case notesLoadedMsg:
 		// The read runs in a command, so it can land after the user opened another
 		// record.
@@ -777,6 +790,18 @@ func (a App) editNotes(rec review.Record) tea.Cmd {
 			return errMsg{err: err}
 		}
 		return launchMsg{record: rec, spec: spec, kind: launchEditor}
+	}
+}
+
+// browse needs no terminal, so it runs through the service's runner rather
+// than taking the screen the way editNotes does.
+func (a App) browse(rec review.Record) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		if err := svc.Browse(rec); err != nil {
+			return errMsg{err: err}
+		}
+		return nil
 	}
 }
 
