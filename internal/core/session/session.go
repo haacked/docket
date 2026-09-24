@@ -43,12 +43,12 @@ type Service struct {
 	Now    func() time.Time
 	NewID  func() string
 
-	// blockSeen maps a background id to the agent's update time when docket
-	// last read GitHub for that session while it was blocked. A session stays
-	// blocked until the user answers it, so the poll reads GitHub once for each
+	// idleSeen maps a background id to the agent's update time when docket
+	// last read GitHub for that session while it was idle. A session stays
+	// idle until the user answers it, so the poll reads GitHub once for each
 	// stretch instead of on every tick.
-	blockMu   sync.Mutex
-	blockSeen map[string]time.Time
+	idleMu   sync.Mutex
+	idleSeen map[string]time.Time
 }
 
 // Plan is what Prepare worked out, for the UI to show before launching.

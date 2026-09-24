@@ -15,14 +15,29 @@ import (
 )
 
 // bgListing is `claude agents --json --all`. The helpers below rewrite the state
-// and the process in it, which is all the poll reads.
+// and the process in it, which is all the poll reads. claude reports a session
+// busy only while it is working.
 func bgListing(id, sessionID, state string, live bool) string {
+	status := "idle"
+	if state == "working" {
+		status = "busy"
+	}
+	return bgEntry(id, sessionID, state, status, live)
+}
+
+// idleListing is a session that ended its turn without asking anything. claude
+// keeps its working state and reports it idle.
+func idleListing(id, sessionID string) string {
+	return bgEntry(id, sessionID, "working", "idle", true)
+}
+
+func bgEntry(id, sessionID, state, status string, live bool) string {
 	pid := ""
 	if live {
 		pid = `"pid": 4242,`
 	}
 	return `[{` + pid + `"id": "` + id + `", "kind": "background",
-		"sessionId": "` + sessionID + `", "state": "` + state + `", "status": "busy"}]`
+		"sessionId": "` + sessionID + `", "state": "` + state + `", "status": "` + status + `"}]`
 }
 
 const bgSession = "6d681a76-7638-4a56-a4cb-bc0353e547d5"

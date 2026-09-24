@@ -163,10 +163,10 @@ func (s *Service) PollBackground(ctx context.Context) ([]review.Record, map[stri
 			rec, status, running := s.applyStatus(ctx, records[i], found)
 			if running {
 				status.Progress = bg.Progress(rec.BGID, paths)
-				if status.Blocked {
-					rec, running = s.settleBlocked(ctx, rec, status)
+				if status.Idle {
+					rec, running = s.settleIdle(ctx, rec, status)
 				} else {
-					s.forgetBlock(rec.BGID)
+					s.forgetIdle(rec.BGID)
 				}
 			}
 			records[i] = rec
@@ -254,29 +254,29 @@ func (s *Service) applyStatus(ctx context.Context, rec review.Record, found map[
 	return rec, status, true
 }
 
-// settleBlocked settles a session that is waiting on the user, and reports
-// whether the session is still running. It reads GitHub once for each stretch
-// the session stays blocked, keyed on the time the agent last updated its
-// account, because a session stays blocked until the user answers it.
-func (s *Service) settleBlocked(ctx context.Context, rec review.Record, status engine.BGStatus) (review.Record, bool) {
-	s.blockMu.Lock()
-	seen, checked := s.blockSeen[rec.BGID]
+// settleIdle settles a session that has ended its turn, and reports whether the
+// session is still running. It reads GitHub once for each stretch the session
+// stays idle, keyed on the time the agent last updated its account, because a
+// session stays idle until the user answers it.
+func (s *Service) settleIdle(ctx context.Context, rec review.Record, status engine.BGStatus) (review.Record, bool) {
+	s.idleMu.Lock()
+	seen, checked := s.idleSeen[rec.BGID]
 	if checked && seen.Equal(status.Progress.UpdatedAt) {
-		s.blockMu.Unlock()
+		s.idleMu.Unlock()
 		return rec, true
 	}
-	if s.blockSeen == nil {
-		s.blockSeen = map[string]time.Time{}
+	if s.idleSeen == nil {
+		s.idleSeen = map[string]time.Time{}
 	}
-	s.blockSeen[rec.BGID] = status.Progress.UpdatedAt
-	s.blockMu.Unlock()
+	s.idleSeen[rec.BGID] = status.Progress.UpdatedAt
+	s.idleMu.Unlock()
 
 	settled, running, err := s.settle(ctx, rec)
 	if err != nil || !running {
 		// A failure is tried again on the next poll. A record that moved on
 		// may come back to running when the user opens its session, and the
-		// next block then has to be read.
-		s.forgetBlock(rec.BGID)
+		// next idle stretch then has to be read.
+		s.forgetIdle(rec.BGID)
 	}
 	if err != nil {
 		// The error goes on the row the way detectPolled puts it there. It is
@@ -287,18 +287,21 @@ func (s *Service) settleBlocked(ctx context.Context, rec review.Record, status e
 	return settled, running
 }
 
-func (s *Service) forgetBlock(id string) {
-	s.blockMu.Lock()
-	delete(s.blockSeen, id)
-	s.blockMu.Unlock()
+func (s *Service) forgetIdle(id string) {
+	s.idleMu.Lock()
+	delete(s.idleSeen, id)
+	s.idleMu.Unlock()
 }
 
-// settle reads GitHub for a blocked session, and reports whether the session is
-// still running. review-code ends a background review by asking whether to
-// submit the draft it posted, and claude reports that session as blocked, not
-// done. The session's own draft or submission moves the record on, so the user
-// can act on it from docket. claude still holds the session, so enter opens it.
-// A session that blocked before posting anything keeps running.
+// settle reads GitHub for a session that has ended its turn, and reports
+// whether the session is still running. A review-code background review ends
+// its turn once it has posted the draft, and claude keeps holding the session,
+// so it is idle rather than done. The last message may ask whether to submit,
+// which claude reports as blocked, or only say how to amend the draft, which
+// claude can leave as working. The session's own draft or submission moves the
+// record on, so the user can act on it from docket. claude still holds the
+// session, so enter opens it. A session that ended its turn before posting
+// anything keeps running.
 func (s *Service) settle(ctx context.Context, rec review.Record) (review.Record, bool, error) {
 	decided, reviews, err := s.decide(ctx, rec)
 	if err != nil {
@@ -392,7 +395,7 @@ func (s *Service) afterBackgroundExit(ctx context.Context, rec review.Record) (r
 		return s.detect(ctx, rec)
 	}
 	// A session the user left unanswered keeps the draft it posted.
-	if status.Blocked {
+	if status.Idle {
 		if settled, running, err := s.settle(ctx, rec); err == nil && !running {
 			return settled, nil
 		}
