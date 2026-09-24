@@ -293,15 +293,11 @@ func (s *Service) forgetIdle(id string) {
 	s.idleMu.Unlock()
 }
 
-// settle reads GitHub for a session that has ended its turn, and reports
-// whether the session is still running. A review-code background review ends
-// its turn once it has posted the draft, and claude keeps holding the session,
-// so it is idle rather than done. The last message may ask whether to submit,
-// which claude reports as blocked, or only say how to amend the draft, which
-// claude can leave as working. The session's own draft or submission moves the
-// record on, so the user can act on it from docket. claude still holds the
-// session, so enter opens it. A session that ended its turn before posting
-// anything keeps running.
+// settle reads GitHub for a session that has ended its turn while the agent
+// still holds it, and reports whether the session is still running. The
+// session's own draft or submission moves the record on, so the user can act on
+// it from docket, and enter still opens the session. A session that ended its
+// turn before posting anything keeps running.
 func (s *Service) settle(ctx context.Context, rec review.Record) (review.Record, bool, error) {
 	decided, reviews, err := s.decide(ctx, rec)
 	if err != nil {

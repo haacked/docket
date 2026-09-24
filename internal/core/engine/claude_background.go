@@ -71,7 +71,9 @@ func (Claude) StatusSpec(_ Paths) exec.CommandSpec {
 // finished its turn. It is not the only way a session ends, so the process
 // rather than the state is what ParseStatus reads: claude holds one for every
 // session it is still working on, and drops it for every session it is not.
-// A state docket has not seen therefore needs no entry here.
+// A state docket has not seen therefore needs no entry here. claude has left
+// an ended turn in other states, but it has not reported done for a turn that
+// was still running, so done is still read as over.
 const bgStateDone = "done"
 
 // bgStateBlocked is the state claude reports for a session that ended its turn
