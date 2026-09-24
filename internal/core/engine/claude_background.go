@@ -79,6 +79,12 @@ const bgStateDone = "done"
 // 2.1.281).
 const bgStateBlocked = "blocked"
 
+// bgStatusIdle is the status claude reports for a session that has ended its
+// turn, blocked sessions included. The state does not always say so. A session
+// can stay "working" with this status after its turn ends, for as long as
+// claude holds it (2.1.281).
+const bgStatusIdle = "idle"
+
 // agentEntry is one element of `claude agents --json`. Interactive sessions
 // appear too and carry no ID.
 type agentEntry struct {
@@ -86,6 +92,7 @@ type agentEntry struct {
 	SessionID string `json:"sessionId"`
 	Kind      string `json:"kind"`
 	State     string `json:"state"`
+	Status    string `json:"status"`
 	PID       int    `json:"pid"`
 	CWD       string `json:"cwd"`
 	StartedAt int64  `json:"startedAt"`
@@ -113,6 +120,7 @@ func (Claude) ParseStatus(res exec.Result) (map[string]BGStatus, error) {
 			// ever, and the user can stop one from outside docket.
 			Done:    entry.State == bgStateDone || entry.PID == 0,
 			Blocked: entry.State == bgStateBlocked,
+			Idle:    entry.Status == bgStatusIdle,
 			// claude keeps the process after the session's turn ends, and drops
 			// it once the session is stopped. That is the difference between a
 			// session that has to be attached and one a plain resume reopens.

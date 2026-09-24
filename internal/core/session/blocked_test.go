@@ -37,6 +37,54 @@ func TestPollMovesABlockedSessionWithADraftToDrafted(t *testing.T) {
 	}
 }
 
+// A review-code session can also end its turn with a statement, telling the user
+// how to amend the draft rather than asking. claude then keeps its working state
+// and reports it idle, so the draft has to be found the same way.
+func TestPollMovesAnIdleSessionWithADraftToDrafted(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := startedBackground(t, svc, bgRunner(idleListing("6d681a76", bgSession)))
+	ghc.reviews = []review.GHReview{myPending()}
+
+	records, statuses, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatalf("PollBackground: %v", err)
+	}
+	if records[0].State != review.StateDrafted || records[0].ReviewID != myPendingID {
+		t.Errorf("state %q with review %d, want drafted with the pending review", records[0].State, records[0].ReviewID)
+	}
+	if _, polled := statuses[rec.ID]; polled {
+		t.Error("a drafted record is still reported as running")
+	}
+	if got := storedByID(t, svc, rec.ID); got.State != review.StateDrafted || !got.HasBackgroundSession() {
+		t.Errorf("stored %q, background session %v, want drafted with the session kept", got.State, got.HasBackgroundSession())
+	}
+}
+
+// A session that is still working has nothing to find on GitHub yet, so the
+// poll does not read it.
+func TestPollDoesNotReadGitHubForABusySession(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := startedBackground(t, svc, bgRunner(bgListing("6d681a76", bgSession, "working", true)))
+	ghc.reviews = []review.GHReview{myPending()}
+	before := ghc.reads
+
+	records, statuses, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatalf("PollBackground: %v", err)
+	}
+	if got := ghc.reads - before; got != 0 {
+		t.Errorf("read GitHub %d times for a busy session, want none", got)
+	}
+	if records[0].State != review.StateReviewing {
+		t.Errorf("state = %q, want the review still running", records[0].State)
+	}
+	if _, polled := statuses[rec.ID]; !polled {
+		t.Error("the busy session is no longer watched")
+	}
+}
+
 // A session can block before it posts anything, at a permission prompt for
 // example. Reading that as unreviewed would stop watching a review in progress.
 func TestPollKeepsABlockedSessionWithNothingPostedRunning(t *testing.T) {
@@ -116,6 +164,23 @@ func TestLeavingABlockedSessionKeepsItsDraft(t *testing.T) {
 	}
 	if after.State != review.StateDrafted {
 		t.Errorf("state = %q, want the draft kept", after.State)
+	}
+}
+
+// A session that ended its turn without asking anything is left the same way
+// when the user opens it before a poll has seen the draft.
+func TestLeavingAnIdleSessionFindsItsDraft(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := startedBackground(t, svc, bgRunner(idleListing("6d681a76", bgSession)))
+	ghc.reviews = []review.GHReview{myPending()}
+
+	after, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil {
+		t.Fatalf("AfterExit: %v", err)
+	}
+	if after.State != review.StateDrafted {
+		t.Errorf("state = %q, want the session's draft", after.State)
 	}
 }
 

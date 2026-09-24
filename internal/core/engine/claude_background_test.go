@@ -330,4 +330,31 @@ func TestParseStatusReportsABlockedSession(t *testing.T) {
 	if got.Done {
 		t.Error("a blocked session read as finished")
 	}
+	if !got.Idle {
+		t.Error("a blocked session ended its turn but did not read as idle")
+	}
+}
+
+// A session that ends its turn without asking anything keeps its process and
+// its working state, and only the status says the turn is over. review-code's
+// background runs end this way when the last message tells the user what to do
+// next rather than asking.
+func TestParseStatusReportsASessionThatEndedItsTurnAsIdle(t *testing.T) {
+	statuses, err := Claude{}.ParseStatus(exec.Result{Stdout: `[
+		{"id": "aaaaaaaa", "kind": "background", "state": "working", "status": "idle", "pid": 5},
+		{"id": "bbbbbbbb", "kind": "background", "state": "working", "status": "busy", "pid": 6}
+	]`})
+	if err != nil {
+		t.Fatalf("ParseStatus: %v", err)
+	}
+	idle := statuses["aaaaaaaa"]
+	if !idle.Idle {
+		t.Error("a session that ended its turn did not read as idle")
+	}
+	if idle.Done || idle.Blocked {
+		t.Errorf("done %v, blocked %v, want neither: claude still holds the session and it asked nothing", idle.Done, idle.Blocked)
+	}
+	if statuses["bbbbbbbb"].Idle {
+		t.Error("a busy session read as idle")
+	}
 }
