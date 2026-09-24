@@ -133,3 +133,12 @@ type statusMsg struct{ text string }
 
 // errMsg is a failure to show the user.
 type errMsg struct{ err error }
+
+// bgStartFailedMsg reports a background launch that failed, with the record
+// StartBackground returned. A failure after the record reached StateReviewing
+// may have started a session with no id recorded. The handler polls for that
+// case only.
+type bgStartFailedMsg struct {
+	record review.Record
+	err    error
+}

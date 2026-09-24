@@ -12,6 +12,7 @@ import (
 	osexec "os/exec"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // CommandSpec is one command, complete enough to run or to print.
@@ -107,14 +108,21 @@ func (Real) Run(ctx context.Context, spec CommandSpec) (Result, error) {
 // lexically first key that appears anywhere in the rendered command line. Map
 // iteration is randomized, so the keys are sorted before matching: two keys that
 // both match one command line would otherwise pick a winner per run.
+//
+// Run takes a lock because detection reads the pull request and its reviews at
+// the same time.
 type Fake struct {
 	Calls   []CommandSpec
 	Results map[string]Result
 	Errs    map[string]error
 	Default Result
+
+	mu sync.Mutex
 }
 
 func (f *Fake) Run(_ context.Context, spec CommandSpec) (Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, spec)
 	line := spec.String()
 	for _, key := range slices.Sorted(maps.Keys(f.Errs)) {
@@ -132,6 +140,8 @@ func (f *Fake) Run(_ context.Context, spec CommandSpec) (Result, error) {
 
 // Lines returns every recorded call, for assertions.
 func (f *Fake) Lines() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := make([]string, 0, len(f.Calls))
 	for _, c := range f.Calls {
 		out = append(out, c.String())
