@@ -22,11 +22,11 @@ type BGStatus struct {
 	// its ParseStatus decides this rather than a word compared here.
 	Done bool
 	// Blocked reports that the session ended its turn with a question for the
-	// user. The agent still holds it, so it is not Done.
+	// user. The agent still holds it, so it is not Done. It is for the screen.
 	Blocked bool
 	// Idle reports that the session ended its turn, with or without a question,
-	// and the agent still holds it. It is what docket reads GitHub on, because
-	// a session that ends without asking anything is never Blocked.
+	// and the agent still holds it. A session that ends without asking anything
+	// is never Blocked.
 	Idle bool
 	// Progress is what the agent says the session is doing, beyond the listing.
 	// The poll fills it in for a session that is still running.

@@ -14,9 +14,10 @@ import (
 	"github.com/haacked/docket/internal/core/review"
 )
 
-// bgListing is `claude agents --json --all`. The helpers below rewrite the state
-// and the process in it, which is all the poll reads. claude reports a session
-// busy only while it is working.
+// bgListing is `claude agents --json --all`. The helpers below set the state,
+// the status, and the process in it, which is all the poll reads. bgListing
+// reports a working session busy and any other idle. idleListing covers a
+// working session that has ended its turn.
 func bgListing(id, sessionID, state string, live bool) string {
 	status := "idle"
 	if state == "working" {
@@ -172,6 +173,8 @@ func TestPollLearnsTheSessionIdAndKeepsWaiting(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 	rec := startedBackground(t, svc, bgRunner(bgListing("6d681a76", bgSession, "working", true)))
+	ghc.reviews = []review.GHReview{myPending()}
+	before := ghc.reads
 
 	records, statuses, err := svc.PollBackground(context.Background())
 	if err != nil {
@@ -182,6 +185,10 @@ func TestPollLearnsTheSessionIdAndKeepsWaiting(t *testing.T) {
 	}
 	if records[0].State != review.StateReviewing {
 		t.Errorf("state = %q, want the review still running", records[0].State)
+	}
+	// A busy session has nothing on GitHub to find yet.
+	if got := ghc.reads - before; got != 0 {
+		t.Errorf("read GitHub %d times for a busy session, want none", got)
 	}
 	if records[0].SessionID != bgSession {
 		t.Errorf("session id = %q, want the one claude reported", records[0].SessionID)
