@@ -94,6 +94,15 @@ type notesLoadedMsg struct {
 	missing  bool
 }
 
+// draftLoadedMsg carries the body of the record's pending review, read for the
+// submit screen. A failed read travels here rather than as an errMsg, because
+// the screen still submits without it.
+type draftLoadedMsg struct {
+	record review.Record
+	body   string
+	err    error
+}
+
 // editorExitedMsg reports that $EDITOR closed, so the notes are worth re-reading.
 type editorExitedMsg struct {
 	record review.Record

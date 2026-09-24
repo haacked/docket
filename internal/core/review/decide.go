@@ -12,6 +12,7 @@ type GHReview struct {
 	User        GHUser     `json:"user"`
 	State       string     `json:"state"`
 	SubmittedAt *time.Time `json:"submitted_at"`
+	Body        string     `json:"body"`
 }
 
 type GHUser struct {

@@ -210,3 +210,52 @@ func TestSubmitAllowsApprovingSomeoneElsesPullRequest(t *testing.T) {
 		t.Errorf("submitted %+v, want one approval", ghc.submitted)
 	}
 }
+
+// review-code posts its summary as the body of the pending review. The submit
+// screen starts from it, so the user edits that summary rather than writing one.
+func TestDraftBodyReadsThePendingReviewsSummary(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := drafted(t, svc, ghc, unlisted)
+	ghc.reviews = []review.GHReview{
+		{ID: 99, User: review.GHUser{Login: "someone"}, State: "COMMENTED", Body: "Somebody else's review."},
+		{ID: pendingID, User: review.GHUser{Login: "haacked"}, State: review.StatePending, Body: "Nice fix! No blockers."},
+	}
+
+	body, err := svc.DraftBody(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("DraftBody: %v", err)
+	}
+	if body != "Nice fix! No blockers." {
+		t.Errorf("body = %q, want the summary of review %d", body, pendingID)
+	}
+}
+
+// A new review of the pull request or the browser can delete the draft while
+// the screen is open. Submit reports the missing review when the user tries it.
+// The read therefore answers empty rather than failing.
+func TestDraftBodyIsEmptyWhenTheReviewIsGone(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := drafted(t, svc, ghc, unlisted)
+	ghc.reviews = nil
+
+	body, err := svc.DraftBody(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("DraftBody: %v", err)
+	}
+	if body != "" {
+		t.Errorf("body = %q, want none", body)
+	}
+}
+
+func TestDraftBodyReportsAFailedRead(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := drafted(t, svc, ghc, unlisted)
+	ghc.reviewErr = errors.New("HTTP 502")
+
+	if _, err := svc.DraftBody(context.Background(), rec); err == nil {
+		t.Error("DraftBody hid a failed read of GitHub")
+	}
+}

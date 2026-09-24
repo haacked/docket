@@ -183,12 +183,82 @@ func TestViewNamesThePullRequestAndEveryChoice(t *testing.T) {
 }
 
 func TestForResetsTheBodyBetweenRecords(t *testing.T) {
-	m := model()
-	m.Body.SetValue("a summary for the first review")
+	m := model().SetDraft("a summary for the first review")
 
 	m = m.For(record(), review.SubmitEvents)
 
 	if got := m.Body.Value(); got != "" {
 		t.Errorf("body = %q, want it cleared: it would otherwise be posted on the next review", got)
+	}
+	if strings.Contains(m.View(), keepsSummary) {
+		t.Errorf("the next record's screen still speaks of the last one's summary:\n%s", m.View())
+	}
+}
+
+// keepsSummary is part of the hint the screen shows under an emptied summary.
+const keepsSummary = "keeps the draft's summary"
+
+// The read of GitHub runs in a command, so the user can start typing before it
+// lands. What they typed wins.
+func TestTheDraftsSummaryLeavesWhatTheUserTyped(t *testing.T) {
+	m, _ := model().Update(typed("x"))
+
+	m = m.SetDraft("Nice fix! No blockers.")
+
+	if got := m.Body.Value(); got != "x" {
+		t.Errorf("body = %q, want what the user typed", got)
+	}
+}
+
+// The text area turns a tab into spaces. Sending an untouched summary back would
+// therefore rewrite it. Sending nothing leaves the draft's own text on GitHub.
+func TestAnUntouchedSummaryIsNotSentBack(t *testing.T) {
+	m := model().SetDraft("Nice fix!\n\n\tindented")
+
+	_, cmd := m.Update(ctrlS)
+	if cmd == nil {
+		t.Fatal("submitting produced no command")
+	}
+
+	if got := cmd().(msg.SubmitReview).Body; got != "" {
+		t.Errorf("body = %q, want none so that GitHub keeps the draft's summary", got)
+	}
+}
+
+// GitHub stores a body saved from the browser with \r\n line endings.
+func TestASummaryWithWindowsLineEndingsKeepsItsLines(t *testing.T) {
+	m := model().SetDraft("Nice fix!\r\n\r\nOne nit.")
+
+	if got := m.Body.Value(); got != "Nice fix!\n\nOne nit." {
+		t.Errorf("body = %q, want one line break for each \\r\\n", got)
+	}
+}
+
+func TestAnEditedSummaryIsSent(t *testing.T) {
+	m := model().SetDraft("Nice fix!")
+
+	m, _ = m.Update(typed("x"))
+	_, cmd := m.Update(ctrlS)
+	if cmd == nil {
+		t.Fatal("submitting produced no command")
+	}
+
+	if got := cmd().(msg.SubmitReview).Body; got != "xNice fix!" {
+		t.Errorf("body = %q, want the edited summary", got)
+	}
+}
+
+// GitHub keeps the draft's summary when the submit leaves out the body. An
+// emptied body therefore cannot remove the summary. The screen says so.
+func TestEmptyingTheSummarySaysGitHubKeepsIt(t *testing.T) {
+	m := model().SetDraft("Nice fix!")
+	if strings.Contains(m.View(), keepsSummary) {
+		t.Errorf("the view warns about an empty body while the summary is there:\n%s", m.View())
+	}
+
+	m.Body.SetValue("  \n")
+
+	if !strings.Contains(m.View(), keepsSummary) {
+		t.Errorf("the view does not say an empty body keeps the summary:\n%s", m.View())
 	}
 }

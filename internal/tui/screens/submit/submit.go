@@ -31,6 +31,8 @@ type Model struct {
 	Body   textarea.Model
 	Styles Styles
 	Busy   string
+	// draft is the pending review's body as the text area holds it after SetDraft.
+	draft string
 }
 
 func New(styles Styles) Model {
@@ -54,6 +56,22 @@ func (m Model) For(rec review.Record, events []string) Model {
 	m.Body.Reset()
 	m.Body.Focus()
 	m.Busy = ""
+	m.draft = ""
+	return m
+}
+
+// SetDraft fills the body with the pending review's body. It leaves alone a body
+// the user has typed in, because the read of GitHub runs in a command and can
+// land after the user starts typing.
+func (m Model) SetDraft(body string) Model {
+	if m.Body.Value() != "" {
+		return m
+	}
+	// A body saved from the browser ends its lines in \r\n. The text area turns
+	// each \r into a line break of its own, which would double every line.
+	m.Body.SetValue(strings.ReplaceAll(body, "\r\n", "\n"))
+	m.Body.MoveToBegin()
+	m.draft = m.Body.Value()
 	return m
 }
 
@@ -79,11 +97,18 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			if m.Busy != "" || m.Event == "" {
 				return m, nil
 			}
+			body := m.Body.Value()
+			// The text area turns a tab into spaces and drops control
+			// characters. An untouched draft therefore goes unsent. GitHub then
+			// keeps the draft's own text.
+			if body == m.draft {
+				body = ""
+			}
 			m.Busy = "submitting"
 			return m, msg.Send(msg.SubmitReview{
 				ID:    m.Record.ID,
 				Event: m.Event,
-				Body:  strings.TrimSpace(m.Body.Value()),
+				Body:  strings.TrimSpace(body),
 			})
 		}
 	}
@@ -104,6 +129,9 @@ func (m Model) View() string {
 
 	b.WriteString("\n" + m.Styles.Label.Render("Body") + "\n")
 	b.WriteString(m.Body.View() + "\n")
+	if m.draft != "" && strings.TrimSpace(m.Body.Value()) == "" {
+		b.WriteString(m.Styles.Dim.Render("GitHub keeps the draft's summary when the body is empty.") + "\n")
+	}
 
 	if m.Busy != "" {
 		b.WriteString("\n" + m.Styles.Dim.Render(m.Busy+"…") + "\n")

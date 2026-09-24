@@ -796,6 +796,22 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 	return s.detect(ctx, rec)
 }
 
+// DraftBody reads the body of the record's pending review, which is the summary
+// review-code posted with it. A review that is no longer on GitHub answers
+// empty. Submit reports the missing review when the user tries it.
+func (s *Service) DraftBody(ctx context.Context, rec review.Record) (string, error) {
+	reviews, err := s.GH.Reviews(ctx, rec.Ref)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range reviews {
+		if r.ID == rec.ReviewID {
+			return r.Body, nil
+		}
+	}
+	return "", nil
+}
+
 // Refresh re-reads GitHub for a record whose session is over.
 func (s *Service) Refresh(ctx context.Context, rec review.Record) (review.Record, error) {
 	if err := refuseRefresh(rec); err != nil {

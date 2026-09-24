@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -44,20 +45,81 @@ func liveApp(records ...review.Record) App {
 	return a
 }
 
-func TestOpeningSubmitAimsTheScreenAtTheRecord(t *testing.T) {
+// The screen opens before the draft's summary is read, and the summary fills the
+// body when it lands.
+func TestOpeningSubmitAimsTheScreenThenFillsTheSummary(t *testing.T) {
 	rec := draftedRecord()
 
 	next, cmd := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
 	a := next.(App)
 
-	if cmd != nil {
-		t.Errorf("opening the submit screen ran %#v", cmd())
+	if cmd == nil {
+		t.Error("opening the submit screen did not read the draft's summary")
 	}
 	if a.screen != msg.Submit {
 		t.Fatalf("screen = %v, want the submit screen", a.screen)
 	}
 	if content := a.View().Content; !strings.Contains(content, "haacked/docket#7") {
 		t.Errorf("the submit screen does not name the pull request:\n%s", content)
+	}
+
+	next, _ = a.Update(draftLoadedMsg{record: rec, body: "Nice fix! No blockers."})
+
+	if got := next.(App).sub.Body.Value(); got != "Nice fix! No blockers." {
+		t.Errorf("body = %q, want the draft's summary", got)
+	}
+}
+
+// The read runs in a command, so it can land after the user left the screen or
+// opened another record's.
+func TestADraftSummaryForAnotherScreenIsIgnored(t *testing.T) {
+	left := draftedRecord()
+	open := draftedRecord()
+	open.ID = "rec-2"
+	open.Ref = pr.Ref{Org: "haacked", Repo: "docket", Number: 9}
+
+	tests := []struct {
+		name    string
+		message tea.Msg
+	}{
+		{name: "another record's submit screen", message: msg.OpenSubmit{ID: open.ID}},
+		{name: "back on the dashboard", message: msg.Goto{Screen: msg.Dashboard}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			next, _ := liveApp(left, open).Update(msg.OpenSubmit{ID: left.ID})
+			next, _ = next.(App).Update(tc.message)
+
+			next, _ = next.(App).Update(draftLoadedMsg{record: left, body: "The summary of the record left behind."})
+
+			if got := next.(App).sub.Body.Value(); got != "" {
+				t.Errorf("body = %q, want the late summary dropped", got)
+			}
+		})
+	}
+}
+
+// The screen still submits without the summary, because an empty body keeps
+// whatever the draft holds. A failed read therefore goes to the status line. It
+// does not go through the error path, which clears the dashboard's busy markers.
+func TestAFailedReadOfTheSummaryLeavesTheScreenUsable(t *testing.T) {
+	rec := draftedRecord()
+	next, _ := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
+	a := next.(App)
+	a.dash.Busy["rec-other"] = "abandoning"
+
+	next, _ = a.Update(draftLoadedMsg{record: rec, err: errors.New("HTTP 502")})
+	a = next.(App)
+
+	if a.screen != msg.Submit {
+		t.Errorf("screen = %v, want the submit screen still open", a.screen)
+	}
+	if !strings.Contains(a.status, "HTTP 502") {
+		t.Errorf("status = %q, want the failure in it", a.status)
+	}
+	if a.dash.Busy["rec-other"] == "" {
+		t.Error("a failed read of the summary cleared another row's busy marker")
 	}
 }
 
