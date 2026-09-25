@@ -10,8 +10,13 @@ import (
 
 // helpFor is the footer line for a screen, built from the same per-screen
 // tables help.View uses for the full key reference, so the two cannot drift
-// the way they once did.
-func helpFor(screen msg.Screen, showArchived bool) string {
+// the way they once did. choosing means the screen is asking what to do with a
+// review that already exists. That question lists its own keys. The screen's
+// other keys do nothing until the user answers it.
+func helpFor(screen msg.Screen, showArchived, choosing bool) string {
+	if choosing {
+		return "ctrl+c quit"
+	}
 	switch screen {
 	case msg.NewReview:
 		return join(append(help.Footer(help.NewReview), "ctrl+c quit")...)

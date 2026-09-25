@@ -97,14 +97,12 @@ func TestALaunchRefusedForTrustAsksForTheTrustPrompt(t *testing.T) {
 func TestABatchSendsItsRefusedLaunchesToTheTrustPrompt(t *testing.T) {
 	a, _ := untrustedService(t)
 
-	got, ok := a.startBatch([]string{"https://github.com/haacked/docket/pull/7"}, "claude")().(batchStartedMsg)
-	if !ok {
-		t.Fatal("the batch did not report a batchStartedMsg")
-	}
+	_, cmd := check(t, *a, "https://github.com/haacked/docket/pull/7")
+	got := only[batchStartedMsg](t, cmd)
 	if len(got.untrusted) != 1 || len(got.failed) != 0 {
 		t.Fatalf("untrusted = %d, failed = %q, want the refusal waiting on the trust prompt", len(got.untrusted), got.failed)
 	}
-	_, cmd := a.Update(got)
+	_, cmd = a.Update(got)
 	if !slices.ContainsFunc(drain(cmd), isTrustPrompt) {
 		t.Error("the batch did not hand the terminal to the trust prompt")
 	}
@@ -252,10 +250,10 @@ func TestATrustPromptThatCannotRunStillAsksAboutTheOthers(t *testing.T) {
 	}
 }
 
-// Pull requests a batch skipped have no row on the dashboard. The status is the
-// only place that names them, so the reports after a trust prompt add to it.
-func TestTheReportAfterATrustPromptKeepsWhatTheBatchSkipped(t *testing.T) {
-	next, _ := app().Update(batchStartedMsg{skipped: []string{"haacked/docket#9"}})
+// A pull request that failed its check has no row on the dashboard. The status
+// is the only place that names it, so the reports after a trust prompt add to it.
+func TestTheReportAfterATrustPromptKeepsWhatTheBatchFailed(t *testing.T) {
+	next, _ := app().Update(batchStartedMsg{failed: []string{"haacked/docket#9: boom"}})
 	next, _ = next.(App).Update(batchStartedMsg{started: 1, retry: true})
 
 	status := next.(App).status

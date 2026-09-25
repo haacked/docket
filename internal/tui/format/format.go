@@ -3,9 +3,12 @@ package format
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/haacked/docket/internal/core/review"
 )
 
 // Truncate cuts s to width terminal columns, ending in an ellipsis when it cuts.
@@ -66,6 +69,22 @@ func Plural(n int, noun string) string {
 		return noun
 	}
 	return noun + "s"
+}
+
+// Existing says in one line what review of a pull request is already there. It
+// is empty when there is none.
+func Existing(found review.Found) string {
+	var parts []string
+	if !found.NotesAt.IsZero() {
+		parts = append(parts, "notes from "+found.NotesAt.Format("2006-01-02"))
+	}
+	if found.PendingID != 0 {
+		parts = append(parts, "pending draft on GitHub")
+	}
+	if found.Submitted {
+		parts = append(parts, "submitted review on GitHub")
+	}
+	return strings.Join(parts, " · ")
 }
 
 // Width is the terminal width, or 80 before the first WindowSizeMsg arrives.

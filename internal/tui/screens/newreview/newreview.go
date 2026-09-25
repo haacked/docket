@@ -6,7 +6,6 @@ package newreview
 import (
 	"slices"
 	"strings"
-	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
+	"github.com/haacked/docket/internal/tui/format"
 	"github.com/haacked/docket/internal/tui/msg"
 	"github.com/haacked/docket/internal/tui/screens/choice"
 )
@@ -54,10 +54,7 @@ type Existing struct {
 	// RecordID names a record already on the dashboard, which offers only a
 	// re-review. It is empty for a typed pull request.
 	RecordID string
-	// NotesAt is when the notes were last written, and zero when there are none.
-	NotesAt   time.Time
-	Pending   bool
-	Submitted bool
+	review.Found
 }
 
 // CanAsk reports whether view and ask is on offer. It needs notes to ask about.
@@ -258,7 +255,7 @@ func (m Model) existingView(found Existing) string {
 		title = "Review " + found.Ref + " again"
 	}
 	b.WriteString(m.Styles.Label.Render(title) + "\n")
-	if summary := found.summary(); summary != "" {
+	if summary := format.Existing(found.Found); summary != "" {
 		b.WriteString(m.Styles.Dim.Render(summary) + "\n")
 	}
 
@@ -276,21 +273,6 @@ func (m Model) existingView(found Existing) string {
 		b.WriteString("\n" + m.Styles.Dim.Render(m.Busy+"…") + "\n")
 	}
 	return b.String()
-}
-
-// summary says what was found, in one line.
-func (e Existing) summary() string {
-	var parts []string
-	if !e.NotesAt.IsZero() {
-		parts = append(parts, "notes from "+e.NotesAt.Format("2006-01-02"))
-	}
-	if e.Pending {
-		parts = append(parts, "pending draft on GitHub")
-	}
-	if e.Submitted {
-		parts = append(parts, "submitted review on GitHub")
-	}
-	return strings.Join(parts, " · ")
 }
 
 // runLine says where the review will run, and why the choice is not on offer

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -295,5 +296,113 @@ func TestARowWithNoReviewPostedSaysSo(t *testing.T) {
 	view := m.View()
 	if !strings.Contains(view, "no review posted") || strings.Contains(view, "unreviewed") {
 		t.Errorf("the row does not say the session posted nothing:\n%s", view)
+	}
+}
+
+var notesWritten = time.Date(2026, 9, 18, 15, 30, 0, 0, time.UTC)
+
+// asking is the screen after the root found that #1, one of two marked pull
+// requests, already has a review of yours.
+func asking() Model {
+	m, _ := newModel().Update(space)
+	m, _ = m.Update(key("G"))
+	m, _ = m.Update(space)
+	m, _ = m.Update(enter)
+	return m.SetExisting([]Existing{{Ref: "o/r#1", Found: review.Found{NotesAt: notesWritten, Submitted: true}}}, 1)
+}
+
+// The root reads GitHub for every marked pull request before it answers. A
+// second enter in that time would check and start the same batch twice.
+func TestASecondEnterWhileTheBatchIsCheckedSendsNothing(t *testing.T) {
+	m, _ := newModel().Update(space)
+	m, _ = m.Update(enter)
+
+	if _, cmd := m.Update(enter); cmd != nil {
+		t.Errorf("the second enter sent %#v", cmd())
+	}
+}
+
+func TestTheChoiceSaysWhatReviewEachPullRequestHas(t *testing.T) {
+	view := asking().View()
+
+	for _, want := range []string{"o/r#1", "already has a review of yours", "notes from 2026-09-18", "submitted review on GitHub", "append", "overwrite", "skip"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the view does not show %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestChoiceKeysAnswerTheBatch(t *testing.T) {
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{"a", string(review.IntentAppend)},
+		{"o", string(review.IntentOverwrite)},
+		{"s", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.key, func(t *testing.T) {
+			_, cmd := asking().Update(key(tc.key))
+
+			if got, want := sent(t, cmd), (msg.AnswerBatch{Intent: tc.want}); got != want {
+				t.Errorf("%s sent %#v, want %#v", tc.key, got, want)
+			}
+		})
+	}
+}
+
+// Skipping the pull requests that have a review starts the others. With no
+// others, a skip would start nothing, which is what esc already does.
+func TestSkipIsNotOfferedWhenNothingElseWouldStart(t *testing.T) {
+	m := asking().SetExisting([]Existing{{Ref: "o/r#1", Found: review.Found{NotesAt: notesWritten}}}, 0)
+
+	if _, cmd := m.Update(key("s")); cmd != nil {
+		t.Errorf("s sent %#v with nothing else to start", cmd())
+	}
+	if strings.Contains(m.View(), "skip") {
+		t.Errorf("the view offers a skip that starts nothing:\n%s", m.View())
+	}
+}
+
+// The root starts the batch when the answer arrives. A second key before then
+// would answer the same batch again.
+func TestASecondAnswerSendsNothing(t *testing.T) {
+	m, _ := asking().Update(key("a"))
+
+	if _, cmd := m.Update(key("o")); cmd != nil {
+		t.Errorf("the second answer sent %#v", cmd())
+	}
+}
+
+// esc goes back to the list with the marks as they were, so the user can change
+// them and press enter again.
+func TestEscFromTheChoiceKeepsTheMarks(t *testing.T) {
+	m, cmd := asking().Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if cmd != nil {
+		t.Errorf("esc sent %#v", cmd())
+	}
+	if m.Asking() {
+		t.Errorf("the choice is still on screen: %+v", m.Existing)
+	}
+	if len(m.Marked) != 2 {
+		t.Errorf("marked = %v, want both marks kept", m.Marked)
+	}
+	if _, cmd := m.Update(enter); cmd == nil {
+		t.Error("enter after esc did not start the batch again")
+	}
+}
+
+func TestListKeysDoNothingDuringTheChoice(t *testing.T) {
+	before := asking()
+	for _, k := range []tea.KeyPressMsg{space, enter, key("r"), key("j")} {
+		m, cmd := before.Update(k)
+		if cmd != nil {
+			t.Errorf("%q sent %#v during the choice", k.String(), cmd())
+		}
+		if len(m.Marked) != 2 || m.Cursor != before.Cursor {
+			t.Errorf("%q changed the list during the choice", k.String())
+		}
 	}
 }

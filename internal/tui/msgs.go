@@ -6,7 +6,6 @@ import (
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
-	"github.com/haacked/docket/internal/core/session"
 )
 
 // These messages are produced by the root's own commands and consumed by the
@@ -35,7 +34,7 @@ type preparedMsg struct {
 type existingMsg struct {
 	ref    pr.Ref
 	engine string
-	found  session.Found
+	found  review.Found
 }
 
 // launchMsg hands the root the command to run on the terminal.
@@ -133,14 +132,48 @@ type indexChangedMsg struct{ stamp index.StatMark }
 // requestsLoadedMsg carries what one search of GitHub for review requests found.
 type requestsLoadedMsg struct{ fetched requests.Fetched }
 
-// batchStartedMsg reports a batch of background reviews. skipped holds each pull
-// request left alone because it already has a review. failed holds one line per
-// pull request that did not start. untrusted holds the records the agent
+// batchCheckedMsg reports what review each pull request in a batch already has,
+// in the order the rows are drawn. failed holds one line per pull request the
+// check could not read, which the batch leaves out. err is a failure that stops
+// the whole batch before the check reads anything.
+type batchCheckedMsg struct {
+	engine string
+	items  []batchItem
+	failed []string
+	err    error
+}
+
+type batchItem struct {
+	ref    pr.Ref
+	found  review.Found
+	intent review.Intent
+}
+
+// resolve gives each item the intent it starts with: answer for an item that
+// already has a review, and IntentReview for the rest. An empty answer leaves
+// the items that have a review out.
+func (b batchCheckedMsg) resolve(answer review.Intent) batchCheckedMsg {
+	var items []batchItem
+	for _, item := range b.items {
+		item.intent = review.IntentReview
+		if item.found.Any() {
+			if answer == "" {
+				continue
+			}
+			item.intent = answer
+		}
+		items = append(items, item)
+	}
+	b.items = items
+	return b
+}
+
+// batchStartedMsg reports a batch of background reviews. failed holds one line
+// per pull request that did not start. untrusted holds the records the agent
 // refused because it does not trust their directories yet. retry marks the
 // report of the launches that follow a trust prompt.
 type batchStartedMsg struct {
 	started   int
-	skipped   []string
 	failed    []string
 	untrusted []review.Record
 	retry     bool

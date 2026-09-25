@@ -262,22 +262,6 @@ func (s *Service) refuseOpen(ref pr.Ref) error {
 	return nil
 }
 
-// Found is what already exists for a pull request before docket reviews it.
-type Found struct {
-	// NotesAt is when the notes file was last written, and zero when there is
-	// none.
-	NotesAt time.Time
-	// PendingID is my pending review on GitHub, or 0.
-	PendingID int64
-	// Submitted reports that I have already submitted a review.
-	Submitted bool
-}
-
-// Any reports whether there is a review the user has to choose what to do with.
-func (f Found) Any() bool {
-	return !f.NotesAt.IsZero() || f.PendingID != 0 || f.Submitted
-}
-
 // Existing reports what review of a pull request is already there, so the user
 // can choose to ask about it, append to it, or overwrite it before review-code
 // asks the same question in a terminal nobody may be watching.
@@ -285,20 +269,20 @@ func (f Found) Any() bool {
 // It writes nothing, so a dry run calls it too. That includes the login cache.
 // On an install that has not cached a login, Existing asks GitHub without saving
 // the answer, and Prepare saves it later.
-func (s *Service) Existing(ctx context.Context, ref pr.Ref) (Found, error) {
+func (s *Service) Existing(ctx context.Context, ref pr.Ref) (review.Found, error) {
 	// The index is local, so the refusal comes before anything asks GitHub.
 	if err := s.refuseOpen(ref); err != nil {
-		return Found{}, err
+		return review.Found{}, err
 	}
 
-	var found Found
+	var found review.Found
 	if info, err := os.Stat(s.Cfg.NotesPath(ref.Org, ref.Repo, ref.Number)); err == nil {
 		found.NotesAt = info.ModTime()
 	}
 
 	me, reviews, err := s.myReviews(ctx, ref, s.peekLogin)
 	if err != nil {
-		return Found{}, err
+		return review.Found{}, err
 	}
 	found.PendingID = review.PendingReviewID(reviews, me)
 	found.Submitted = len(review.PriorSubmittedIDs(reviews, me)) > 0
@@ -307,7 +291,7 @@ func (s *Service) Existing(ctx context.Context, ref pr.Ref) (Found, error) {
 	// a review the user has no choice to make, and the check skips the call.
 	if found.Any() {
 		if _, err := s.openPR(ctx, ref); err != nil {
-			return Found{}, err
+			return review.Found{}, err
 		}
 	}
 	return found, nil
