@@ -43,9 +43,10 @@ type Model struct {
 	// yours while the screen asks what to do with them. It is empty otherwise.
 	Existing []Existing
 	// Others is how many marked pull requests start whatever the answer.
-	Others int
-	Styles Styles
-	Width  int
+	Others  int
+	Spinner format.Spinner
+	Styles  Styles
+	Width   int
 	// Height is the rows the list may use. Zero draws every row.
 	Height int
 	Now    func() time.Time
@@ -218,7 +219,7 @@ func (m Model) View() string {
 		return m.existingView()
 	}
 	if m.Loading && len(m.Sections) == 0 {
-		return m.Styles.Dim.Render("Searching GitHub for review requests…")
+		return m.Spinner.Render("Searching GitHub for review requests")
 	}
 
 	var lines []string
@@ -265,10 +266,11 @@ func (m Model) header() string {
 	case len(m.Marked) > 0:
 		text = fmt.Sprintf("%d marked · enter starts them as %s background reviews", len(m.Marked), m.Engine)
 	}
+	header := m.Styles.Dim.Render(text)
 	if m.Loading {
-		text += " · refreshing…"
+		header += m.Styles.Dim.Render(" · ") + m.Spinner.Render("refreshing")
 	}
-	return m.Styles.Dim.Render(text)
+	return header
 }
 
 func (m Model) existingView() string {

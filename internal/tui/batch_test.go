@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/haacked/docket/internal/core/clone"
@@ -100,7 +101,9 @@ func cloningService(t *testing.T) (*session.Service, *exec.Fake) {
 }
 
 // drain runs a command and every command a batch holds, and returns the
-// messages they produced.
+// messages they produced. It leaves out the spinner's tick. Update adds that tick
+// to any command that leaves something busy, and the tick is not a result of the
+// work.
 func drain(cmd tea.Cmd) []tea.Msg {
 	if cmd == nil {
 		return nil
@@ -112,6 +115,9 @@ func drain(cmd tea.Cmd) []tea.Msg {
 			msgs = append(msgs, drain(c)...)
 		}
 		return msgs
+	}
+	if _, ok := out.(spinner.TickMsg); ok {
+		return nil
 	}
 	return []tea.Msg{out}
 }

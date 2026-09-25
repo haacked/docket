@@ -39,6 +39,7 @@ type Model struct {
 	DefaultRepo string
 	Styles      Styles
 	Busy        string
+	Spinner     format.Spinner
 	// Existing holds what was found while the screen asks what to do with a
 	// review that is already there. It is nil while the screen takes a pull
 	// request.
@@ -136,6 +137,19 @@ func (m Model) SetValue(value string) Model {
 }
 
 func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
+	// A change made after enter would not reach the review that starts. Every
+	// key but esc, and every paste, therefore does nothing until the root
+	// answers.
+	if m.Busy != "" {
+		switch message := message.(type) {
+		case tea.PasteMsg:
+			return m, nil
+		case tea.KeyPressMsg:
+			if message.String() != "esc" {
+				return m, nil
+			}
+		}
+	}
 	if m.Existing != nil {
 		if key, ok := message.(tea.KeyPressMsg); ok {
 			return m.choose(key)
@@ -155,9 +169,6 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			if m.Busy != "" {
-				return m, nil
-			}
 			value := strings.TrimSpace(m.Input.Value())
 			if _, err := m.ref(); err != nil {
 				return m, nil
@@ -201,9 +212,6 @@ func (m Model) choose(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
-	if m.Busy != "" {
-		return m, nil
-	}
 
 	m.Busy = "preparing"
 	return m, msg.Send(msg.StartReview{
@@ -243,7 +251,7 @@ func (m Model) View() string {
 	b.WriteString("\n" + m.Styles.Label.Render("Engine") + " " + choice.Line(m.Engines, m.Engine, lipgloss.Style{}, m.Styles.Dim) + "\n")
 	b.WriteString(m.Styles.Label.Render("Run") + " " + m.runLine() + "\n")
 	if m.Busy != "" {
-		b.WriteString("\n" + m.Styles.Dim.Render(m.Busy+"…") + "\n")
+		b.WriteString("\n" + m.Spinner.Render(m.Busy) + "\n")
 	}
 	return b.String()
 }
@@ -270,7 +278,7 @@ func (m Model) existingView(found Existing) string {
 		b.WriteString(m.Styles.Dim.Render("view and ask runs in this terminal") + "\n")
 	}
 	if m.Busy != "" {
-		b.WriteString("\n" + m.Styles.Dim.Render(m.Busy+"…") + "\n")
+		b.WriteString("\n" + m.Spinner.Render(m.Busy) + "\n")
 	}
 	return b.String()
 }

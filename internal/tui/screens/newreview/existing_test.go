@@ -260,3 +260,43 @@ func TestEnterSendsNoIntent(t *testing.T) {
 		t.Errorf("got %#v, want no intent and no record", got)
 	}
 }
+
+// The screen already sent the choice to the root with its background setting. A
+// ctrl+b now would show the review running somewhere it does not.
+func TestCtrlBDoesNotMoveAReviewThatIsPreparing(t *testing.T) {
+	m, _ := choosing().Update(press("a"))
+	if m.Busy == "" {
+		t.Fatal("the choice did not mark the screen busy")
+	}
+
+	m, _ = m.Update(ctrlB)
+
+	if m.Background {
+		t.Error("ctrl+b moved a review that was already preparing in this terminal")
+	}
+}
+
+func TestEscOnARereviewGoesBackWhilePreparing(t *testing.T) {
+	m, _ := rereviewing().Update(press("a"))
+	if m.Busy == "" {
+		t.Fatal("the choice did not mark the screen busy")
+	}
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("esc produced no command while preparing")
+	}
+
+	if got, want := cmd(), (msg.Goto{Screen: msg.Dashboard}); got != want {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestTheChoiceStepsBusyLineCarriesTheSpinnersFrame(t *testing.T) {
+	m, _ := choosing().Update(press("a"))
+	m.Spinner.Frame = "⠙"
+
+	if view := m.View(); !strings.Contains(view, "⠙ preparing…") {
+		t.Errorf("the view does not put the frame before what is running:\n%s", view)
+	}
+}

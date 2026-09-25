@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/haacked/docket/internal/core/review"
+	"github.com/haacked/docket/internal/tui/format"
 	"github.com/haacked/docket/internal/tui/msg"
 	"github.com/haacked/docket/internal/tui/screens/choice"
 )
@@ -25,12 +26,13 @@ type Styles struct {
 }
 
 type Model struct {
-	Record review.Record
-	Events []string
-	Event  string
-	Body   textarea.Model
-	Styles Styles
-	Busy   string
+	Record  review.Record
+	Events  []string
+	Event   string
+	Body    textarea.Model
+	Styles  Styles
+	Busy    string
+	Spinner format.Spinner
 	// draft is the pending review's body as the text area holds it after SetDraft.
 	draft string
 }
@@ -80,11 +82,17 @@ func (m Model) SetDraft(body string) Model {
 // looks like a hang.
 func (m Model) ClearBusy() Model {
 	m.Busy = ""
+	m.Body.Focus()
 	return m
 }
 
 func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 	if key, ok := message.(tea.KeyPressMsg); ok {
+		// A change made after ctrl+s would never be sent. Every key but esc
+		// therefore does nothing until the submit answers.
+		if m.Busy != "" && key.String() != "esc" {
+			return m, nil
+		}
 		switch key.String() {
 		case "esc":
 			return m, msg.Send(msg.Goto{Screen: msg.Dashboard})
@@ -94,7 +102,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		// The body is a textarea, where enter is a newline. Submitting is its own
 		// key so a multi-line summary stays possible.
 		case "ctrl+s":
-			if m.Busy != "" || m.Event == "" {
+			if m.Event == "" {
 				return m, nil
 			}
 			body := m.Body.Value()
@@ -105,6 +113,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 				body = ""
 			}
 			m.Busy = "submitting"
+			m.Body.Blur()
 			return m, msg.Send(msg.SubmitReview{
 				ID:    m.Record.ID,
 				Event: m.Event,
@@ -134,7 +143,7 @@ func (m Model) View() string {
 	}
 
 	if m.Busy != "" {
-		b.WriteString("\n" + m.Styles.Dim.Render(m.Busy+"…") + "\n")
+		b.WriteString("\n" + m.Spinner.Render(m.Busy) + "\n")
 	}
 	return b.String()
 }

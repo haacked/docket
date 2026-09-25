@@ -100,8 +100,13 @@ func TestASecondAskWhileTheFirstOpensIsIgnored(t *testing.T) {
 	a := withRecords(rec)
 	a.dash.Busy[rec.ID] = "opening"
 
-	if _, cmd := a.Update(msg.Ask{ID: rec.ID}); cmd != nil {
+	next, cmd := a.Update(msg.Ask{ID: rec.ID})
+
+	if len(drain(cmd)) != 0 {
 		t.Error("a second ask ran a command while the first was opening")
+	}
+	if want := rec.Ref.String() + " is still opening"; next.(App).status != want {
+		t.Errorf("status = %q, want %q", next.(App).status, want)
 	}
 }
 

@@ -262,3 +262,75 @@ func TestEmptyingTheSummarySaysGitHubKeepsIt(t *testing.T) {
 		t.Errorf("the view does not say an empty body keeps the summary:\n%s", m.View())
 	}
 }
+
+// A change made after ctrl+s would never be sent. The screen would then show an
+// event that the review did not go out with.
+func TestTabDoesNotChangeTheEventWhileSubmitting(t *testing.T) {
+	m, _ := model().Update(ctrlS)
+	event := m.Event
+
+	m, _ = m.Update(key(tea.KeyTab))
+
+	if m.Event != event {
+		t.Errorf("event = %q, want %q: tab changed it after the review went out", m.Event, event)
+	}
+}
+
+func TestTypingDoesNotReachTheBodyWhileSubmitting(t *testing.T) {
+	m, _ := model().Update(typed("a"))
+	m, _ = m.Update(ctrlS)
+
+	m, _ = m.Update(typed("b"))
+
+	if got := m.Body.Value(); got != "a" {
+		t.Errorf("body = %q, want what was sent: the typing came after the submit", got)
+	}
+}
+
+// esc is the one key that works while the submit runs. The dashboard row says
+// it is still submitting.
+func TestEscapeGoesBackWhileSubmitting(t *testing.T) {
+	m, _ := model().Update(ctrlS)
+
+	_, cmd := m.Update(key(tea.KeyEscape))
+	if cmd == nil {
+		t.Fatal("escape produced no command while submitting")
+	}
+
+	if got, want := cmd(), (msg.Goto{Screen: msg.Dashboard}); got != want {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestSubmittingTakesTheFocusFromTheBody(t *testing.T) {
+	m, _ := model().Update(ctrlS)
+
+	if m.Body.Focused() {
+		t.Error("the body still has the focus while the review is being submitted")
+	}
+}
+
+// A failed submit leaves the user on this screen to retry. A retry may mean
+// editing the body first.
+func TestClearingBusyMakesTheBodyEditableAgain(t *testing.T) {
+	m, _ := model().Update(ctrlS)
+
+	m = m.ClearBusy()
+	m, _ = m.Update(typed("x"))
+
+	if !m.Body.Focused() {
+		t.Error("the body did not get the focus back")
+	}
+	if got := m.Body.Value(); got != "x" {
+		t.Errorf("body = %q, want what was typed after the failure", got)
+	}
+}
+
+func TestTheBusyLineCarriesTheSpinnersFrame(t *testing.T) {
+	m, _ := model().Update(ctrlS)
+	m.Spinner.Frame = "⠙"
+
+	if view := m.View(); !strings.Contains(view, "⠙ submitting…") {
+		t.Errorf("the view does not put the frame before what is running:\n%s", view)
+	}
+}

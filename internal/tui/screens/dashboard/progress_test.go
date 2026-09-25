@@ -152,3 +152,34 @@ func TestALaunchThatDidNotStartHasItsOwnGroup(t *testing.T) {
 		t.Errorf("the row does not say why it did not start:\n%s", view)
 	}
 }
+
+// The note says that the row is working. It comes first in the metadata, because
+// a narrow terminal cuts the metadata from the end.
+func TestABusyRowLeadsItsMetadataWithTheNote(t *testing.T) {
+	m := progressModel(160, runningRecord())
+	m.Busy["rec-1"] = "stopping"
+	m.Spinner.Frame = "⠙"
+
+	if line := lineOf(t, m.View(), "PostHog/posthog#105890"); !strings.Contains(line, "· ⠙ stopping… · claude") {
+		t.Errorf("the note does not lead the metadata:\n%s", line)
+	}
+}
+
+func TestABusyNoteSurvivesANarrowTerminal(t *testing.T) {
+	const width = 72
+	m := progressModel(width, runningRecord())
+	m.Busy["rec-1"] = "stopping"
+	m.Spinner.Frame = "⠙"
+
+	line := strings.TrimRight(lineOf(t, m.View(), "PostHog/posthog#105890"), "\n")
+
+	if !strings.Contains(line, "⠙ stopping…") {
+		t.Errorf("the note was cut:\n%s", line)
+	}
+	if strings.Contains(line, "background") {
+		t.Errorf("the metadata after the note was not cut, so the row cannot fit:\n%s", line)
+	}
+	if got := utf8.RuneCountInString(line); got > width {
+		t.Errorf("the line is %d columns, want at most %d:\n%s", got, width, line)
+	}
+}

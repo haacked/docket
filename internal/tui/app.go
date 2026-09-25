@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/haacked/docket/internal/core/config"
@@ -62,7 +63,16 @@ type App struct {
 	width  int
 	height int
 	status string
-	err    error
+	// working is work in flight that no screen shows a marker for, such as a
+	// batch start or a refresh of every record. The status line shows it in
+	// place of status until the work answers.
+	working string
+	err     error
+	// spin draws every busy marker. spinning means a spinner tick is
+	// outstanding. Each tick schedules the next one, so Update arms no second
+	// tick while spinning is set.
+	spin     spinner.Model
+	spinning bool
 	// polling means a background-session tick is outstanding. Several things ask
 	// for a poll, and without this each answer would arm a tick of its own and
 	// every one of them would re-arm itself forever.
@@ -81,6 +91,7 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 		cfg:    cfg,
 		styles: s,
 		dryRun: dryRun,
+		spin:   spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		dash: dashboard.New(dashboard.Styles{
 			Group:    s.Group,
 			Row:      s.Row,
@@ -137,8 +148,52 @@ func (a App) Init() tea.Cmd {
 	)
 }
 
+// Update runs the handler for the message, then starts the spinner if the
+// handler left something busy on screen.
 func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := a.update(message)
+	next := model.(App)
+	if next.busy() && !next.spinning {
+		next.spinning = true
+		cmd = tea.Batch(cmd, next.spin.Tick)
+	}
+	return next, cmd
+}
+
+// busy reports whether the screen on display shows work in flight. A marker on a
+// screen that is not showing does not count. The new review screen keeps its
+// marker after it hands the dashboard a prepared review. That marker would
+// otherwise keep the spinner ticking with nothing to draw.
+func (a App) busy() bool {
+	if a.working != "" {
+		return true
+	}
+	switch a.screen {
+	case msg.Dashboard:
+		return len(a.dash.Busy) > 0
+	case msg.Submit:
+		return a.sub.Busy != ""
+	case msg.NewReview:
+		return a.newrev.Busy != ""
+	case msg.Requests:
+		return a.reqs.Loading
+	}
+	return false
+}
+
+func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
+	case spinner.TickMsg:
+		// An idle docket schedules no ticks. Update starts them again when
+		// something becomes busy.
+		if !a.busy() {
+			a.spinning = false
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.spin, cmd = a.spin.Update(message)
+		return a, cmd
+
 	case tea.WindowSizeMsg:
 		a.width, a.height = message.Width, message.Height
 		a.dash.Width = message.Width
@@ -211,11 +266,15 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case msg.StartBatch:
-		a.err = nil
-		a.status = fmt.Sprintf("checking %d pull %s for a review of yours…", len(message.URLs), format.Plural(len(message.URLs), "request"))
+		if a.working != "" {
+			a.reqs.Busy = false
+			return a.stillWorking(), nil
+		}
+		a = a.startWork(fmt.Sprintf("Checking %d pull %s for a review of yours", len(message.URLs), format.Plural(len(message.URLs), "request")))
 		return a, a.checkBatch(message.URLs, message.Engine)
 
 	case batchCheckedMsg:
+		a.working = ""
 		a.err = message.err
 		a.status = failures(message.failed)
 		// Nothing can start, so the list keeps its marks for another try.
@@ -245,6 +304,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a.runBatch(*a.batch, review.Intent(message.Intent))
 
 	case batchStartedMsg:
+		a.working = ""
 		status := fmt.Sprintf("Started %d background %s", message.started, format.Plural(message.started, "review"))
 		if len(message.failed) > 0 {
 			status += "\n" + failures(message.failed)
@@ -310,8 +370,8 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// A second c before the first session takes the terminal would start
 		// a second session and overwrite the first one's id.
-		if _, busy := a.dash.Busy[rec.ID]; busy {
-			return a, nil
+		if next, busy := a.refuseBusy(rec); busy {
+			return next, nil
 		}
 		a.dash.Busy[rec.ID] = "opening"
 		return a, a.ask(rec)
@@ -336,8 +396,8 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// A second enter before the launch returns would start a second
 			// session that nothing polls or stops.
-			if _, busy := a.dash.Busy[rec.ID]; busy {
-				return a, nil
+			if next, busy := a.refuseBusy(rec); busy {
+				return next, nil
 			}
 			a.dash.Busy[rec.ID] = "starting"
 			return a, a.restart(rec)
@@ -356,6 +416,11 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			a.status = wouldAbandon(rec)
 			return a, nil
 		}
+		// An abandon beside a submit could record a submitted review as
+		// abandoned, depending on which one finishes last.
+		if next, busy := a.refuseBusy(rec); busy {
+			return next, nil
+		}
 		a.dash.Busy[rec.ID] = "abandoning"
 		return a, a.abandon(rec)
 
@@ -370,6 +435,11 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if !rec.Submittable() {
 			a.status = fmt.Sprintf("%s is %s; only a drafted review can be submitted", rec.Ref, rec.State)
 			return a, nil
+		}
+		// A row left while its review was submitting would otherwise open a
+		// second submit of the same draft.
+		if next, busy := a.refuseBusy(rec); busy {
+			return next, nil
 		}
 		a.sub = a.sub.For(rec, review.SubmitEventsFor(rec.Author, a.login()))
 		a.screen = msg.Submit
@@ -399,6 +469,9 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			a.status = fmt.Sprintf("Would submit review %d on %s as %s", rec.ReviewID, rec.Ref, message.Event)
 			return a, nil
 		}
+		// The row carries the marker too, because esc leaves the screen while
+		// the submit runs.
+		a.dash.Busy[rec.ID] = "submitting"
 		return a, a.submitReview(rec, message.Event, message.Body)
 
 	case msg.OpenNotes:
@@ -455,6 +528,14 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// before anything else draws.
 		return a, tea.Batch(tea.ClearScreen, a.loadNotes(message.record))
 
+	case refreshedMsg:
+		a.working = ""
+		if message.err != nil {
+			return a.update(errMsg{err: message.err})
+		}
+		a.status = "Re-read GitHub for every record whose session is over"
+		return a.update(recordsLoadedMsg{records: message.records})
+
 	case recordsLoadedMsg:
 		a.dash = a.dash.SetRecords(message.records)
 		a = a.regroup()
@@ -510,8 +591,9 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case detectedMsg:
 		delete(a.dash.Busy, message.record.ID)
 		a.status = describe(message.record)
-		// A submit that worked has nothing left on its screen to look at.
-		if message.submitted {
+		// A submit that worked has nothing left on its screen to look at. A
+		// user who left that screen with esc keeps the screen they went to.
+		if message.submitted && a.screen == msg.Submit && a.sub.Record.ID == message.record.ID {
 			a.screen = msg.Dashboard
 			a.sub = a.sub.ClearBusy()
 		}
@@ -553,8 +635,10 @@ func (a App) refreshRecords(message msg.RefreshRecords) (tea.Model, tea.Cmd) {
 			a.status = "Would re-read GitHub for every record whose session is over"
 			return a, nil
 		}
-		a.status = "refreshing from GitHub"
-		return a, a.refreshAll()
+		if a.working != "" {
+			return a.stillWorking(), nil
+		}
+		return a.startWork("Refreshing from GitHub"), a.refreshAll()
 	}
 
 	rec, ok := a.record(message.ID)
@@ -632,6 +716,13 @@ func (a App) View() tea.View {
 	}
 	b.WriteString("\n\n")
 
+	frame := ""
+	if a.spinning {
+		frame = a.spin.View()
+	}
+	spin := format.Spinner{Frame: frame, Style: a.styles.Busy}
+	a.dash.Spinner, a.newrev.Spinner, a.sub.Spinner, a.reqs.Spinner = spin, spin, spin, spin
+
 	switch a.screen {
 	case msg.NewReview:
 		b.WriteString(a.newrev.View())
@@ -649,8 +740,8 @@ func (a App) View() tea.View {
 
 	if a.err != nil {
 		b.WriteString("\n" + a.styles.Err.Render(wrap(a.err.Error(), a.width)) + "\n")
-	} else if a.status != "" {
-		b.WriteString("\n" + a.styles.Dim.Render(wrap(a.status, a.width)) + "\n")
+	} else if line := a.statusLine(spin); line != "" {
+		b.WriteString("\n" + wrap(line, a.width) + "\n")
 	}
 	b.WriteString("\n" + a.styles.Footer.Render(helpFor(a.screen, a.dash.ShowArchived, a.choosing())))
 
@@ -671,6 +762,46 @@ func (a App) choosing() bool {
 		return a.reqs.Asking()
 	}
 	return false
+}
+
+// statusLine is the work in flight followed by the last status. A status written
+// while the work runs, such as a refusal, stays on screen beside it.
+func (a App) statusLine(spin format.Spinner) string {
+	var parts []string
+	if a.working != "" {
+		parts = append(parts, spin.Render(a.working))
+	}
+	if a.status != "" {
+		parts = append(parts, a.styles.Dim.Render(a.status))
+	}
+	return strings.Join(parts, a.styles.Dim.Render(" · "))
+}
+
+// stillWorking refuses a batch start or a refresh of every record while the
+// other runs. Both use the one line of work in flight, and the first to finish
+// would clear it while the other still runs.
+func (a App) stillWorking() App {
+	a.status = "A refresh or a batch start is still running. Try again once it finishes"
+	return a
+}
+
+// startWork puts text on the line of work in flight. It clears the last error
+// and status, because they describe work that is over.
+func (a App) startWork(text string) App {
+	a.err = nil
+	a.status = ""
+	a.working = text
+	return a
+}
+
+// refuseBusy reports whether the row has work in flight, and says so on the
+// status line when it does.
+func (a App) refuseBusy(rec review.Record) (App, bool) {
+	note, busy := a.dash.Busy[rec.ID]
+	if busy {
+		a.status = fmt.Sprintf("%s is still %s", rec.Ref, note)
+	}
+	return a, busy
 }
 
 // login is the user a pull request's author is compared against. The service
@@ -703,11 +834,13 @@ func (a App) report(line string, after bool) App {
 	return a
 }
 
-// resetBusy records a failure for the status line and clears every busy marker.
-// Nothing records which marker the failed work set. resetBusy therefore clears
-// all of them. The requests screen's Busy is the exception. The batch check
-// always answers with a batchCheckedMsg, which clears it. An unrelated failure
-// that cleared it would let a second enter check and start the same batch.
+// resetBusy records a failure for the status line and clears every screen's busy
+// marker. Nothing records which marker the failed work set. resetBusy therefore
+// clears all of them. The requests screen's Busy is the exception. The batch
+// check always answers with a batchCheckedMsg, which clears it. An unrelated
+// failure that cleared it would let a second enter check and start the same
+// batch. resetBusy also leaves the line of work in flight, which only that
+// work's own failure clears.
 func (a App) resetBusy(err error) App {
 	a.err = err
 	a.dash.Busy = map[string]string{}
@@ -752,7 +885,7 @@ func detected(work func() (review.Record, error)) tea.Cmd {
 // reflects the file as of just before this read rather than just after. Any
 // write landing during or after the read is then still new to the next
 // watch tick, rather than being folded silently into what this load already
-// saw. reconcile and refreshAll go through loaded instead. Each makes its
+// saw. reconcile and refreshAll carry no stamp. Each makes its
 // own writes partway through its work, so a stamp taken at their start
 // would call those writes "already seen." It could also miss a genuinely
 // concurrent external write landing in the same window.
@@ -775,7 +908,10 @@ func (a App) reconcile() tea.Cmd {
 
 func (a App) refreshAll() tea.Cmd {
 	svc := a.svc
-	return loaded(func() ([]review.Record, error) { return svc.RefreshAll(context.Background()) })
+	return func() tea.Msg {
+		records, err := svc.RefreshAll(context.Background())
+		return refreshedMsg{records: records, err: err}
+	}
 }
 
 func (a App) refresh(rec review.Record) tea.Cmd {
@@ -934,8 +1070,8 @@ func (a App) runBatch(checked batchCheckedMsg, answer review.Intent) (tea.Model,
 	if a.dryRun {
 		return a, a.explainBatch(checked)
 	}
+	a = a.startWork(fmt.Sprintf("Starting %d background %s", len(checked.items), format.Plural(len(checked.items), "review")))
 	a.screen = msg.Dashboard
-	a.status = fmt.Sprintf("starting %d background %s…", len(checked.items), format.Plural(len(checked.items), "review"))
 	a.reqs.Marked = map[string]bool{}
 	return a, a.startBatch(checked)
 }

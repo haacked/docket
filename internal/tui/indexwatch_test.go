@@ -115,10 +115,13 @@ func TestIndexChangedReloadPreservesSelectionAndBusy(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("indexChangedMsg returned no reload command")
 	}
-	got := cmd()
-	loadedMsg, ok := got.(recordsLoadedMsg)
+	got := drain(cmd)
+	if len(got) != 1 {
+		t.Fatalf("indexChangedMsg's command produced %#v, want one recordsLoadedMsg", got)
+	}
+	loadedMsg, ok := got[0].(recordsLoadedMsg)
 	if !ok {
-		t.Fatalf("indexChangedMsg's command produced %#v, want a recordsLoadedMsg", got)
+		t.Fatalf("indexChangedMsg's command produced %#v, want a recordsLoadedMsg", got[0])
 	}
 	if len(loadedMsg.records) != 3 {
 		t.Fatalf("the reload returned %d records, want the 3rd process's append to have landed (3)", len(loadedMsg.records))

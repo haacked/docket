@@ -7,7 +7,8 @@ import "charm.land/lipgloss/v2"
 // faint instead of ANSI 8. A theme may set that slot as close to its background
 // as it likes, and many set it too close to read. Faint dims the foreground the
 // terminal is already using, and a terminal that ignores it renders full
-// contrast rather than nothing.
+// contrast rather than nothing. Work in flight is never faint, because a user who
+// cannot see it assumes nothing is running.
 type styles struct {
 	Title    lipgloss.Style
 	Group    lipgloss.Style
@@ -17,6 +18,7 @@ type styles struct {
 	Err      lipgloss.Style
 	Footer   lipgloss.Style
 	Label    lipgloss.Style
+	Busy     lipgloss.Style
 }
 
 // wrap folds long text to the window width. Bubble Tea cuts anything wider than
@@ -38,5 +40,6 @@ func newStyles() styles {
 		Err:      lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
 		Footer:   lipgloss.NewStyle().Faint(true),
 		Label:    lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
+		Busy:     lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
 	}
 }

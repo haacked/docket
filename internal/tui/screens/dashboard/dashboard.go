@@ -52,6 +52,7 @@ type Model struct {
 	Cursor       int
 	ShowArchived bool
 	Busy         map[string]string
+	Spinner      format.Spinner
 	// Background is what each running background session is doing, keyed by
 	// record. The root fills it in, because a screen holds no engine to ask.
 	Background map[string]review.Progress
@@ -232,10 +233,10 @@ func (m Model) row(rec review.Record, selected bool) string {
 	}
 
 	head := fmt.Sprintf("%s%s  ", marker, rec.Ref)
-	left, meta := format.Row(head, cmp.Or(rec.Title, rec.URL), "· "+strings.Join(m.meta(rec), " · "), m.width())
+	left, meta := format.Row(head, cmp.Or(rec.Title, rec.URL), m.meta(rec), m.width())
 	rendered := style.Render(left)
 	if meta != "" {
-		rendered += " " + m.Styles.Dim.Render(meta)
+		rendered += " " + meta
 	}
 
 	if line, waiting := m.activity(rec); line != "" {
@@ -251,18 +252,23 @@ func (m Model) row(rec review.Record, selected bool) string {
 	return rendered
 }
 
-func (m Model) meta(rec review.Record) []string {
-	meta := []string{rec.Engine, rec.Tier.String(), m.age(rec)}
+// meta is the row's metadata, dim, led by any busy text in the busy style. A
+// narrow terminal cuts the metadata from the end, so the busy text goes first.
+// format.Row measures and cuts styled text by its columns.
+func (m Model) meta(rec review.Record) string {
+	parts := []string{rec.Engine, rec.Tier.String(), m.age(rec)}
 	if rec.PRState.Closed() {
-		meta = append(meta, rec.PRState.Label())
+		parts = append(parts, rec.PRState.Label())
 	}
 	if rec.Mode == review.ModeBackground {
-		meta = append(meta, "background")
+		parts = append(parts, "background")
 	}
-	if note, busy := m.Busy[rec.ID]; busy {
-		meta = append(meta, note)
+	meta := m.Styles.Dim.Render("· " + strings.Join(parts, " · "))
+	note, busy := m.Busy[rec.ID]
+	if !busy {
+		return meta
 	}
-	return meta
+	return m.Styles.Dim.Render("· ") + m.Spinner.Render(note) + " " + meta
 }
 
 // activity is the line under a running background row that says what its
