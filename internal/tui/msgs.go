@@ -21,6 +21,12 @@ type recordsLoadedMsg struct {
 	stamp   index.StatMark
 }
 
+// refreshedMsg carries the index after every record whose session is over was
+// read from GitHub again. Like reconcile's load, it carries no stamp.
+type refreshedMsg struct {
+	records []review.Record
+}
+
 // preparedMsg means the record is ready to launch: the pull request resolved and
 // the working directory is ready, or a record is set to be reviewed again. status
 // is the footer line that says what was prepared.

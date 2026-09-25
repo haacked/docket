@@ -208,3 +208,76 @@ func TestABackgroundScreenThatStartsOnCodexRunsInTheTerminal(t *testing.T) {
 		t.Errorf("got %#v, want a background claude review", got)
 	}
 }
+
+// resolving is the screen after enter, while the root resolves the pull request.
+func resolving(t *testing.T) Model {
+	t.Helper()
+	m, _ := typed(model(), "https://github.com/haacked/docket/pull/7").Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.Busy == "" {
+		t.Fatal("enter did not mark the screen busy")
+	}
+	return m
+}
+
+// A terminal paste arrives as its own message rather than as key presses.
+func TestAPasteDoesNotReachTheFieldWhileResolving(t *testing.T) {
+	before := resolving(t)
+
+	after, _ := before.Update(tea.PasteMsg{Content: "8"})
+
+	if got, want := after.Input.Value(), before.Input.Value(); got != want {
+		t.Errorf("field = %q, want %q", got, want)
+	}
+}
+
+// The screen already sent the pull request, the engine, and the run choice to
+// the root. A key that changed any of them would show a review other than the
+// one that is starting.
+func TestKeysOtherThanEscapeDoNothingWhileResolving(t *testing.T) {
+	tests := []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{"typing", tea.KeyPressMsg{Code: 'x', Text: "x"}},
+		{"tab", tea.KeyPressMsg{Code: tea.KeyTab}},
+		{"ctrl+b", ctrlB},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before := resolving(t)
+
+			after, _ := before.Update(tc.key)
+
+			if got, want := after.Input.Value(), before.Input.Value(); got != want {
+				t.Errorf("field = %q, want %q", got, want)
+			}
+			if after.Engine != before.Engine {
+				t.Errorf("engine = %q, want %q", after.Engine, before.Engine)
+			}
+			if after.Background != before.Background {
+				t.Errorf("background = %v, want %v", after.Background, before.Background)
+			}
+		})
+	}
+}
+
+func TestEscapeGoesBackWhileResolving(t *testing.T) {
+	_, cmd := resolving(t).Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("escape produced no command while resolving")
+	}
+
+	if got, want := cmd(), (msg.Goto{Screen: msg.Dashboard}); got != want {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestTheBusyLineCarriesTheSpinnersFrame(t *testing.T) {
+	m := resolving(t)
+	m.Frame = "⠙"
+
+	if view := m.View(); !strings.Contains(view, "⠙ resolving…") {
+		t.Errorf("the view does not put the frame before what is running:\n%s", view)
+	}
+}

@@ -406,3 +406,27 @@ func TestListKeysDoNothingDuringTheChoice(t *testing.T) {
 		}
 	}
 }
+
+func TestTheFirstSearchCarriesTheSpinnersFrame(t *testing.T) {
+	m := New(Styles{}, "claude")
+	m.Loading = true
+	m.Frame = "⠙"
+
+	if view := m.View(); !strings.Contains(view, "⠙ Searching GitHub for review requests…") {
+		t.Errorf("the view does not put the frame before the search:\n%s", view)
+	}
+}
+
+// A refresh keeps the rows that are already on screen. The header is therefore
+// the only place that says a search is running.
+func TestARefreshCarriesTheSpinnersFrameInTheHeader(t *testing.T) {
+	m := newModel()
+	m.Loading = true
+	m.Frame = "⠙"
+
+	header, _, _ := strings.Cut(m.View(), "\n")
+
+	if !strings.Contains(header, "⠙ refreshing…") {
+		t.Errorf("header = %q, want the frame before the refresh", header)
+	}
+}

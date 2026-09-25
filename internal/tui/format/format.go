@@ -94,3 +94,12 @@ func Width(width int) int {
 	}
 	return width
 }
+
+// Busy is the text for work in flight: the spinner's frame, then what is running.
+// The frame is empty in a view drawn before the root's spinner has ticked.
+func Busy(frame, text string) string {
+	if frame == "" {
+		return text + "…"
+	}
+	return frame + " " + text + "…"
+}

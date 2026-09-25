@@ -23,6 +23,7 @@ type Styles struct {
 	Row      lipgloss.Style
 	Selected lipgloss.Style
 	Dim      lipgloss.Style
+	Busy     lipgloss.Style
 }
 
 type Model struct {
@@ -44,6 +45,8 @@ type Model struct {
 	Existing []Existing
 	// Others is how many marked pull requests start whatever the answer.
 	Others int
+	// Frame is the spinner frame the root draws busy text with.
+	Frame  string
 	Styles Styles
 	Width  int
 	// Height is the rows the list may use. Zero draws every row.
@@ -218,7 +221,7 @@ func (m Model) View() string {
 		return m.existingView()
 	}
 	if m.Loading && len(m.Sections) == 0 {
-		return m.Styles.Dim.Render("Searching GitHub for review requests…")
+		return m.Styles.Busy.Render(format.Busy(m.Frame, "Searching GitHub for review requests"))
 	}
 
 	var lines []string
@@ -265,10 +268,11 @@ func (m Model) header() string {
 	case len(m.Marked) > 0:
 		text = fmt.Sprintf("%d marked · enter starts them as %s background reviews", len(m.Marked), m.Engine)
 	}
+	header := m.Styles.Dim.Render(text)
 	if m.Loading {
-		text += " · refreshing…"
+		header += m.Styles.Dim.Render(" · ") + m.Styles.Busy.Render(format.Busy(m.Frame, "refreshing"))
 	}
-	return m.Styles.Dim.Render(text)
+	return header
 }
 
 func (m Model) existingView() string {

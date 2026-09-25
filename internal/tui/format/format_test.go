@@ -100,3 +100,15 @@ func TestWideCharactersCountAsTwoColumns(t *testing.T) {
 		t.Errorf("the row is %d columns, want at most 40", got)
 	}
 }
+
+// A view drawn before the root's spinner first ticks has no frame to draw.
+func TestBusyPutsTheFrameBeforeWhatIsRunning(t *testing.T) {
+	for frame, want := range map[string]string{
+		"⠙": "⠙ submitting…",
+		"":  "submitting…",
+	} {
+		if got := Busy(frame, "submitting"); got != want {
+			t.Errorf("Busy(%q, submitting) = %q, want %q", frame, got, want)
+		}
+	}
+}

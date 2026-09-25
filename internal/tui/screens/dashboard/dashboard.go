@@ -25,6 +25,7 @@ type Styles struct {
 	Selected lipgloss.Style
 	Dim      lipgloss.Style
 	Err      lipgloss.Style
+	Busy     lipgloss.Style
 }
 
 // groups is the order states appear in. Archived and abandoned records are in
@@ -52,6 +53,8 @@ type Model struct {
 	Cursor       int
 	ShowArchived bool
 	Busy         map[string]string
+	// Frame is the spinner frame the root draws busy text with.
+	Frame string
 	// Background is what each running background session is doing, keyed by
 	// record. The root fills it in, because a screen holds no engine to ask.
 	Background map[string]review.Progress
@@ -232,10 +235,11 @@ func (m Model) row(rec review.Record, selected bool) string {
 	}
 
 	head := fmt.Sprintf("%s%s  ", marker, rec.Ref)
-	left, meta := format.Row(head, cmp.Or(rec.Title, rec.URL), "· "+strings.Join(m.meta(rec), " · "), m.width())
+	busy := m.busy(rec)
+	left, meta := format.Row(head, cmp.Or(rec.Title, rec.URL), "· "+strings.Join(m.meta(rec, busy), " · "), m.width())
 	rendered := style.Render(left)
 	if meta != "" {
-		rendered += " " + m.Styles.Dim.Render(meta)
+		rendered += " " + m.styleMeta(meta, busy)
 	}
 
 	if line, waiting := m.activity(rec); line != "" {
@@ -251,18 +255,43 @@ func (m Model) row(rec review.Record, selected bool) string {
 	return rendered
 }
 
-func (m Model) meta(rec review.Record) []string {
-	meta := []string{rec.Engine, rec.Tier.String(), m.age(rec)}
+// meta puts the busy text first, because a narrow terminal cuts the metadata
+// from the end.
+func (m Model) meta(rec review.Record, busy string) []string {
+	var meta []string
+	if busy != "" {
+		meta = append(meta, busy)
+	}
+	meta = append(meta, rec.Engine, rec.Tier.String(), m.age(rec))
 	if rec.PRState.Closed() {
 		meta = append(meta, rec.PRState.Label())
 	}
 	if rec.Mode == review.ModeBackground {
 		meta = append(meta, "background")
 	}
-	if note, busy := m.Busy[rec.ID]; busy {
-		meta = append(meta, note)
-	}
 	return meta
+}
+
+// busy is the text for the row's work in flight, and empty when there is none.
+func (m Model) busy(rec review.Record) string {
+	note, ok := m.Busy[rec.ID]
+	if !ok {
+		return ""
+	}
+	return format.Busy(m.Frame, note)
+}
+
+// styleMeta draws the busy text that leads meta in the busy style and the rest
+// dim. A meta cut short inside the busy text is all busy text.
+func (m Model) styleMeta(meta, busy string) string {
+	if busy == "" {
+		return m.Styles.Dim.Render(meta)
+	}
+	rest, whole := strings.CutPrefix(meta, "· "+busy)
+	if !whole {
+		return m.Styles.Busy.Render(meta)
+	}
+	return m.Styles.Dim.Render("· ") + m.Styles.Busy.Render(busy) + m.Styles.Dim.Render(rest)
 }
 
 // activity is the line under a running background row that says what its
