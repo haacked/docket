@@ -98,17 +98,16 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 			Selected: s.Selected,
 			Dim:      s.Dim,
 			Err:      s.Err,
-			Busy:     s.Busy,
 		}),
 		newrev: newreview.New(
-			newreview.Styles{Label: s.Label, Dim: s.Dim, Err: s.Err, Busy: s.Busy},
+			newreview.Styles{Label: s.Label, Dim: s.Dim, Err: s.Err},
 			engine.Names(),
 			engine.BackgroundNames(),
 			cfg.DefaultEngine,
 			cfg.DefaultRepo,
 			cfg.RunsInBackground(),
 		),
-		sub:   submit.New(submit.Styles{Label: s.Label, Dim: s.Dim, Selected: s.Selected, Busy: s.Busy}),
+		sub:   submit.New(submit.Styles{Label: s.Label, Dim: s.Dim, Selected: s.Selected}),
 		notes: notes.New(notes.Styles{Label: s.Label, Dim: s.Dim}),
 		help:  help.New(help.Styles{Group: s.Group, Label: s.Label}),
 		reqs: inbox.New(inbox.Styles{
@@ -116,7 +115,6 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 			Row:      s.Row,
 			Selected: s.Selected,
 			Dim:      s.Dim,
-			Busy:     s.Busy,
 		}, batchEngine(cfg.DefaultEngine)),
 	}
 	if initialInput != "" {
@@ -372,8 +370,8 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// A second c before the first session takes the terminal would start
 		// a second session and overwrite the first one's id.
-		if _, busy := a.dash.Busy[rec.ID]; busy {
-			return a, nil
+		if next, busy := a.refuseBusy(rec); busy {
+			return next, nil
 		}
 		a.dash.Busy[rec.ID] = "opening"
 		return a, a.ask(rec)
@@ -398,8 +396,8 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// A second enter before the launch returns would start a second
 			// session that nothing polls or stops.
-			if _, busy := a.dash.Busy[rec.ID]; busy {
-				return a, nil
+			if next, busy := a.refuseBusy(rec); busy {
+				return next, nil
 			}
 			a.dash.Busy[rec.ID] = "starting"
 			return a, a.restart(rec)
@@ -722,7 +720,8 @@ func (a App) View() tea.View {
 	if a.spinning {
 		frame = a.spin.View()
 	}
-	a.dash.Frame, a.newrev.Frame, a.sub.Frame, a.reqs.Frame = frame, frame, frame, frame
+	spin := format.Spinner{Frame: frame, Style: a.styles.Busy}
+	a.dash.Spinner, a.newrev.Spinner, a.sub.Spinner, a.reqs.Spinner = spin, spin, spin, spin
 
 	switch a.screen {
 	case msg.NewReview:
@@ -741,7 +740,7 @@ func (a App) View() tea.View {
 
 	if a.err != nil {
 		b.WriteString("\n" + a.styles.Err.Render(wrap(a.err.Error(), a.width)) + "\n")
-	} else if line := a.statusLine(frame); line != "" {
+	} else if line := a.statusLine(spin); line != "" {
 		b.WriteString("\n" + wrap(line, a.width) + "\n")
 	}
 	b.WriteString("\n" + a.styles.Footer.Render(helpFor(a.screen, a.dash.ShowArchived, a.choosing())))
@@ -767,10 +766,10 @@ func (a App) choosing() bool {
 
 // statusLine is the work in flight followed by the last status. A status written
 // while the work runs, such as a refusal, stays on screen beside it.
-func (a App) statusLine(frame string) string {
+func (a App) statusLine(spin format.Spinner) string {
 	var parts []string
 	if a.working != "" {
-		parts = append(parts, a.styles.Busy.Render(format.Busy(frame, a.working)))
+		parts = append(parts, spin.Render(a.working))
 	}
 	if a.status != "" {
 		parts = append(parts, a.styles.Dim.Render(a.status))

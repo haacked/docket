@@ -410,7 +410,7 @@ func TestListKeysDoNothingDuringTheChoice(t *testing.T) {
 func TestTheFirstSearchCarriesTheSpinnersFrame(t *testing.T) {
 	m := New(Styles{}, "claude")
 	m.Loading = true
-	m.Frame = "⠙"
+	m.Spinner.Frame = "⠙"
 
 	if view := m.View(); !strings.Contains(view, "⠙ Searching GitHub for review requests…") {
 		t.Errorf("the view does not put the frame before the search:\n%s", view)
@@ -422,7 +422,7 @@ func TestTheFirstSearchCarriesTheSpinnersFrame(t *testing.T) {
 func TestARefreshCarriesTheSpinnersFrameInTheHeader(t *testing.T) {
 	m := newModel()
 	m.Loading = true
-	m.Frame = "⠙"
+	m.Spinner.Frame = "⠙"
 
 	header, _, _ := strings.Cut(m.View(), "\n")
 

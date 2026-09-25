@@ -22,7 +22,6 @@ type Styles struct {
 	Label lipgloss.Style
 	Dim   lipgloss.Style
 	Err   lipgloss.Style
-	Busy  lipgloss.Style
 }
 
 type Model struct {
@@ -40,8 +39,7 @@ type Model struct {
 	DefaultRepo string
 	Styles      Styles
 	Busy        string
-	// Frame is the spinner frame the root draws busy text with.
-	Frame string
+	Spinner     format.Spinner
 	// Existing holds what was found while the screen asks what to do with a
 	// review that is already there. It is nil while the screen takes a pull
 	// request.
@@ -253,7 +251,7 @@ func (m Model) View() string {
 	b.WriteString("\n" + m.Styles.Label.Render("Engine") + " " + choice.Line(m.Engines, m.Engine, lipgloss.Style{}, m.Styles.Dim) + "\n")
 	b.WriteString(m.Styles.Label.Render("Run") + " " + m.runLine() + "\n")
 	if m.Busy != "" {
-		b.WriteString("\n" + m.Styles.Busy.Render(format.Busy(m.Frame, m.Busy)) + "\n")
+		b.WriteString("\n" + m.Spinner.Render(m.Busy) + "\n")
 	}
 	return b.String()
 }
@@ -280,7 +278,7 @@ func (m Model) existingView(found Existing) string {
 		b.WriteString(m.Styles.Dim.Render("view and ask runs in this terminal") + "\n")
 	}
 	if m.Busy != "" {
-		b.WriteString("\n" + m.Styles.Busy.Render(format.Busy(m.Frame, m.Busy)) + "\n")
+		b.WriteString("\n" + m.Spinner.Render(m.Busy) + "\n")
 	}
 	return b.String()
 }

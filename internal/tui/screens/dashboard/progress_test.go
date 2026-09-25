@@ -158,7 +158,7 @@ func TestALaunchThatDidNotStartHasItsOwnGroup(t *testing.T) {
 func TestABusyRowLeadsItsMetadataWithTheNote(t *testing.T) {
 	m := progressModel(160, runningRecord())
 	m.Busy["rec-1"] = "stopping"
-	m.Frame = "⠙"
+	m.Spinner.Frame = "⠙"
 
 	if line := lineOf(t, m.View(), "PostHog/posthog#105890"); !strings.Contains(line, "· ⠙ stopping… · claude") {
 		t.Errorf("the note does not lead the metadata:\n%s", line)
@@ -169,7 +169,7 @@ func TestABusyNoteSurvivesANarrowTerminal(t *testing.T) {
 	const width = 72
 	m := progressModel(width, runningRecord())
 	m.Busy["rec-1"] = "stopping"
-	m.Frame = "⠙"
+	m.Spinner.Frame = "⠙"
 
 	line := strings.TrimRight(lineOf(t, m.View(), "PostHog/posthog#105890"), "\n")
 

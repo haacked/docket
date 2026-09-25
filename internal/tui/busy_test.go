@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -241,13 +242,34 @@ func TestEveryLineOfWorkInFlightCarriesTheSpinnersFrame(t *testing.T) {
 	}
 }
 
-func TestRefreshingEverythingSaysSoWhileItRuns(t *testing.T) {
-	next, _ := app().Update(msg.RefreshRecords{})
-	a := next.(App)
+func TestWorkInFlightSaysWhatIsRunning(t *testing.T) {
+	pull := func(n int) string { return fmt.Sprintf("https://github.com/haacked/docket/pull/%d", n) }
+	tests := []struct {
+		name    string
+		running string
+		message tea.Msg
+		want    string
+	}{
+		{"a refresh", "", msg.RefreshRecords{}, "Refreshing from GitHub"},
+		{"a check of one", "", msg.StartBatch{URLs: []string{pull(7)}, Engine: "claude"}, "Checking 1 pull request for a review of yours"},
+		{"a check of two", "", msg.StartBatch{URLs: []string{pull(7), pull(8)}, Engine: "claude"}, "Checking 2 pull requests for a review of yours"},
+		{"a start of one", "Checking the batch", checkedBatch(7), "Starting 1 background review"},
+		{"a start of two", "Checking the batch", checkedBatch(7, 8), "Starting 2 background reviews"},
+	}
 
-	want := busyLine(a, "Refreshing from GitHub")
-	if content := ansi.Strip(a.View().Content); !strings.Contains(content, want) {
-		t.Errorf("the view does not read %q:\n%s", want, content)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := app()
+			a.working = tc.running
+
+			next, _ := a.Update(tc.message)
+			a = next.(App)
+
+			want := busyLine(a, tc.want)
+			if content := ansi.Strip(a.View().Content); !strings.Contains(content, want) {
+				t.Errorf("the view does not read %q:\n%s", want, content)
+			}
+		})
 	}
 }
 
@@ -343,59 +365,12 @@ func TestAFinishedRefreshLeavesTheIndexStampAlone(t *testing.T) {
 	}
 }
 
-func TestCheckingABatchSaysSoWhileItRuns(t *testing.T) {
-	tests := []struct {
-		urls []string
-		want string
-	}{
-		{[]string{"https://github.com/haacked/docket/pull/7"}, "Checking 1 pull request for a review of yours"},
-		{[]string{"https://github.com/haacked/docket/pull/7", "https://github.com/haacked/docket/pull/8"}, "Checking 2 pull requests for a review of yours"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.want, func(t *testing.T) {
-			next, _ := app().Update(msg.StartBatch{URLs: tc.urls, Engine: "claude"})
-			a := next.(App)
-
-			want := busyLine(a, tc.want)
-			if content := ansi.Strip(a.View().Content); !strings.Contains(content, want) {
-				t.Errorf("the view does not read %q:\n%s", want, content)
-			}
-		})
-	}
-}
-
 func checkedBatch(numbers ...int) batchCheckedMsg {
 	checked := batchCheckedMsg{engine: "claude"}
 	for _, n := range numbers {
 		checked.items = append(checked.items, batchItem{ref: pr.Ref{Org: "haacked", Repo: "docket", Number: n}})
 	}
 	return checked
-}
-
-func TestStartingABatchSaysSoWhileItRuns(t *testing.T) {
-	tests := []struct {
-		numbers []int
-		want    string
-	}{
-		{[]int{7}, "Starting 1 background review"},
-		{[]int{7, 8}, "Starting 2 background reviews"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.want, func(t *testing.T) {
-			a := app()
-			a.working = "Checking the batch"
-
-			next, _ := a.Update(checkedBatch(tc.numbers...))
-			a = next.(App)
-
-			want := busyLine(a, tc.want)
-			if content := ansi.Strip(a.View().Content); !strings.Contains(content, want) {
-				t.Errorf("the view does not read %q:\n%s", want, content)
-			}
-		})
-	}
 }
 
 // explainBatch answers with a statusMsg, and a statusMsg clears nothing. A line

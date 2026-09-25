@@ -102,13 +102,13 @@ func TestWideCharactersCountAsTwoColumns(t *testing.T) {
 }
 
 // A view drawn before the root's spinner first ticks has no frame to draw.
-func TestBusyPutsTheFrameBeforeWhatIsRunning(t *testing.T) {
+func TestTheSpinnerPutsItsFrameBeforeWhatIsRunning(t *testing.T) {
 	for frame, want := range map[string]string{
 		"⠙": "⠙ submitting…",
 		"":  "submitting…",
 	} {
-		if got := Busy(frame, "submitting"); got != want {
-			t.Errorf("Busy(%q, submitting) = %q, want %q", frame, got, want)
+		if got := (Spinner{Frame: frame}).Render("submitting"); got != want {
+			t.Errorf("Spinner{Frame: %q}.Render(submitting) = %q, want %q", frame, got, want)
 		}
 	}
 }

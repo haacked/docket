@@ -294,7 +294,7 @@ func TestEscOnARereviewGoesBackWhilePreparing(t *testing.T) {
 
 func TestTheChoiceStepsBusyLineCarriesTheSpinnersFrame(t *testing.T) {
 	m, _ := choosing().Update(press("a"))
-	m.Frame = "⠙"
+	m.Spinner.Frame = "⠙"
 
 	if view := m.View(); !strings.Contains(view, "⠙ preparing…") {
 		t.Errorf("the view does not put the frame before what is running:\n%s", view)

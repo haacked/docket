@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/haacked/docket/internal/core/review"
@@ -95,11 +96,18 @@ func Width(width int) int {
 	return width
 }
 
-// Busy is the text for work in flight: the spinner's frame, then what is running.
-// The frame is empty in a view drawn before the root's spinner has ticked.
-func Busy(frame, text string) string {
-	if frame == "" {
-		return text + "…"
+// Spinner draws work in flight in the busy style. The root sets it on every
+// screen before each draw. Frame is empty in a view drawn before the root's
+// spinner has ticked.
+type Spinner struct {
+	Frame string
+	Style lipgloss.Style
+}
+
+// Render is the spinner's frame, then what is running.
+func (s Spinner) Render(text string) string {
+	if s.Frame == "" {
+		return s.Style.Render(text + "…")
 	}
-	return frame + " " + text + "…"
+	return s.Style.Render(s.Frame + " " + text + "…")
 }

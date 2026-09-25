@@ -25,7 +25,6 @@ type Styles struct {
 	Selected lipgloss.Style
 	Dim      lipgloss.Style
 	Err      lipgloss.Style
-	Busy     lipgloss.Style
 }
 
 // groups is the order states appear in. Archived and abandoned records are in
@@ -53,8 +52,7 @@ type Model struct {
 	Cursor       int
 	ShowArchived bool
 	Busy         map[string]string
-	// Frame is the spinner frame the root draws busy text with.
-	Frame string
+	Spinner      format.Spinner
 	// Background is what each running background session is doing, keyed by
 	// record. The root fills it in, because a screen holds no engine to ask.
 	Background map[string]review.Progress
@@ -270,7 +268,7 @@ func (m Model) meta(rec review.Record) string {
 	if !busy {
 		return meta
 	}
-	return m.Styles.Dim.Render("· ") + m.Styles.Busy.Render(format.Busy(m.Frame, note)) + " " + meta
+	return m.Styles.Dim.Render("· ") + m.Spinner.Render(note) + " " + meta
 }
 
 // activity is the line under a running background row that says what its

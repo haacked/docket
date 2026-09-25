@@ -217,13 +217,16 @@ func TestASecondEnterBeforeTheLaunchReturnsStartsNothing(t *testing.T) {
 	a.dash = a.dash.SetRecords([]review.Record{rec})
 
 	next, first := a.Update(msg.Resume{ID: rec.ID})
-	_, second := next.(App).Update(msg.Resume{ID: rec.ID})
+	next, second := next.(App).Update(msg.Resume{ID: rec.ID})
 
 	if second != nil {
 		t.Error("the second enter started another launch")
 	}
 	if first == nil {
 		t.Error("the first enter started nothing")
+	}
+	if want := rec.Ref.String() + " is still starting"; next.(App).status != want {
+		t.Errorf("status = %q, want %q", next.(App).status, want)
 	}
 }
 

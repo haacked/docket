@@ -23,18 +23,16 @@ type Styles struct {
 	Label    lipgloss.Style
 	Dim      lipgloss.Style
 	Selected lipgloss.Style
-	Busy     lipgloss.Style
 }
 
 type Model struct {
-	Record review.Record
-	Events []string
-	Event  string
-	Body   textarea.Model
-	Styles Styles
-	Busy   string
-	// Frame is the spinner frame the root draws busy text with.
-	Frame string
+	Record  review.Record
+	Events  []string
+	Event   string
+	Body    textarea.Model
+	Styles  Styles
+	Busy    string
+	Spinner format.Spinner
 	// draft is the pending review's body as the text area holds it after SetDraft.
 	draft string
 }
@@ -145,7 +143,7 @@ func (m Model) View() string {
 	}
 
 	if m.Busy != "" {
-		b.WriteString("\n" + m.Styles.Busy.Render(format.Busy(m.Frame, m.Busy)) + "\n")
+		b.WriteString("\n" + m.Spinner.Render(m.Busy) + "\n")
 	}
 	return b.String()
 }

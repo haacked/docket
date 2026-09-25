@@ -328,7 +328,7 @@ func TestClearingBusyMakesTheBodyEditableAgain(t *testing.T) {
 
 func TestTheBusyLineCarriesTheSpinnersFrame(t *testing.T) {
 	m, _ := model().Update(ctrlS)
-	m.Frame = "⠙"
+	m.Spinner.Frame = "⠙"
 
 	if view := m.View(); !strings.Contains(view, "⠙ submitting…") {
 		t.Errorf("the view does not put the frame before what is running:\n%s", view)

@@ -275,7 +275,7 @@ func TestEscapeGoesBackWhileResolving(t *testing.T) {
 
 func TestTheBusyLineCarriesTheSpinnersFrame(t *testing.T) {
 	m := resolving(t)
-	m.Frame = "⠙"
+	m.Spinner.Frame = "⠙"
 
 	if view := m.View(); !strings.Contains(view, "⠙ resolving…") {
 		t.Errorf("the view does not put the frame before what is running:\n%s", view)

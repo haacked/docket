@@ -23,7 +23,6 @@ type Styles struct {
 	Row      lipgloss.Style
 	Selected lipgloss.Style
 	Dim      lipgloss.Style
-	Busy     lipgloss.Style
 }
 
 type Model struct {
@@ -44,11 +43,10 @@ type Model struct {
 	// yours while the screen asks what to do with them. It is empty otherwise.
 	Existing []Existing
 	// Others is how many marked pull requests start whatever the answer.
-	Others int
-	// Frame is the spinner frame the root draws busy text with.
-	Frame  string
-	Styles Styles
-	Width  int
+	Others  int
+	Spinner format.Spinner
+	Styles  Styles
+	Width   int
 	// Height is the rows the list may use. Zero draws every row.
 	Height int
 	Now    func() time.Time
@@ -221,7 +219,7 @@ func (m Model) View() string {
 		return m.existingView()
 	}
 	if m.Loading && len(m.Sections) == 0 {
-		return m.Styles.Busy.Render(format.Busy(m.Frame, "Searching GitHub for review requests"))
+		return m.Spinner.Render("Searching GitHub for review requests")
 	}
 
 	var lines []string
@@ -270,7 +268,7 @@ func (m Model) header() string {
 	}
 	header := m.Styles.Dim.Render(text)
 	if m.Loading {
-		header += m.Styles.Dim.Render(" · ") + m.Styles.Busy.Render(format.Busy(m.Frame, "refreshing"))
+		header += m.Styles.Dim.Render(" · ") + m.Spinner.Render("refreshing")
 	}
 	return header
 }
