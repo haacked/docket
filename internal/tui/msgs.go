@@ -201,8 +201,14 @@ type trustExitedMsg struct {
 // statusMsg is a line for the footer.
 type statusMsg struct{ text string }
 
-// errMsg is a failure to show the user.
-type errMsg struct{ err error }
+// errMsg is a failure to show the user. endsWork marks the failure of a refresh
+// of every record. It is the one errMsg that clears the line of work in flight.
+// A batch clears that line through its own messages, and any other failure
+// leaves the work running.
+type errMsg struct {
+	err      error
+	endsWork bool
+}
 
 // bgStartFailedMsg reports a background launch that failed, with the record
 // StartBackground returned. A failure after the record reached StateReviewing

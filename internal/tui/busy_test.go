@@ -421,13 +421,13 @@ func TestAFinishedBatchClearsTheLineOfWorkInFlight(t *testing.T) {
 	}
 }
 
-func TestAFailureClearsTheLineOfWorkInFlight(t *testing.T) {
+func TestTheWorksOwnFailureClearsTheLineOfWorkInFlight(t *testing.T) {
 	tests := []struct {
 		name    string
 		message tea.Msg
 	}{
-		{"an error", errMsg{err: errNotFound}},
-		{"a background start that failed", bgStartFailedMsg{record: draftedRecord(), err: errNotFound}},
+		{"a refresh that failed", errMsg{err: errNotFound, endsWork: true}},
+		{"a batch check that failed", batchCheckedMsg{err: errNotFound}},
 	}
 
 	for _, tc := range tests {
@@ -439,6 +439,31 @@ func TestAFailureClearsTheLineOfWorkInFlight(t *testing.T) {
 
 			if got := next.(App).working; got != "" {
 				t.Errorf("working = %q, want it cleared by the failure", got)
+			}
+		})
+	}
+}
+
+// Clearing the line on an unrelated failure would hide the batch or refresh that
+// still runs. It would also let R or another batch start beside it.
+func TestAnUnrelatedFailureLeavesTheLineOfWorkInFlight(t *testing.T) {
+	tests := []struct {
+		name    string
+		message tea.Msg
+	}{
+		{"an error", errMsg{err: errNotFound}},
+		{"a background start that failed", bgStartFailedMsg{record: draftedRecord(), err: errNotFound}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := app()
+			a.working = "Starting 3 background reviews"
+
+			next, _ := a.Update(tc.message)
+
+			if got := next.(App).working; got != "Starting 3 background reviews" {
+				t.Errorf("working = %q, want the batch's line left alone", got)
 			}
 		})
 	}

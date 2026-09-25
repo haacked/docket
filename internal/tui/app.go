@@ -613,6 +613,9 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case errMsg:
+		if message.endsWork {
+			a.working = ""
+		}
 		a = a.resetBusy(message.err)
 		return a, a.loadRecords()
 
@@ -820,14 +823,15 @@ func (a App) report(line string, after bool) App {
 	return a
 }
 
-// resetBusy records a failure for the status line and clears every busy marker.
-// Nothing records which marker the failed work set. resetBusy therefore clears
-// all of them. The requests screen's Busy is the exception. The batch check
-// always answers with a batchCheckedMsg, which clears it. An unrelated failure
-// that cleared it would let a second enter check and start the same batch.
+// resetBusy records a failure for the status line and clears every screen's busy
+// marker. Nothing records which marker the failed work set. resetBusy therefore
+// clears all of them. The requests screen's Busy is the exception. The batch
+// check always answers with a batchCheckedMsg, which clears it. An unrelated
+// failure that cleared it would let a second enter check and start the same
+// batch. resetBusy also leaves the line of work in flight, which only that
+// work's own failure clears.
 func (a App) resetBusy(err error) App {
 	a.err = err
-	a.working = ""
 	a.dash.Busy = map[string]string{}
 	a.newrev = a.newrev.ClearBusy()
 	a.sub = a.sub.ClearBusy()
@@ -896,7 +900,7 @@ func (a App) refreshAll() tea.Cmd {
 	return func() tea.Msg {
 		records, err := svc.RefreshAll(context.Background())
 		if err != nil {
-			return errMsg{err: err}
+			return errMsg{err: err, endsWork: true}
 		}
 		return refreshedMsg{records: records}
 	}
