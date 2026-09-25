@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/tui/msg"
 )
 
@@ -20,9 +21,8 @@ func press(s string) tea.KeyPressMsg { return tea.KeyPressMsg{Code: rune(s[0]), 
 // typed pull request.
 func choosing() Model {
 	return typed(model(), typedURL).SetExisting(Existing{
-		Ref:     "haacked/docket#4",
-		NotesAt: notesWritten,
-		Pending: true,
+		Ref:   "haacked/docket#4",
+		Found: review.Found{NotesAt: notesWritten, PendingID: 12},
 	})
 }
 
@@ -32,7 +32,7 @@ func rereviewing() Model {
 		Ref:      "haacked/docket#4",
 		Engine:   "claude",
 		RecordID: "rec-4",
-		NotesAt:  notesWritten,
+		Found:    review.Found{NotesAt: notesWritten},
 	})
 }
 
@@ -163,7 +163,7 @@ func TestTheChoiceStepRefusesTheBackgroundForAnEngineThatHasNone(t *testing.T) {
 // GitHub offers append and overwrite, which decide what review-code does with
 // that review.
 func TestViewAndAskNeedsNotes(t *testing.T) {
-	m := typed(model(), typedURL).SetExisting(Existing{Ref: "haacked/docket#4", Submitted: true})
+	m := typed(model(), typedURL).SetExisting(Existing{Ref: "haacked/docket#4", Found: review.Found{Submitted: true}})
 
 	if _, cmd := m.Update(press("v")); cmd != nil {
 		t.Errorf("v with no notes produced %#v", cmd())
@@ -198,7 +198,7 @@ func TestARereviewOfACodexRecordKeepsTheBackgroundChoice(t *testing.T) {
 		Ref:      "haacked/docket#4",
 		Engine:   "codex",
 		RecordID: "rec-4",
-		NotesAt:  notesWritten,
+		Found:    review.Found{NotesAt: notesWritten},
 	})
 
 	m, cmd := m.Update(press("a"))

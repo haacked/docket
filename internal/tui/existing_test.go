@@ -10,7 +10,6 @@ import (
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
-	"github.com/haacked/docket/internal/core/session"
 	"github.com/haacked/docket/internal/tui/msg"
 )
 
@@ -39,7 +38,7 @@ func TestAnExistingReviewSwitchesTheScreenToItsChoice(t *testing.T) {
 	next, _ := a.Update(existingMsg{
 		ref:    pr.Ref{Org: "haacked", Repo: "docket", Number: 4},
 		engine: "codex",
-		found:  session.Found{NotesAt: notesAt, PendingID: 12},
+		found:  review.Found{NotesAt: notesAt, PendingID: 12},
 	})
 	got := next.(App)
 
@@ -50,11 +49,14 @@ func TestAnExistingReviewSwitchesTheScreenToItsChoice(t *testing.T) {
 	if found == nil {
 		t.Fatal("the screen is not asking what to do with the review")
 	}
-	if found.Ref != "haacked/docket#4" || found.Engine != "codex" || !found.NotesAt.Equal(notesAt) || !found.Pending || found.Submitted {
+	if found.Ref != "haacked/docket#4" || found.Engine != "codex" || !found.NotesAt.Equal(notesAt) || found.PendingID != 12 || found.Submitted {
 		t.Errorf("existing = %+v", *found)
 	}
 	if got.newrev.Busy != "" {
 		t.Errorf("busy = %q, want the screen ready for a choice", got.newrev.Busy)
+	}
+	if view := got.View().Content; strings.Contains(view, "enter start") || strings.Contains(view, "tab engine") {
+		t.Errorf("the footer offers keys the choice ignores:\n%s", view)
 	}
 }
 

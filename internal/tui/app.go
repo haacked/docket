@@ -53,6 +53,11 @@ type App struct {
 	// fetched is the last search for review requests. regroup reads it whenever
 	// the records change.
 	fetched *requests.Fetched
+	// batch is a checked batch of background reviews that waits while the
+	// requests screen asks what to do with the pull requests that already have
+	// a review. esc on that question leaves it here. The next check replaces
+	// it.
+	batch *batchCheckedMsg
 
 	width  int
 	height int
@@ -206,21 +211,43 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case msg.StartBatch:
-		if a.dryRun {
-			return a, a.explainBatch(message.URLs, message.Engine)
+		a.err = nil
+		a.status = fmt.Sprintf("checking %d pull %s for a review of yours…", len(message.URLs), format.Plural(len(message.URLs), "request"))
+		return a, a.checkBatch(message.URLs, message.Engine)
+
+	case batchCheckedMsg:
+		a.err = message.err
+		a.status = failures(message.failed)
+		// Nothing can start, so the list keeps its marks for another try.
+		if message.err != nil || len(message.items) == 0 {
+			a.reqs = a.reqs.SetExisting(nil, 0)
+			return a, nil
 		}
-		a.screen = msg.Dashboard
-		a.status = fmt.Sprintf("starting %d background reviews…", len(message.URLs))
-		a.reqs.Marked = map[string]bool{}
-		return a, a.startBatch(message.URLs, message.Engine)
+		var found []inbox.Existing
+		for _, item := range message.items {
+			if item.found.Any() {
+				found = append(found, inbox.Existing{Ref: item.ref.String(), Found: item.found})
+			}
+		}
+		if len(found) == 0 {
+			return a.runBatch(message, "")
+		}
+		a.batch = &message
+		a.screen = msg.Requests
+		a.reqs = a.reqs.SetExisting(found, len(message.items)-len(found))
+		return a, nil
+
+	case msg.AnswerBatch:
+		if a.batch == nil {
+			a.reqs = a.reqs.SetExisting(nil, 0)
+			return a, nil
+		}
+		return a.runBatch(*a.batch, review.Intent(message.Intent))
 
 	case batchStartedMsg:
 		status := fmt.Sprintf("Started %d background %s", message.started, format.Plural(message.started, "review"))
-		if len(message.skipped) > 0 {
-			status += fmt.Sprintf("\n%d already reviewed, start each with n to append or overwrite:\n%s", len(message.skipped), strings.Join(message.skipped, "\n"))
-		}
 		if len(message.failed) > 0 {
-			status += fmt.Sprintf("\n%d failed:\n%s", len(message.failed), strings.Join(message.failed, "\n"))
+			status += "\n" + failures(message.failed)
 		}
 		a = a.report(status, message.retry)
 		cmds := []tea.Cmd{a.loadRecords(), a.pollBackground()}
@@ -243,11 +270,9 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case existingMsg:
 		a.newrev = a.newrev.SetExisting(newreview.Existing{
-			Ref:       message.ref.String(),
-			Engine:    message.engine,
-			NotesAt:   message.found.NotesAt,
-			Pending:   message.found.PendingID != 0,
-			Submitted: message.found.Submitted,
+			Ref:    message.ref.String(),
+			Engine: message.engine,
+			Found:  message.found,
 		})
 		return a, nil
 
@@ -627,13 +652,25 @@ func (a App) View() tea.View {
 	} else if a.status != "" {
 		b.WriteString("\n" + a.styles.Dim.Render(wrap(a.status, a.width)) + "\n")
 	}
-	b.WriteString("\n" + a.styles.Footer.Render(helpFor(a.screen, a.dash.ShowArchived)))
+	b.WriteString("\n" + a.styles.Footer.Render(helpFor(a.screen, a.dash.ShowArchived, a.choosing())))
 
 	view := tea.NewView(b.String())
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeNone
 	view.WindowTitle = "docket"
 	return view
+}
+
+// choosing reports whether the screen on show is asking what to do with a review
+// that already exists.
+func (a App) choosing() bool {
+	switch a.screen {
+	case msg.NewReview:
+		return a.newrev.Existing != nil
+	case msg.Requests:
+		return a.reqs.Asking()
+	}
+	return false
 }
 
 // login is the user a pull request's author is compared against. The service
@@ -655,12 +692,9 @@ func (a App) record(id string) (review.Record, bool) {
 	return a.dash.Records[i], true
 }
 
-// resetBusy records a failure for the status line and clears every busy marker.
-// Nothing records which marker the failed work set. resetBusy therefore clears
-// all of them.
 // report puts a line on the status. A trust prompt takes the terminal between a
 // batch's report and the reports that follow the prompt, so those add to the
-// status rather than replace the batch's list of what it skipped.
+// status rather than replace the batch's list of what failed.
 func (a App) report(line string, after bool) App {
 	if after && a.status != "" {
 		line = a.status + "\n" + line
@@ -669,6 +703,11 @@ func (a App) report(line string, after bool) App {
 	return a
 }
 
+// resetBusy records a failure for the status line and clears every busy marker.
+// Nothing records which marker the failed work set. resetBusy therefore clears
+// all of them. The requests screen's Busy is the exception. The batch check
+// always answers with a batchCheckedMsg, which clears it. An unrelated failure
+// that cleared it would let a second enter check and start the same batch.
 func (a App) resetBusy(err error) App {
 	a.err = err
 	a.dash.Busy = map[string]string{}
@@ -676,6 +715,15 @@ func (a App) resetBusy(err error) App {
 	a.sub = a.sub.ClearBusy()
 	a.reqs.Loading = false
 	return a
+}
+
+// failures lists the pull requests a batch could not check or start, one to a
+// line. It is empty when there are none.
+func failures(failed []string) string {
+	if len(failed) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d failed:\n%s", len(failed), strings.Join(failed, "\n"))
 }
 
 // loaded and detected give the commands below their one shared shape. Each runs
@@ -843,25 +891,69 @@ func (a App) searchRequests() tea.Cmd {
 	}
 }
 
+// checkBatch reads what review each pull request already has, before the batch
+// starts any of them. A pull request with a review needs the user's answer to
+// append or overwrite. Without that answer, review-code asks the question in a
+// background session where nobody can answer it. The check writes nothing, so
+// a dry run runs it too and asks the same question.
+func (a App) checkBatch(urls []string, engineName string) tea.Cmd {
+	svc, dryRun := a.svc, a.dryRun
+	return func() tea.Msg {
+		// Looking the binary up here is what keeps a missing one from costing
+		// the user an answer and then a tier-2 clone.
+		if !dryRun {
+			if err := checkEngine(engineName); err != nil {
+				return batchCheckedMsg{err: err}
+			}
+		}
+		ctx := context.Background()
+		checked := batchCheckedMsg{engine: engineName}
+		for _, url := range urls {
+			ref, err := pr.ParseRef(url, "")
+			if err != nil {
+				checked.failed = append(checked.failed, err.Error())
+				continue
+			}
+			found, err := svc.Existing(ctx, ref)
+			if err != nil {
+				checked.failed = append(checked.failed, fmt.Sprintf("%s: %v", ref, err))
+				continue
+			}
+			checked.items = append(checked.items, batchItem{ref: ref, found: found})
+		}
+		return checked
+	}
+}
+
+// runBatch starts a checked batch, or explains it in a dry run. answer is what to
+// do with the pull requests that already have a review.
+func (a App) runBatch(checked batchCheckedMsg, answer review.Intent) (tea.Model, tea.Cmd) {
+	checked = checked.resolve(answer)
+	a.batch = nil
+	a.reqs = a.reqs.SetExisting(nil, 0)
+	if a.dryRun {
+		return a, a.explainBatch(checked)
+	}
+	a.screen = msg.Dashboard
+	a.status = fmt.Sprintf("starting %d background %s…", len(checked.items), format.Plural(len(checked.items), "review"))
+	a.reqs.Marked = map[string]bool{}
+	return a, a.startBatch(checked)
+}
+
 // startBatch prepares and starts each pull request in turn. It does not run them
 // side by side, because each Prepare makes several calls to GitHub and may clone
 // a repository. Starting one is quick, since the engine's background mode
 // returns straight away. It reports once for the whole batch, because the
 // detectedMsg a single start answers with would overwrite the status line once
 // per pull request.
-func (a App) startBatch(urls []string, engineName string) tea.Cmd {
+func (a App) startBatch(checked batchCheckedMsg) tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
-		if err := checkEngine(engineName); err != nil {
-			return errMsg{err: err}
-		}
 		ctx := context.Background()
-		var done batchStartedMsg
-		for _, url := range urls {
-			ref, rec, err := startOne(ctx, svc, url, engineName)
+		done := batchStartedMsg{failed: checked.failed}
+		for _, item := range checked.items {
+			rec, err := startOne(ctx, svc, item.ref, checked.engine, item.intent)
 			switch {
-			case errors.Is(err, errHasReview):
-				done.skipped = append(done.skipped, ref.String())
 			case errors.Is(err, session.ErrUntrusted):
 				done.untrusted = append(done.untrusted, rec)
 			case err != nil:
@@ -874,31 +966,18 @@ func (a App) startBatch(urls []string, engineName string) tea.Cmd {
 	}
 }
 
-// errHasReview marks a pull request that a batch leaves alone because a review of
-// it already exists. Only the new review screen asks whether to append to that
-// review or overwrite it. Without that answer, review-code asks the question in
-// a background session where nobody can answer it.
-var errHasReview = errors.New("already has a review")
-
 // startOne returns the record it started. When a start fails after Prepare wrote
 // the record, it returns that record too.
-func startOne(ctx context.Context, svc *session.Service, url, engineName string) (pr.Ref, review.Record, error) {
-	ref, err := pr.ParseRef(url, "")
+func startOne(ctx context.Context, svc *session.Service, ref pr.Ref, engineName string, intent review.Intent) (review.Record, error) {
+	rec, _, err := svc.Prepare(ctx, ref, engineName, review.ModeBackground, intent)
 	if err != nil {
-		return ref, review.Record{}, err
-	}
-	if err := checkNoReview(ctx, svc, ref); err != nil {
-		return ref, review.Record{}, err
-	}
-	rec, _, err := svc.Prepare(ctx, ref, engineName, review.ModeBackground, review.IntentReview)
-	if err != nil {
-		return ref, rec, fmt.Errorf("%s: %w", ref, err)
+		return rec, fmt.Errorf("%s: %w", ref, err)
 	}
 	rec, err = svc.StartBackground(ctx, rec)
 	if err != nil {
-		return ref, rec, fmt.Errorf("%s: %w", ref, err)
+		return rec, fmt.Errorf("%s: %w", ref, err)
 	}
-	return ref, rec, nil
+	return rec, nil
 }
 
 // trust hands the terminal to the agent's trust prompt for the first record's
@@ -970,40 +1049,21 @@ func (a App) retryBackground(records []review.Record) tea.Cmd {
 	}
 }
 
-func checkNoReview(ctx context.Context, svc *session.Service, ref pr.Ref) error {
-	found, err := svc.Existing(ctx, ref)
-	if err != nil {
-		return fmt.Errorf("%s: %w", ref, err)
-	}
-	if found.Any() {
-		return fmt.Errorf("%s %w", ref, errHasReview)
-	}
-	return nil
-}
-
 // explainBatch is the dry-run counterpart of startBatch. Like startBatch, it
 // reports a pull request that fails and goes on to the next.
-func (a App) explainBatch(urls []string, engineName string) tea.Cmd {
+func (a App) explainBatch(checked batchCheckedMsg) tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
 		var lines []string
-		for _, url := range urls {
-			lines = append(lines, explainOne(svc, url, engineName))
+		for _, item := range checked.items {
+			lines = append(lines, explainOne(svc, item.ref, checked.engine, item.intent))
 		}
-		return statusMsg{text: strings.Join(lines, "\n")}
+		return statusMsg{text: strings.Join(append(lines, checked.failed...), "\n")}
 	}
 }
 
-func explainOne(svc *session.Service, url, engineName string) string {
-	ref, err := pr.ParseRef(url, "")
-	if err != nil {
-		return err.Error()
-	}
-	ctx := context.Background()
-	if err := checkNoReview(ctx, svc, ref); err != nil {
-		return err.Error()
-	}
-	plan, spec, err := svc.Explain(ctx, ref, engineName, review.ModeBackground, review.IntentReview)
+func explainOne(svc *session.Service, ref pr.Ref, engineName string, intent review.Intent) string {
+	plan, spec, err := svc.Explain(context.Background(), ref, engineName, review.ModeBackground, intent)
 	if err != nil {
 		return fmt.Sprintf("%s: %v", ref, err)
 	}

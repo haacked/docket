@@ -373,12 +373,12 @@ func TestAFailedSubmissionLeavesTheSubmitScreenUsable(t *testing.T) {
 func TestTheDashboardFooterPlacesTheArchivedToggleBeforeHelpAndQuit(t *testing.T) {
 	want :=
 		"n new  ·  i requests  ·  enter resume  ·  s submit  ·  v notes  ·  o github  ·  c ask  ·  u re-review  ·  x abandon  ·  r refresh  ·  R refresh all  ·  a show archived  ·  ? help  ·  q quit"
-	if got := helpFor(msg.Dashboard, false); got != want {
+	if got := helpFor(msg.Dashboard, false, false); got != want {
 		t.Errorf("footer = %q, want %q", got, want)
 	}
 
 	want = strings.Replace(want, "a show archived", "a hide archived", 1)
-	if got := helpFor(msg.Dashboard, true); got != want {
+	if got := helpFor(msg.Dashboard, true, false); got != want {
 		t.Errorf("footer with archived shown = %q, want %q", got, want)
 	}
 }
@@ -390,7 +390,7 @@ func TestTheFooterNamesTheKeysOfEachScreen(t *testing.T) {
 		msg.Notes:     {"e edit", "o github", "esc/q back", "? help"},
 		msg.Help:      {"esc/? back", "ctrl+c quit"},
 	} {
-		got := helpFor(screen, false)
+		got := helpFor(screen, false, false)
 
 		for _, part := range want {
 			if !strings.Contains(got, part) {

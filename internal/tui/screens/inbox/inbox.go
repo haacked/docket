@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/haacked/docket/internal/core/requests"
+	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/tui/format"
 	"github.com/haacked/docket/internal/tui/msg"
 )
@@ -35,11 +36,25 @@ type Model struct {
 	// background mode, and marking is then refused.
 	Engine  string
 	Loading bool
-	Styles  Styles
-	Width   int
+	// Busy is true from the enter that sends a batch until the root answers.
+	// A second enter in that time does nothing.
+	Busy bool
+	// Existing lists the marked pull requests that already have a review of
+	// yours while the screen asks what to do with them. It is empty otherwise.
+	Existing []Existing
+	// Others is how many marked pull requests start whatever the answer.
+	Others int
+	Styles Styles
+	Width  int
 	// Height is the rows the list may use. Zero draws every row.
 	Height int
 	Now    func() time.Time
+}
+
+// Existing is a marked pull request that already has a review of yours.
+type Existing struct {
+	Ref string
+	review.Found
 }
 
 func New(styles Styles, engine string) Model {
@@ -69,6 +84,18 @@ func (m Model) SetSections(sections []requests.Section) Model {
 	return m
 }
 
+// SetExisting switches the screen to asking what to do with the marked pull
+// requests that already have a review. others is how many marked pull requests
+// have none. An empty found puts the list back.
+func (m Model) SetExisting(found []Existing, others int) Model {
+	m.Existing, m.Others, m.Busy = found, others, false
+	return m
+}
+
+// Asking reports whether the screen is asking what to do with the marked pull
+// requests that already have a review.
+func (m Model) Asking() bool { return len(m.Existing) > 0 }
+
 // Selected is the row under the cursor.
 func (m Model) Selected() (requests.Row, bool) {
 	rows := m.rows()
@@ -91,6 +118,9 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	if m.Asking() {
+		return m.choose(key)
+	}
 	rows := m.rows()
 	switch key.String() {
 	case "j", "down":
@@ -107,7 +137,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		m.Cursor = max(0, len(rows)-1)
 	case "space":
 		row, ok := m.Selected()
-		if !ok || row.State != "" || m.Engine == "" {
+		if !ok || row.State != "" || m.Engine == "" || m.Busy {
 			return m, nil
 		}
 		if m.Marked[row.Ref.URL()] {
@@ -116,7 +146,11 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			m.Marked[row.Ref.URL()] = true
 		}
 	case "enter":
+		if m.Busy {
+			return m, nil
+		}
 		if urls := m.markedURLs(); len(urls) > 0 {
+			m.Busy = true
 			return m, msg.Send(msg.StartBatch{URLs: urls, Engine: m.Engine})
 		}
 		row, ok := m.Selected()
@@ -140,6 +174,33 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+// choose handles the keys of the step that asks what to do with the marked pull
+// requests that already have a review. The list is not on screen, so no key
+// reaches it. A batch runs in the background, so view and ask, which needs the
+// terminal, is not on offer.
+func (m Model) choose(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.Busy {
+		return m, nil
+	}
+	var intent review.Intent
+	switch key.String() {
+	case "esc":
+		return m.SetExisting(nil, 0), nil
+	case "a":
+		intent = review.IntentAppend
+	case "o":
+		intent = review.IntentOverwrite
+	case "s":
+		if m.Others == 0 {
+			return m, nil
+		}
+	default:
+		return m, nil
+	}
+	m.Busy = true
+	return m, msg.Send(msg.AnswerBatch{Intent: string(intent)})
+}
+
 // markedURLs lists the marks in the order the rows are drawn, so a batch starts
 // the pull requests top to bottom.
 func (m Model) markedURLs() []string {
@@ -153,6 +214,9 @@ func (m Model) markedURLs() []string {
 }
 
 func (m Model) View() string {
+	if m.Asking() {
+		return m.existingView()
+	}
 	if m.Loading && len(m.Sections) == 0 {
 		return m.Styles.Dim.Render("Searching GitHub for review requests…")
 	}
@@ -205,6 +269,29 @@ func (m Model) header() string {
 		text += " · refreshing…"
 	}
 	return m.Styles.Dim.Render(text)
+}
+
+func (m Model) existingView() string {
+	width := format.Width(m.Width)
+	title := fmt.Sprintf("%d marked pull requests already have a review of yours", len(m.Existing))
+	if len(m.Existing) == 1 {
+		title = "1 marked pull request already has a review of yours"
+	}
+	lines := []string{m.Styles.Group.Render(format.Truncate(title, width))}
+	for _, found := range m.Existing {
+		line := "  " + found.Ref + "  " + format.Existing(found.Found)
+		lines = append(lines, m.Styles.Dim.Render(format.Truncate(line, width)))
+	}
+
+	lines = append(lines, "",
+		"a  append: review what changed since your last review",
+		"o  overwrite: review the whole pull request from scratch",
+	)
+	if m.Others > 0 {
+		lines = append(lines, fmt.Sprintf("s  skip, and start the other %d", m.Others))
+	}
+	lines = append(lines, "esc  back to the list")
+	return strings.Join(lines, "\n")
 }
 
 // window keeps at most height lines, placed so the cursor's line is visible.

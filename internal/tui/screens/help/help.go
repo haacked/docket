@@ -75,6 +75,7 @@ var (
 	Requests = []Entry{
 		{Key: "space", Short: "mark", Long: "mark or unmark the selected pull request"},
 		{Key: "enter", Short: "start", Long: "start the marked pull requests as background reviews, or open the selected pull request, or its review when one is already open"},
+		{Key: "a/o/s", Long: "when marked pull requests already have a review of yours: append, overwrite, or skip them"},
 		{Key: "r", Short: "refresh", Long: "search GitHub again"},
 		{Key: "j/k ↓/↑", Long: "move the selection"},
 		{Key: "g/G", Long: "jump to the top or bottom"},

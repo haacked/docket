@@ -78,11 +78,18 @@ type OpenRequests struct{}
 // RefreshRequests searches GitHub again for that list.
 type RefreshRequests struct{}
 
-// StartBatch starts a background review of each pull request under Engine.
+// StartBatch starts a background review of each pull request under Engine. The
+// root first reads what review each one already has. When any has one, the root
+// asks the requests screen for an AnswerBatch before it starts anything.
 type StartBatch struct {
 	URLs   []string
 	Engine string
 }
+
+// AnswerBatch says what to do with the pull requests in a batch that already have
+// a review. Intent is one of review.Intent's values, append or overwrite, and
+// applies to all of them. An empty Intent leaves them out and starts the rest.
+type AnswerBatch struct{ Intent string }
 
 // PrefillReview opens the new review screen with the pull request filled in.
 type PrefillReview struct{ URL string }
