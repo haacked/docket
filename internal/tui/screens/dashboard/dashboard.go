@@ -235,11 +235,10 @@ func (m Model) row(rec review.Record, selected bool) string {
 	}
 
 	head := fmt.Sprintf("%s%s  ", marker, rec.Ref)
-	busy := m.busy(rec)
-	left, meta := format.Row(head, cmp.Or(rec.Title, rec.URL), "· "+strings.Join(m.meta(rec, busy), " · "), m.width())
+	left, meta := format.Row(head, cmp.Or(rec.Title, rec.URL), m.meta(rec), m.width())
 	rendered := style.Render(left)
 	if meta != "" {
-		rendered += " " + m.styleMeta(meta, busy)
+		rendered += " " + meta
 	}
 
 	if line, waiting := m.activity(rec); line != "" {
@@ -255,43 +254,23 @@ func (m Model) row(rec review.Record, selected bool) string {
 	return rendered
 }
 
-// meta puts the busy text first, because a narrow terminal cuts the metadata
-// from the end.
-func (m Model) meta(rec review.Record, busy string) []string {
-	var meta []string
-	if busy != "" {
-		meta = append(meta, busy)
-	}
-	meta = append(meta, rec.Engine, rec.Tier.String(), m.age(rec))
+// meta is the row's metadata, dim, led by any busy text in the busy style. A
+// narrow terminal cuts the metadata from the end, so the busy text goes first.
+// format.Row measures and cuts styled text by its columns.
+func (m Model) meta(rec review.Record) string {
+	parts := []string{rec.Engine, rec.Tier.String(), m.age(rec)}
 	if rec.PRState.Closed() {
-		meta = append(meta, rec.PRState.Label())
+		parts = append(parts, rec.PRState.Label())
 	}
 	if rec.Mode == review.ModeBackground {
-		meta = append(meta, "background")
+		parts = append(parts, "background")
 	}
-	return meta
-}
-
-// busy is the text for the row's work in flight, and empty when there is none.
-func (m Model) busy(rec review.Record) string {
-	note, ok := m.Busy[rec.ID]
-	if !ok {
-		return ""
+	meta := m.Styles.Dim.Render("· " + strings.Join(parts, " · "))
+	note, busy := m.Busy[rec.ID]
+	if !busy {
+		return meta
 	}
-	return format.Busy(m.Frame, note)
-}
-
-// styleMeta draws the busy text that leads meta in the busy style and the rest
-// dim. A meta cut short inside the busy text is all busy text.
-func (m Model) styleMeta(meta, busy string) string {
-	if busy == "" {
-		return m.Styles.Dim.Render(meta)
-	}
-	rest, whole := strings.CutPrefix(meta, "· "+busy)
-	if !whole {
-		return m.Styles.Busy.Render(meta)
-	}
-	return m.Styles.Dim.Render("· ") + m.Styles.Busy.Render(busy) + m.Styles.Dim.Render(rest)
+	return m.Styles.Dim.Render("· ") + m.Styles.Busy.Render(format.Busy(m.Frame, note)) + " " + meta
 }
 
 // activity is the line under a running background row that says what its

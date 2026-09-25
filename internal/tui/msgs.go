@@ -21,10 +21,13 @@ type recordsLoadedMsg struct {
 	stamp   index.StatMark
 }
 
-// refreshedMsg carries the index after every record whose session is over was
-// read from GitHub again. Like reconcile's load, it carries no stamp.
+// refreshedMsg answers a refresh of every record: the index after every record
+// whose session is over was read from GitHub again, or the failure. Like
+// reconcile's load, it carries no stamp. It carries its own failure because it
+// is what clears the line of work in flight.
 type refreshedMsg struct {
 	records []review.Record
+	err     error
 }
 
 // preparedMsg means the record is ready to launch: the pull request resolved and
@@ -201,14 +204,8 @@ type trustExitedMsg struct {
 // statusMsg is a line for the footer.
 type statusMsg struct{ text string }
 
-// errMsg is a failure to show the user. endsWork marks the failure of a refresh
-// of every record. It is the one errMsg that clears the line of work in flight.
-// A batch clears that line through its own messages, and any other failure
-// leaves the work running.
-type errMsg struct {
-	err      error
-	endsWork bool
-}
+// errMsg is a failure to show the user.
+type errMsg struct{ err error }
 
 // bgStartFailedMsg reports a background launch that failed, with the record
 // StartBackground returned. A failure after the record reached StateReviewing

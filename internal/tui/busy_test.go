@@ -426,7 +426,7 @@ func TestTheWorksOwnFailureClearsTheLineOfWorkInFlight(t *testing.T) {
 		name    string
 		message tea.Msg
 	}{
-		{"a refresh that failed", errMsg{err: errNotFound, endsWork: true}},
+		{"a refresh that failed", refreshedMsg{err: errNotFound}},
 		{"a batch check that failed", batchCheckedMsg{err: errNotFound}},
 	}
 

@@ -269,12 +269,10 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msg.StartBatch:
 		if a.working != "" {
-			a.reqs = a.reqs.SetExisting(nil, 0)
+			a.reqs.Busy = false
 			return a.stillWorking(), nil
 		}
-		a.err = nil
-		a.status = ""
-		a.working = fmt.Sprintf("Checking %d pull %s for a review of yours", len(message.URLs), format.Plural(len(message.URLs), "request"))
+		a = a.startWork(fmt.Sprintf("Checking %d pull %s for a review of yours", len(message.URLs), format.Plural(len(message.URLs), "request")))
 		return a, a.checkBatch(message.URLs, message.Engine)
 
 	case batchCheckedMsg:
@@ -422,9 +420,8 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// An abandon beside a submit could record a submitted review as
 		// abandoned, depending on which one finishes last.
-		if note, busy := a.dash.Busy[rec.ID]; busy {
-			a.status = fmt.Sprintf("%s is still %s", rec.Ref, note)
-			return a, nil
+		if next, busy := a.refuseBusy(rec); busy {
+			return next, nil
 		}
 		a.dash.Busy[rec.ID] = "abandoning"
 		return a, a.abandon(rec)
@@ -443,9 +440,8 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// A row left while its review was submitting would otherwise open a
 		// second submit of the same draft.
-		if note, busy := a.dash.Busy[rec.ID]; busy {
-			a.status = fmt.Sprintf("%s is still %s", rec.Ref, note)
-			return a, nil
+		if next, busy := a.refuseBusy(rec); busy {
+			return next, nil
 		}
 		a.sub = a.sub.For(rec, review.SubmitEventsFor(rec.Author, a.login()))
 		a.screen = msg.Submit
@@ -536,6 +532,9 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshedMsg:
 		a.working = ""
+		if message.err != nil {
+			return a.update(errMsg{err: message.err})
+		}
 		a.status = "Re-read GitHub for every record whose session is over"
 		return a.update(recordsLoadedMsg{records: message.records})
 
@@ -613,9 +612,6 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case errMsg:
-		if message.endsWork {
-			a.working = ""
-		}
 		a = a.resetBusy(message.err)
 		return a, a.loadRecords()
 
@@ -644,10 +640,7 @@ func (a App) refreshRecords(message msg.RefreshRecords) (tea.Model, tea.Cmd) {
 		if a.working != "" {
 			return a.stillWorking(), nil
 		}
-		a.err = nil
-		a.status = ""
-		a.working = "Refreshing from GitHub"
-		return a, a.refreshAll()
+		return a.startWork("Refreshing from GitHub"), a.refreshAll()
 	}
 
 	rec, ok := a.record(message.ID)
@@ -793,6 +786,25 @@ func (a App) stillWorking() App {
 	return a
 }
 
+// startWork puts text on the line of work in flight. It clears the last error
+// and status, because they describe work that is over.
+func (a App) startWork(text string) App {
+	a.err = nil
+	a.status = ""
+	a.working = text
+	return a
+}
+
+// refuseBusy reports whether the row has work in flight, and says so on the
+// status line when it does.
+func (a App) refuseBusy(rec review.Record) (App, bool) {
+	note, busy := a.dash.Busy[rec.ID]
+	if busy {
+		a.status = fmt.Sprintf("%s is still %s", rec.Ref, note)
+	}
+	return a, busy
+}
+
 // login is the user a pull request's author is compared against. The service
 // caches it the first time anything reads GitHub. The copy taken at startup is
 // empty until then, so the service's is the one that is current. The root is
@@ -899,10 +911,7 @@ func (a App) refreshAll() tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
 		records, err := svc.RefreshAll(context.Background())
-		if err != nil {
-			return errMsg{err: err, endsWork: true}
-		}
-		return refreshedMsg{records: records}
+		return refreshedMsg{records: records, err: err}
 	}
 }
 
@@ -1062,9 +1071,8 @@ func (a App) runBatch(checked batchCheckedMsg, answer review.Intent) (tea.Model,
 	if a.dryRun {
 		return a, a.explainBatch(checked)
 	}
+	a = a.startWork(fmt.Sprintf("Starting %d background %s", len(checked.items), format.Plural(len(checked.items), "review")))
 	a.screen = msg.Dashboard
-	a.status = ""
-	a.working = fmt.Sprintf("Starting %d background %s", len(checked.items), format.Plural(len(checked.items), "review"))
 	a.reqs.Marked = map[string]bool{}
 	return a, a.startBatch(checked)
 }
