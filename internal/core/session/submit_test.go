@@ -88,8 +88,12 @@ func TestSubmitRefusesARecordWithNothingPending(t *testing.T) {
 		spoil func(review.Record) review.Record
 	}{
 		{
-			name:  "still reviewing",
-			spoil: func(rec review.Record) review.Record { rec.State = review.StateReviewing; return rec },
+			name: "reviewing with no draft yet",
+			spoil: func(rec review.Record) review.Record {
+				rec.State = review.StateReviewing
+				rec.ReviewID = 0
+				return rec
+			},
 		},
 		{
 			name:  "no review of mine on GitHub",
@@ -126,6 +130,31 @@ func TestSubmitRefusesARecordWithNothingPending(t *testing.T) {
 				t.Errorf("the stored record is %q, want the drafted row left as it was", stored[0].State)
 			}
 		})
+	}
+}
+
+// Resuming a drafted interactive row records it as reviewing with the draft's
+// id. Another docket instance reads that row, and a submit there would archive it
+// and delete the clone under the open session.
+func TestSubmitRefusesADraftWhoseInteractiveSessionIsOpen(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec, _, err := svc.ResumeSpec(context.Background(), drafted(t, svc, ghc, unlisted))
+	if err != nil {
+		t.Fatalf("ResumeSpec: %v", err)
+	}
+	if rec.State != review.StateReviewing || rec.ReviewID != pendingID {
+		t.Fatalf("record is %q with review %d, want reviewing and still holding review %d", rec.State, rec.ReviewID, pendingID)
+	}
+
+	if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err == nil {
+		t.Error("Submit accepted a draft whose interactive session is open")
+	}
+	if len(ghc.submitted) != 0 {
+		t.Errorf("Submit posted %+v to GitHub", ghc.submitted)
+	}
+	if _, err := os.Stat(rec.Dir); err != nil {
+		t.Errorf("the clone at %s was deleted under the open session: %v", rec.Dir, err)
 	}
 }
 

@@ -147,6 +147,7 @@ func TestAFailedReadOfTheSummaryLeavesTheScreenUsable(t *testing.T) {
 func TestOpeningSubmitNeedsAPendingReview(t *testing.T) {
 	rec := draftedRecord()
 	rec.State = review.StateReviewing
+	rec.ReviewID = 0
 
 	next, _ := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
 	a := next.(App)
@@ -154,8 +155,22 @@ func TestOpeningSubmitNeedsAPendingReview(t *testing.T) {
 	if a.screen == msg.Submit {
 		t.Error("the submit screen opened on a record with nothing to submit")
 	}
-	if !strings.Contains(a.status, "drafted") {
-		t.Errorf("status = %q, want it to say only a drafted review can be submitted", a.status)
+	if !strings.Contains(a.status, "no pending review") {
+		t.Errorf("status = %q, want it to say there is no pending review to submit", a.status)
+	}
+}
+
+// Leaving a drafted row's background session while it works puts the row back to
+// reviewing, and its draft is still pending on GitHub.
+func TestOpeningSubmitOnAReviewingRowWithADraft(t *testing.T) {
+	rec := draftedRecord()
+	rec.Mode = review.ModeBackground
+	rec.State = review.StateReviewing
+
+	next, _ := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
+
+	if a := next.(App); a.screen != msg.Submit {
+		t.Errorf("screen = %v, want the submit screen for the pending review; status = %q", a.screen, a.status)
 	}
 }
 

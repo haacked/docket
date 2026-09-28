@@ -990,13 +990,17 @@ func shellSpec(line, arg string) exec.CommandSpec {
 // background review, and the agent goes on holding the session it ran until
 // something stops it. Left alone, one session would be held per review.
 //
-// A stop that fails leaves the clone alone. Archiving is something docket does
-// on its own once a review goes in, so there is nobody to weigh an agent that
-// may still be writing against a directory removed under it. The record closes
-// carrying the reason, and the directory stays for the user to deal with.
-// Abandon makes the opposite call, because there the user asked.
+// A session that is still working is left running. The user can open a drafted
+// row's session and give it more work, and submitting the draft must not cut
+// that work off. A session docket cannot read is left the same way.
+//
+// A stop that fails leaves the clone alone, and so does a session left running.
+// Archiving is something docket does on its own once a review goes in, so there
+// is nobody to weigh an agent that may still be writing against a directory
+// removed under it. The record closes, and the directory stays for the user to
+// deal with. Abandon makes the opposite call, because there the user asked.
 func (s *Service) Archive(ctx context.Context, rec review.Record) (review.Record, error) {
-	rec, stopped := s.stopBackground(ctx, rec)
+	rec, stopped := s.stopFinished(ctx, rec)
 	if !stopped {
 		at := s.now()
 		rec.ArchivedAt = &at

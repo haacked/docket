@@ -433,7 +433,7 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if !rec.Submittable() {
-			a.status = fmt.Sprintf("%s is %s; only a drafted review can be submitted", rec.Ref, rec.State)
+			a.status = fmt.Sprintf("%s is %s with no pending review to submit", rec.Ref, rec.State)
 			return a, nil
 		}
 		// A row left while its review was submitting would otherwise open a
