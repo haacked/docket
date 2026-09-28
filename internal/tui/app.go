@@ -433,7 +433,11 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if !rec.Submittable() {
-			a.status = fmt.Sprintf("%s is %s with no pending review to submit", rec.Ref, rec.State)
+			if rec.ReviewID == 0 {
+				a.status = fmt.Sprintf("%s is %s with no pending review to submit", rec.Ref, rec.State)
+			} else {
+				a.status = fmt.Sprintf("%s has a pending review, but its interactive session may still be using the clone; close it first", rec.Ref)
+			}
 			return a, nil
 		}
 		// A row left while its review was submitting would otherwise open a

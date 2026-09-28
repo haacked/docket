@@ -770,6 +770,24 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 		return rec, fmt.Errorf("GitHub refuses an approval of your own pull request; submit %s as %s instead", rec.Ref, review.EventComment)
 	}
 
+	// A reviewing row's background session may have replaced this draft since
+	// the row was last read: the poll only reads GitHub once the session goes
+	// idle. Re-checking here narrows, though it cannot close, the window where a
+	// stale id would submit a review the session already deleted, or where
+	// archiving after that submission would leave the session's replacement
+	// draft untracked.
+	if rec.State == review.StateReviewing {
+		reviews, err := s.GH.Reviews(ctx, rec.Ref)
+		if err != nil {
+			return s.recordErr(rec, err)
+		}
+		if !slices.ContainsFunc(reviews, func(r review.GHReview) bool {
+			return r.ID == rec.ReviewID && strings.EqualFold(r.State, review.StatePending)
+		}) {
+			return rec, fmt.Errorf("%s's review %d is no longer pending; refresh %s and try again", rec.Ref, rec.ReviewID, rec.Ref)
+		}
+	}
+
 	// The user is retrying, so drop what the last attempt recorded. Keeping it
 	// would print the old failure under the row of a review that did go in.
 	// recordErr writes a new one if this attempt fails too.

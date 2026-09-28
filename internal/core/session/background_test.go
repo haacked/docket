@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -803,6 +804,70 @@ func TestSubmittingADraftWhoseSessionEndedItsTurnStopsTheSession(t *testing.T) {
 	}
 	if _, err := os.Stat(rec.Dir); !os.IsNotExist(err) {
 		t.Errorf("the clone at %s survived the submitted review", rec.Dir)
+	}
+}
+
+// The listing can say idle for a moment before the per-session progress file
+// catches up, the same gap progressFor reads Active for. Submitting then must
+// not stop, or delete the clone under, a session that has just started a new
+// turn.
+func TestSubmittingWhenTheListingLagsTheProgressFileLeavesTheSessionRunning(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner(idleListing("6d681a76", bgSession))
+	rec := startedBackground(t, svc, runner)
+	ghc.reviews = []review.GHReview{{ID: pendingID, User: review.GHUser{Login: "haacked"}, State: review.StatePending}}
+	records, _, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[0].State != review.StateDrafted {
+		t.Fatalf("state = %q, want the draft detected", records[0].State)
+	}
+
+	jobs := t.TempDir()
+	svc.Cfg.ClaudeJobsDir = jobs
+	dir := filepath.Join(jobs, "6d681a76")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"tempo": "active", "detail": "starting…"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	done, err := svc.Submit(context.Background(), records[0], review.EventComment, "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if slices.ContainsFunc(runner.Lines(), func(l string) bool { return strings.Contains(l, "claude stop") }) {
+		t.Errorf("the submit stopped a session the progress file still reports active: %v", runner.Lines())
+	}
+	if _, err := os.Stat(rec.Dir); err != nil {
+		t.Errorf("the clone at %s was deleted under a session the progress file still reports active: %v", rec.Dir, err)
+	}
+	if !strings.Contains(done.Err, "still working") {
+		t.Errorf("the row does not say the session was left running: %q", done.Err)
+	}
+}
+
+// The session can replace the draft with a new pending review after docket last
+// read GitHub for this row, since the poll only rereads once the session goes
+// idle. Submitting the stale id must not post to a review that is no longer
+// pending, which could submit a review the session had already deleted, or
+// archive the row and leave the session's replacement draft untracked.
+func TestSubmitRefusesADraftTheSessionAlreadyReplaced(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner("")
+	rec := reopenedWhileWorking(t, svc, ghc, runner)
+	ghc.reviews = []review.GHReview{{ID: pendingID + 1, User: review.GHUser{Login: "haacked"}, State: review.StatePending}}
+
+	if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err == nil {
+		t.Error("Submit accepted a draft the session had already replaced")
+	}
+	if len(ghc.submitted) != 0 {
+		t.Errorf("Submit posted %+v to GitHub", ghc.submitted)
 	}
 }
 

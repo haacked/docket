@@ -174,6 +174,29 @@ func TestOpeningSubmitOnAReviewingRowWithADraft(t *testing.T) {
 	}
 }
 
+// An interactive reviewing row with a draft id is refused too, because its
+// session runs in a terminal and a submit would archive the row out from under
+// it. The row does have a pending review, so the message must not say it has
+// none.
+func TestOpeningSubmitOnAnInteractiveReviewingRowNamesTheOpenSession(t *testing.T) {
+	rec := draftedRecord()
+	rec.Mode = review.ModeInteractive
+	rec.State = review.StateReviewing
+
+	next, _ := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
+	a := next.(App)
+
+	if a.screen == msg.Submit {
+		t.Error("the submit screen opened on a row whose interactive session is open")
+	}
+	if strings.Contains(a.status, "no pending review") {
+		t.Errorf("status = %q, want it to say the pending review exists but its session is open", a.status)
+	}
+	if !strings.Contains(a.status, "session") {
+		t.Errorf("status = %q, want it to mention the open session", a.status)
+	}
+}
+
 // Approving your own pull request is a 422, so the choice never reaches the
 // screen.
 func TestOpeningSubmitOnMyOwnPullRequestOffersNoApproval(t *testing.T) {

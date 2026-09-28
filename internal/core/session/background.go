@@ -430,6 +430,11 @@ func (s *Service) stopBackground(ctx context.Context, rec review.Record) (review
 // stopFinished is stopBackground for a session the agent does not report as
 // working. It answers false for a working session, which it leaves running, and
 // for a listing that fails. Either way the record says why.
+//
+// The listing's status can say idle before the per-session progress file
+// catches up, the same gap progressFor reads Active for. Trusting the listing
+// alone here would stop, and delete the clone under, a session that has just
+// started a new turn.
 func (s *Service) stopFinished(ctx context.Context, rec review.Record) (review.Record, bool) {
 	bg, ok := engine.Background(rec.Engine)
 	if !ok || !rec.HasBackgroundSession() {
@@ -440,7 +445,8 @@ func (s *Service) stopFinished(ctx context.Context, rec review.Record) (review.R
 		rec.Err = fmt.Sprintf("read the background session's status: %v", err)
 		return rec, false
 	}
-	if status, over := readStatus(rec, found); !over && !status.Idle {
+	status, over := readStatus(rec, found)
+	if !over && (!status.Idle || bg.Progress(rec.BGID, s.enginePaths()).Active) {
 		rec.Err = "the background session was still working, so docket left it running"
 		return rec, false
 	}
