@@ -86,7 +86,7 @@ Submitting publishes the review on GitHub under the user's name. Confirm the eve
 
 const listDescription = `Lists the reviews docket has open, newest first, with what each running background session is doing.
 
-It asks claude about every running session and reads GitHub for the ones that have finished, so a session that posted its draft moves to drafted here. The states are: preparing (docket is setting the review up, or setting it up failed when error is set), reviewing (a session is running), drafted (a pending review is on GitHub), unreviewed (the last session posted nothing new), reviewed (an existing review was adopted with nothing pending), and not_started (claude refused to start the session; error says why). submittable says whether submit_review can submit a review now. A session whose progress reads waiting has stopped until the user answers it, which they do by opening docket and pressing enter on the row. No tool abandons a review; the user presses x on its row in docket.`
+It asks claude about every running session and reads GitHub for the ones that have finished, so a session that posted its draft moves to drafted here. The states are: preparing (docket is setting the review up, or setting it up failed when error is set), reviewing (a session is running), drafted (a pending review is on GitHub), unreviewed (the last session posted nothing new), reviewed (an existing review was adopted with nothing pending), submitted (the review is on GitHub and docket could not finish cleaning up; error says why, and r on its row in docket tries again), and not_started (claude refused to start the session; error says why). submittable says whether submit_review can submit a review now. A session whose progress reads waiting has stopped until the user answers it, which they do by opening docket and pressing enter on the row. No tool abandons a review; the user presses x on its row in docket.`
 
 const startDescription = `Starts a review-code review of a pull request in a background claude session and returns straight away. The review runs for minutes; call list_reviews to follow it.
 
@@ -128,6 +128,7 @@ func New(svc *session.Service, engineName string) *sdk.Server {
 	sdk.AddTool(srv, &sdk.Tool{
 		Name:        "start_review",
 		Description: startDescription,
+		// Agents send an empty string for an optional field they have no value for.
 		InputSchema: schema[startInput]("existing", "", string(review.IntentAppend), string(review.IntentOverwrite)),
 	}, s.start)
 	sdk.AddTool(srv, &sdk.Tool{
@@ -188,7 +189,7 @@ func (s *server) start(ctx context.Context, _ *sdk.CallToolRequest, in startInpu
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ref, err := in.ref(s.svc.Cfg.DefaultRepo)
+	ref, err := in.ref(s.svc.Config().DefaultRepo)
 	if err != nil {
 		return nil, startOutput{}, err
 	}
@@ -231,14 +232,17 @@ func (s *server) start(ctx context.Context, _ *sdk.CallToolRequest, in startInpu
 	return started(rec, plan.Description(), err)
 }
 
-// startOver is how the user clears an open review that no tool can move on.
-const startOver = "To start over, open docket and press x on the review's row to abandon it, then call start_review again."
+// abandonRow is how the user closes an open review that no tool can move on.
+const abandonRow = "open docket and press x on the review's row to abandon it"
+
+// startOver is how the user clears an open review to start it again.
+const startOver = "To start over, " + abandonRow + ", then call start_review again."
 
 // alreadyOpen refuses a start for a pull request that docket already tracks, and
 // names the next step for the state the review is in. No tool abandons a
 // record, so a review that cannot move on names the dashboard key that does.
 func alreadyOpen(rec review.Record) error {
-	msg := fmt.Sprintf("docket already has a review of %s open, and it is %s", rec.Ref, rec.State.Label())
+	msg := fmt.Sprintf("docket already has a review of %s open, and its state is %s", rec.Ref, rec.State)
 	if rec.Err != "" {
 		msg += " after this error: " + rec.Err
 	}
@@ -247,6 +251,8 @@ func alreadyOpen(rec review.Record) error {
 		return fmt.Errorf("%s. submit_review submits it", msg)
 	case rec.State == review.StateReviewing, rec.State == review.StatePreparing && rec.Err == "":
 		return fmt.Errorf("%s. list_reviews shows where it stands", msg)
+	case rec.State == review.StateSubmitted:
+		return fmt.Errorf("%s. The review is already on GitHub, so there is nothing to start. Pressing r on its row in docket finishes cleaning up", msg)
 	default:
 		return fmt.Errorf("%s. %s", msg, startOver)
 	}
@@ -258,6 +264,8 @@ func started(rec review.Record, plan string, err error) (*sdk.CallToolResult, st
 	switch {
 	case errors.Is(err, session.ErrUntrusted):
 		return nil, startOutput{}, fmt.Errorf("%w. %s asks that question only in a terminal, so run %s in that directory once and accept its trust prompt, then call start_review again", err, rec.Engine, rec.Engine)
+	case errors.Is(err, session.ErrClosed):
+		return nil, startOutput{}, fmt.Errorf("%w. To close it, %s", err, abandonRow)
 	case err != nil && rec.State == review.StateNotStarted:
 		return nil, startOutput{}, fmt.Errorf("%w. start_review tries it again. %s", err, startOver)
 	case err != nil && rec.State == review.StateReviewing:
@@ -279,7 +287,9 @@ func askExisting(ref pr.Ref, found review.Found) error {
 
 // poll reads the agent and GitHub for rec and returns what became of it. A poll
 // that cannot reach the agent still returns the records, so its failure is
-// reported only when rec is still not submittable.
+// reported only when rec is still not submittable. A GitHub read that fails
+// puts its error on the record rather than on the poll, so an error the record
+// did not carry before the poll is reported too.
 func (s *server) poll(ctx context.Context, rec review.Record) (review.Record, error) {
 	records, _, pollErr := s.svc.PollBackground(ctx)
 	if records == nil {
@@ -289,8 +299,14 @@ func (s *server) poll(ctx context.Context, rec review.Record) (review.Record, er
 	if !ok {
 		return rec, fmt.Errorf("docket archived its review of %s while it read GitHub, because the review was already submitted or the pull request merged or closed", rec.Ref)
 	}
-	if pollErr != nil && !polled.Submittable() {
+	if polled.Submittable() {
+		return polled, nil
+	}
+	if pollErr != nil {
 		return polled, fmt.Errorf("docket could not ask %s whether the session finished: %w", polled.Engine, pollErr)
+	}
+	if polled.Err != "" && polled.Err != rec.Err {
+		return polled, fmt.Errorf("docket could not tell whether %s has a draft to submit: %s", polled.Ref, polled.Err)
 	}
 	return polled, nil
 }
@@ -299,7 +315,7 @@ func (s *server) submit(ctx context.Context, _ *sdk.CallToolRequest, in submitIn
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ref, err := in.ref(s.svc.Cfg.DefaultRepo)
+	ref, err := in.ref(s.svc.Config().DefaultRepo)
 	if err != nil {
 		return nil, Review{}, err
 	}
@@ -314,7 +330,7 @@ func (s *server) submit(ctx context.Context, _ *sdk.CallToolRequest, in submitIn
 	// Only a poll moves a finished background session to drafted. Without one, a
 	// review whose draft is already on GitHub still reads as reviewing and Submit
 	// refuses it.
-	if !rec.Submittable() && rec.InBackgroundSession() {
+	if rec.InBackgroundSession() {
 		if rec, err = s.poll(ctx, rec); err != nil {
 			return nil, Review{}, err
 		}
@@ -349,13 +365,9 @@ func view(rec review.Record, statuses map[string]engine.BGStatus) Review {
 		out.Progress = &Progress{
 			Detail:    p.Detail,
 			Waiting:   status.Waiting(),
+			Needs:     status.Need(),
 			Agents:    p.Agents,
 			UpdatedAt: p.UpdatedAt,
-		}
-		// claude's own reading of the conversation can name a need while the
-		// session's reviewer agents still run.
-		if out.Progress.Waiting {
-			out.Progress.Needs = p.Needs
 		}
 	}
 	return out

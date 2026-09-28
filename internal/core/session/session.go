@@ -42,6 +42,10 @@ type Service struct {
 	Runner exec.Runner
 	Now    func() time.Time
 	NewID  func() string
+	// CallerDir is the working directory of the agent session this service
+	// runs under, or empty when there is none. docket mcp runs in the directory
+	// of the claude session that started it.
+	CallerDir string
 
 	// idleSeen maps a background id to the agent's update time when docket
 	// last read GitHub for that session while it was idle. A session stays
@@ -719,6 +723,10 @@ func (s *Service) AfterAsk(ctx context.Context, rec review.Record, childErr erro
 
 	switch current.State {
 	case review.StateDrafted, review.StateReviewed, review.StateUnreviewed:
+	case review.StateSubmitted:
+		// The review is already on GitHub. Only the archive that waited for this
+		// session is left.
+		return s.Archive(ctx, current)
 	default:
 		return current, s.append(current)
 	}
@@ -828,10 +836,14 @@ func refuseInProgress(rec review.Record) error {
 	return nil
 }
 
+// ErrClosed marks a refusal to review a pull request that merged or closed.
+// Starting the review again cannot succeed.
+var ErrClosed = errors.New("nothing left to review")
+
 // RefuseClosed refuses to review a pull request that merged or closed.
 func RefuseClosed(ref pr.Ref, state review.PRState) error {
 	if state.Closed() {
-		return fmt.Errorf("%s is %s, so there is nothing left to review", ref, state.Label())
+		return fmt.Errorf("%s is %s, so there is %w", ref, state.Label(), ErrClosed)
 	}
 	return nil
 }
@@ -1152,7 +1164,16 @@ func shellSpec(line, arg string) exec.CommandSpec {
 // is nobody to weigh an agent that may still be writing against a directory
 // removed under it. The record closes, and the directory stays for the user to
 // deal with. Abandon makes the opposite call, because there the user asked.
+//
+// An archive requested from inside the record's clone waits. The session that
+// asked is still running there. Removing the clone would delete the directory it
+// works in. Stopping the record's session could end the caller. The record stays
+// open with the reason. The session's exit, or r on its row, then archives it.
 func (s *Service) Archive(ctx context.Context, rec review.Record) (review.Record, error) {
+	if s.callerInClone(rec) {
+		rec.Err = fmt.Sprintf("docket kept the clone at %s because a session is running in it. The review archives when that session ends in docket, or when you press r on its row afterwards", rec.Dir)
+		return rec, s.append(rec)
+	}
 	// The status line prints an archived row's Err, and the row is hidden once it
 	// archives. A failure from an earlier step would read as this archive's.
 	rec.Err = ""
@@ -1190,10 +1211,27 @@ func (s *Service) Abandon(ctx context.Context, rec review.Record) (review.Record
 // which tears it down at its own session end. docket reports that worktree and
 // never deletes it.
 func (s *Service) cleanup(rec review.Record) error {
-	if rec.Tier != tier.Tier2 || rec.Dir == "" {
+	if !hasClone(rec) {
 		return nil
 	}
 	return s.Cloner.Remove(rec.Dir)
+}
+
+// hasClone reports whether rec has a clone of its own. Every tier-1 record
+// shares the scratch directory.
+func hasClone(rec review.Record) bool {
+	return rec.Tier == tier.Tier2 && rec.Dir != ""
+}
+
+// callerInClone reports whether the agent session this service runs under works
+// inside rec's clone. A tier-1 record has no directory of its own, so a match on
+// the scratch directory would not say which record the caller belongs to.
+func (s *Service) callerInClone(rec review.Record) bool {
+	if s.CallerDir == "" || !hasClone(rec) {
+		return false
+	}
+	rel, err := filepath.Rel(engine.Resolve(rec.Dir), engine.Resolve(s.CallerDir))
+	return err == nil && filepath.IsLocal(rel)
 }
 
 // Reconcile re-runs detection on records left mid-session. It assumes this is the

@@ -63,7 +63,7 @@ docket drives the `claude` and `codex` CLIs under your existing subscription. It
 claude mcp add docket -- docket mcp
 ```
 
-`claude mcp add -s user docket -- docket mcp` registers it for every directory instead. That includes the background sessions docket starts, so a review session then has `submit_review` too. The server's instructions tell an agent to confirm the event and the body with you before it submits.
+`claude mcp add -s user docket -- docket mcp` registers it for every directory instead. The background review sessions docket starts get none of its tools either way, because they read what the pull request's author wrote and nobody is there to confirm a tool call. docket denies `mcp__docket` when it launches them, so keep the name `docket` when you register the server. The server's instructions tell an agent to confirm the event and the body with you before it submits.
 
 It offers three tools:
 
@@ -73,7 +73,7 @@ It offers three tools:
 
 Every review the server starts runs in the background under `claude`, because the server has no terminal to give a session, and `codex` has no background mode. When `claude` refuses a directory nobody has trusted, `start_review` names the directory. Run `claude` there once, accept the prompt, and have the agent call `start_review` again. Or press `enter` on the row in docket, which asks the same question and then starts the review. A pull request that docket clones gets a directory of its own, so this can happen once for each of them. A session that stops to ask you something shows as waiting in `list_reviews`, and `enter` on its row in docket opens it so you can answer.
 
-The server and the dashboard share the index, so a review started from an agent session shows up in a running docket, and the other way round. Abandoning a review, asking about the notes, and reviewing again are only on the dashboard. `start_review` refuses a pull request docket already has open, and when that review failed to set up or cannot start, the refusal tells the agent to have you abandon it with `x`. `--dry-run` does not apply to `docket mcp`.
+The server and the dashboard share the index, so a review started from an agent session shows up in a running docket, and the other way round. Abandoning a review, asking about the notes, and reviewing again are only on the dashboard. `start_review` refuses a pull request docket already has open, and when that review failed to set up or cannot start, the refusal tells the agent to have you abandon it with `x`. When an agent working in a review's clone submits that review, docket keeps the clone until the session ends and then finishes the archive. `--dry-run` does not apply to `docket mcp`.
 
 ## Requirements
 

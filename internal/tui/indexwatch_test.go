@@ -137,3 +137,38 @@ func TestIndexChangedReloadPreservesSelectionAndBusy(t *testing.T) {
 		t.Errorf(`Busy["rec-b"] = %q after the index-watcher reload, want "reading GitHub" untouched`, a.dash.Busy["rec-b"])
 	}
 }
+
+// docket mcp can start a background review while this dashboard has nothing
+// running and so no tick outstanding. The reload that brings the review in has
+// to arm the tick, or nothing polls it.
+func TestAReloadArmsThePollForABackgroundReviewAnotherProcessStarted(t *testing.T) {
+	running := []review.Record{backgroundRecord(review.StateReviewing)}
+	starting := backgroundRecord(review.StateReviewing)
+	starting.BGID = ""
+
+	tests := []struct {
+		name    string
+		dryRun  bool
+		polling bool
+		records []review.Record
+		want    bool
+	}{
+		{name: "a running review", records: running, want: true},
+		{name: "a tick already outstanding", polling: true, records: running},
+		{name: "a dry run", dryRun: true, records: running},
+		// A launch writes its record before claude reports the session's id. A
+		// poll then would find no session and close the record under the launch.
+		{name: "a launch still starting", records: []review.Record{starting}},
+		{name: "nothing running", records: []review.Record{backgroundRecord(review.StateDrafted)}},
+	}
+	for _, tc := range tests {
+		a := New(nil, config.Config{DefaultEngine: "claude"}, "", tc.dryRun)
+		a.polling = tc.polling
+
+		next, cmd := a.Update(recordsLoadedMsg{records: tc.records})
+
+		if armed := cmd != nil && next.(App).polling; armed != tc.want {
+			t.Errorf("%s: armed = %v, want %v", tc.name, armed, tc.want)
+		}
+	}
+}

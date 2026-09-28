@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,20 +37,22 @@ const (
 // fakeGitHub answers for one pull request. A submit turns the pending review
 // into a submitted one, which is what detection reads back afterwards.
 type fakeGitHub struct {
-	reviews []review.GHReview
-	submits []string
+	reviews    []review.GHReview
+	reviewsErr error
+	prState    review.PRState
+	submits    []string
 }
 
 func (f *fakeGitHub) Login(context.Context) (string, error) { return me, nil }
 
 func (f *fakeGitHub) PR(context.Context, pr.Ref) (gh.PRInfo, error) {
-	info := gh.PRInfo{Number: 7, Title: "Add a thing", HeadRefName: "haacked/a-thing", State: review.PROpen}
+	info := gh.PRInfo{Number: 7, Title: "Add a thing", HeadRefName: "haacked/a-thing", State: cmp.Or(f.prState, review.PROpen)}
 	info.Author.Login = "someone"
 	return info, nil
 }
 
 func (f *fakeGitHub) Reviews(context.Context, pr.Ref) ([]review.GHReview, error) {
-	return f.reviews, nil
+	return f.reviews, f.reviewsErr
 }
 
 func (f *fakeGitHub) SubmitReview(_ context.Context, _ pr.Ref, id int64, event, body string) error {
@@ -65,6 +68,8 @@ func (f *fakeGitHub) SubmitReview(_ context.Context, _ pr.Ref, id int64, event, 
 }
 
 func (f *fakeGitHub) ReviewRequests(context.Context, string) ([]requests.PR, error) { return nil, nil }
+
+func (f *fakeGitHub) Teams(context.Context) ([]string, error) { return nil, nil }
 
 func (f *fakeGitHub) post(r review.GHReview) {
 	r.User.Login = me
@@ -218,14 +223,21 @@ func (f *fixture) records(t *testing.T) []review.Record {
 	return records
 }
 
-func (f *fixture) launches() []string {
+// ran lists the commands the fixture ran that mention part.
+func (f *fixture) ran(part string) []string {
 	var out []string
 	for _, line := range f.runner.Lines() {
-		if strings.Contains(line, "--bg") {
+		if strings.Contains(line, part) {
 			out = append(out, line)
 		}
 	}
 	return out
+}
+
+// launchFails makes claude refuse every background launch with stderr.
+func (f *fixture) launchFails(stderr string) {
+	f.runner.Results["--bg"] = exec.Result{Stderr: stderr, ExitCode: 1}
+	f.runner.Errs = map[string]error{"--bg": errors.New("exit status 1")}
 }
 
 func decode[T any](t *testing.T, res *sdk.CallToolResult) T {
@@ -255,6 +267,17 @@ func refused(t *testing.T, res *sdk.CallToolResult, wants ...string) {
 	for _, want := range wants {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the refusal does not mention %q: %s", want, msg)
+		}
+	}
+}
+
+// omits fails the test when the tool's message mentions any of unwanted.
+func omits(t *testing.T, res *sdk.CallToolResult, unwanted ...string) {
+	t.Helper()
+	msg := text(res)
+	for _, u := range unwanted {
+		if strings.Contains(msg, u) {
+			t.Errorf("the message mentions %q: %s", u, msg)
 		}
 	}
 }
@@ -322,7 +345,7 @@ func TestStartReviewStartsABackgroundReview(t *testing.T) {
 	if out.Plan == "" {
 		t.Error("the result does not say where the review runs")
 	}
-	if got := f.launches(); len(got) != 1 {
+	if got := f.ran("--bg"); len(got) != 1 {
 		t.Fatalf("launches = %v, want one claude --bg", got)
 	}
 	records := f.records(t)
@@ -340,7 +363,7 @@ func TestStartReviewAsksWhatToDoWithAnExistingReview(t *testing.T) {
 	if records := f.records(t); len(records) != 0 {
 		t.Errorf("records = %+v, want none before the caller answers", records)
 	}
-	if got := f.launches(); len(got) != 0 {
+	if got := f.ran("--bg"); len(got) != 0 {
 		t.Errorf("launches = %v, want none", got)
 	}
 }
@@ -360,7 +383,7 @@ func TestStartReviewAppendsWhenAsked(t *testing.T) {
 
 	decode[startOutput](t, f.start(t, map[string]any{"existing": "append"}))
 
-	launches := f.launches()
+	launches := f.ran("--bg")
 	if len(launches) != 1 || !strings.Contains(launches[0], "--append") {
 		t.Errorf("launches = %v, want one passing --append", launches)
 	}
@@ -380,7 +403,7 @@ func TestStartReviewRefusesAPullRequestDocketAlreadyHasOpen(t *testing.T) {
 
 	refused(t, f.start(t, nil), "already", "reviewing", "list_reviews")
 
-	if got := f.launches(); len(got) != 1 {
+	if got := f.ran("--bg"); len(got) != 1 {
 		t.Errorf("launches = %v, want only the first", got)
 	}
 }
@@ -390,8 +413,7 @@ func TestStartReviewRefusesAPullRequestDocketAlreadyHasOpen(t *testing.T) {
 // next start has to start the record that the refusal left.
 func TestStartReviewExplainsAnUntrustedDirectoryAndStartsItAgainAfterwards(t *testing.T) {
 	f := newFixture(t)
-	f.runner.Results["--bg"] = exec.Result{Stderr: "Workspace not trusted. Run `claude` in /x once and accept the trust prompt, then retry.\n", ExitCode: 1}
-	f.runner.Errs = map[string]error{"--bg": errors.New("exit status 1")}
+	f.launchFails("Workspace not trusted. Run `claude` in /x once and accept the trust prompt, then retry.\n")
 
 	res := f.start(t, nil)
 
@@ -399,7 +421,8 @@ func TestStartReviewExplainsAnUntrustedDirectoryAndStartsItAgainAfterwards(t *te
 	if len(records) != 1 || records[0].State != review.StateNotStarted {
 		t.Fatalf("records = %+v, want one that did not start", records)
 	}
-	refused(t, res, records[0].Dir, "trust", "start_review again")
+	refused(t, res, records[0].Dir, "accept its trust prompt")
+	omits(t, res, "press x")
 
 	delete(f.runner.Errs, "--bg")
 	f.runner.Results["--bg"] = exec.Result{Stdout: launched}
@@ -414,6 +437,33 @@ func TestStartReviewExplainsAnUntrustedDirectoryAndStartsItAgainAfterwards(t *te
 	}
 }
 
+func TestStartReviewSaysHowToRetryALaunchClaudeRefusedForAnotherReason(t *testing.T) {
+	f := newFixture(t)
+	f.launchFails("Error: the background service is not running\n")
+
+	res := f.start(t, nil)
+
+	if records := f.records(t); len(records) != 1 || records[0].State != review.StateNotStarted {
+		t.Fatalf("records = %+v, want one that did not start", records)
+	}
+	refused(t, res, "start_review tries it again", "press x")
+	omits(t, res, "trust prompt")
+}
+
+// A pull request that merged while its row waited can never be reviewed. The
+// refusal must not send the agent back to start_review.
+func TestStartReviewTellsARefusedLaunchOfAMergedPullRequestOnlyToAbandonIt(t *testing.T) {
+	f := newFixture(t)
+	f.launchFails("Error: the background service is not running\n")
+	f.start(t, nil)
+	f.gh.prState = review.PRMerged
+
+	res := f.start(t, nil)
+
+	refused(t, res, "nothing left to review", "press x")
+	omits(t, res, "start_review")
+}
+
 func TestStartReviewPointsADraftedReviewAtSubmitReview(t *testing.T) {
 	f := newFixture(t)
 	f.drafted(t)
@@ -422,9 +472,7 @@ func TestStartReviewPointsADraftedReviewAtSubmitReview(t *testing.T) {
 	res := f.start(t, nil)
 
 	refused(t, res, "drafted", "submit_review")
-	if strings.Contains(text(res), "press x") {
-		t.Errorf("the refusal tells the user to abandon a draft: %s", text(res))
-	}
+	omits(t, res, "press x")
 }
 
 // Prepare records the review before it clones, so a failed clone leaves an open
@@ -591,6 +639,52 @@ func TestSubmitReviewSaysWhenItCannotAskTheAgent(t *testing.T) {
 	}
 }
 
+// A GitHub read that fails during the poll goes on the record, not on the poll's
+// error. The draft may already be on GitHub, so the agent must hear why docket
+// cannot tell rather than read that there is no draft.
+func TestSubmitReviewSaysWhenItCannotReadGitHub(t *testing.T) {
+	f := newFixture(t)
+	f.drafted(t)
+	f.gh.reviewsErr = errors.New("GitHub is not responding")
+
+	res := f.submit(t, map[string]any{"event": review.EventComment})
+
+	refused(t, res, "could not tell", "GitHub is not responding")
+	omits(t, res, "no pending review")
+	if len(f.gh.submits) != 0 {
+		t.Errorf("submits = %v, want none", f.gh.submits)
+	}
+}
+
+// claude starts docket mcp in the working directory of the session that called
+// it. A review session that submits its own review from inside the clone keeps
+// the clone. docket does not stop the session under it.
+func TestSubmitReviewFromInsideTheCloneKeepsItForTheSession(t *testing.T) {
+	f := newFixture(t)
+	f.drafted(t)
+	dir := f.records(t)[0].Dir
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("the review has no clone: %v", err)
+	}
+	f.svc.CallerDir = dir
+
+	out := decode[Review](t, f.submit(t, map[string]any{"event": review.EventComment}))
+
+	if out.State != string(review.StateSubmitted) || !strings.Contains(out.Error, "session is running in it") {
+		t.Errorf("review = %+v, want submitted with the reason the archive waits", out)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("the clone was removed under the session running in it: %v", err)
+	}
+	if stops := f.ran("stop"); len(stops) != 0 {
+		t.Errorf("docket ran %v, which ends the session that called it", stops)
+	}
+
+	res := f.start(t, nil)
+	refused(t, res, "already on GitHub", "r on its row")
+	omits(t, res, "start_review")
+}
+
 // The session can submit the review itself before anything polls. The poll then
 // archives the record, and the agent must not be sent to start_review.
 func TestSubmitReviewSaysWhenTheReviewClosedWhileItRead(t *testing.T) {
@@ -603,9 +697,7 @@ func TestSubmitReviewSaysWhenTheReviewClosedWhileItRead(t *testing.T) {
 	res := f.submit(t, map[string]any{"event": review.EventComment})
 
 	refused(t, res, "archived")
-	if strings.Contains(text(res), "start_review") {
-		t.Errorf("the refusal sends the agent to start_review: %s", text(res))
-	}
+	omits(t, res, "start_review")
 }
 
 func TestSubmitReviewRefusesAPullRequestDocketIsNotReviewing(t *testing.T) {
@@ -617,8 +709,11 @@ func TestSubmitReviewRejectsAnEventGitHubDoesNotTake(t *testing.T) {
 	f := newFixture(t)
 	f.drafted(t)
 
-	refused(t, f.submit(t, map[string]any{"event": "LGTM"}))
+	res := f.submit(t, map[string]any{"event": "LGTM"})
 
+	refused(t, res)
+	// Submit refuses the event too. The schema has to refuse it first.
+	omits(t, res, "is not a review event")
 	if len(f.gh.submits) != 0 {
 		t.Errorf("submits = %v, want none", f.gh.submits)
 	}

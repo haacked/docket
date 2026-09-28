@@ -101,6 +101,10 @@ func run() error {
 	}
 
 	if opts.mcp {
+		// claude starts a stdio server in the working directory of its session.
+		if svc.CallerDir, err = os.Getwd(); err != nil {
+			return err
+		}
 		return mcp.Serve(context.Background(), svc, eng.Name())
 	}
 	return tui.Run(tui.New(svc, cfg, opts.input, opts.dryRun))

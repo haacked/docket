@@ -120,7 +120,7 @@ func (Codex) CaptureSessionID(rec review.Record, paths Paths) (string, error) {
 		return "", fmt.Errorf("no directory to match a codex session against")
 	}
 
-	dir := resolve(rec.Dir)
+	dir := Resolve(rec.Dir)
 	cutoff := rec.StartedAt.Add(-startTolerance)
 	// A rollout's name carries its local start time, so this is the name the
 	// oldest session worth opening would have.
@@ -143,7 +143,7 @@ func (Codex) CaptureSessionID(rec review.Record, paths Paths) (string, error) {
 			if !ok || meta.Payload.ID == "" || meta.Payload.Timestamp.Before(cutoff) {
 				continue
 			}
-			if resolve(meta.Payload.CWD) == dir {
+			if Resolve(meta.Payload.CWD) == dir {
 				return meta.Payload.ID, nil
 			}
 		}
@@ -191,12 +191,12 @@ func readSessionMeta(path string) (sessionMeta, bool) {
 	return meta, true
 }
 
-// resolve follows symlinks so two spellings of one directory compare equal.
-// codex records the resolved path, and docket's own directories can sit behind a
-// link. /tmp is one on macOS, and DOCKET_HOME may be another. A path that will
-// not resolve is compared as written, which is all a deleted directory leaves to
-// go on.
-func resolve(path string) string {
+// Resolve follows symlinks so two spellings of one directory compare equal.
+// codex records the resolved path. os.Getwd may return either spelling.
+// docket's own directories can sit behind a link. /tmp is one on macOS.
+// DOCKET_HOME may be another. A path that will not resolve is compared as
+// written, which is all a deleted directory leaves to go on.
+func Resolve(path string) string {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return filepath.Clean(path)

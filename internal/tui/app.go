@@ -602,7 +602,9 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.stamp != (index.StatMark{}) {
 			a.indexStamp = message.stamp
 		}
-		return a, nil
+		// Another process, such as docket mcp, can start a background review
+		// that this dashboard has no tick outstanding for.
+		return a.armPoll()
 
 	case preparedMsg:
 		a.screen = msg.Dashboard
@@ -1597,7 +1599,13 @@ func (a App) applyPoll(polled bgPolledMsg) (tea.Model, tea.Cmd) {
 		a.dash = a.dash.SetRecords(polled.records)
 		a.dash.Background = polled.progress
 	}
-	if !a.watching() || a.polling {
+	return a.armPoll()
+}
+
+// armPoll arms the background tick when a record is running and no tick is
+// outstanding. A dry run never polls, because a poll writes what it finds.
+func (a App) armPoll() (tea.Model, tea.Cmd) {
+	if a.dryRun || !a.watching() || a.polling {
 		return a, nil
 	}
 	a.polling = true
@@ -1620,18 +1628,16 @@ func (a App) pollBackground() tea.Cmd {
 // progressFor hands each session's progress to the dashboard, which holds no
 // engine to ask. A session that is Waiting is waiting for the user. The
 // dashboard draws a row as waiting when the row names a need, so a waiting
-// session always names one. claude's own reading of the conversation can call a
-// session blocked while its reviewer agents still run. progressFor therefore
-// drops the need of a working session. A working session with no detail shows
-// the agent's state.
+// session always names one. A working session with no detail shows the agent's
+// state.
 func progressFor(statuses map[string]engine.BGStatus) map[string]review.Progress {
 	progress := make(map[string]review.Progress, len(statuses))
 	for id, status := range statuses {
 		p := status.Progress
+		p.Needs = status.Need()
 		if status.Waiting() {
 			p.Needs = cmp.Or(p.Needs, "your input")
 		} else {
-			p.Needs = ""
 			p.Detail = cmp.Or(p.Detail, status.State)
 		}
 		progress[id] = p

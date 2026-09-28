@@ -39,6 +39,16 @@ func (s BGStatus) Waiting() bool {
 	return s.Idle && !s.Progress.Active
 }
 
+// Need is what a waiting session needs from the user, when the agent named one.
+// claude's own reading of the conversation can name a need while the session's
+// reviewer agents still run. A session that is not waiting therefore has none.
+func (s BGStatus) Need() string {
+	if !s.Waiting() {
+		return ""
+	}
+	return s.Progress.Needs
+}
+
 // BackgroundEngine is an engine that can run a review with nobody at the
 // terminal. Codex does not implement it: 0.150.1 has no background primitive,
 // so a review would run as a child of docket and die when docket quits.

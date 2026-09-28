@@ -25,6 +25,25 @@ func TestWaitingNeedsAnEndedTurnThatTheStatusFileDoesNotCallActive(t *testing.T)
 	}
 }
 
+// claude can name a need while the session's reviewer agents still run.
+func TestNeedIsNamedOnlyWhileTheSessionWaits(t *testing.T) {
+	needs := review.Progress{Needs: "permission to run gh"}
+	tests := []struct {
+		name   string
+		status BGStatus
+		want   string
+	}{
+		{name: "waiting", status: BGStatus{Idle: true, Progress: needs}, want: "permission to run gh"},
+		{name: "working", status: BGStatus{Progress: needs}, want: ""},
+		{name: "starting", status: BGStatus{Idle: true, Progress: review.Progress{Active: true, Needs: needs.Needs}}, want: ""},
+	}
+	for _, tc := range tests {
+		if got := tc.status.Need(); got != tc.want {
+			t.Errorf("%s: Need() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestBackgroundNamePrefersTheOneAskedForAndFallsBackToOneWithABackgroundMode(t *testing.T) {
 	if got := BackgroundName("claude"); got != "claude" {
 		t.Errorf("BackgroundName(claude) = %q", got)
