@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -718,6 +719,226 @@ func TestArchiveKeepsTheCloneWhenTheStopFails(t *testing.T) {
 	}
 	if _, err := os.Stat(rec.Dir); err != nil {
 		t.Errorf("the clone at %s was deleted under an agent that may still hold it", rec.Dir)
+	}
+}
+
+// draftedInBackground is a background review whose session posted its draft and
+// ended its turn. The poll has read it as drafted. The agent's listing stays
+// idle.
+func draftedInBackground(t *testing.T, svc *Service, ghc *fakeGH, runner *exec.Fake) review.Record {
+	t.Helper()
+	startedBackground(t, svc, runner)
+	ghc.reviews = []review.GHReview{{ID: pendingID, User: review.GHUser{Login: "haacked"}, State: review.StatePending}}
+	runner.Results["agents"] = exec.Result{Stdout: idleListing("6d681a76", bgSession)}
+	records, _, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[0].State != review.StateDrafted {
+		t.Fatalf("state = %q, want the draft detected", records[0].State)
+	}
+	return records[0]
+}
+
+// reopenedWhileWorking is a background review that posted its draft, whose
+// session the user then opened, gave more work, and left while it was working.
+// That puts the row back to reviewing. The row keeps the draft's id.
+func reopenedWhileWorking(t *testing.T, svc *Service, ghc *fakeGH, runner *exec.Fake) review.Record {
+	t.Helper()
+	posted := draftedInBackground(t, svc, ghc, runner)
+
+	runner.Results["agents"] = exec.Result{Stdout: bgListing("6d681a76", bgSession, "working", true)}
+	rec, err := svc.AfterExit(context.Background(), posted, nil)
+	if err != nil {
+		t.Fatalf("AfterExit: %v", err)
+	}
+	if rec.State != review.StateReviewing || rec.ReviewID != pendingID {
+		t.Fatalf("record is %q with review %d, want reviewing and still holding review %d", rec.State, rec.ReviewID, pendingID)
+	}
+	return rec
+}
+
+// Submitting the draft must not cut off the work the user gave the session.
+func TestSubmittingWhileTheSessionWorksLeavesTheSessionRunning(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner("")
+	rec := reopenedWhileWorking(t, svc, ghc, runner)
+
+	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if len(ghc.submitted) != 1 || ghc.submitted[0].id != pendingID {
+		t.Errorf("submitted %+v, want one call for review %d", ghc.submitted, pendingID)
+	}
+	if done.State != review.StateArchived {
+		t.Errorf("state = %q, want the submitted review archived", done.State)
+	}
+	if slices.ContainsFunc(runner.Lines(), func(l string) bool { return strings.Contains(l, "claude stop") }) {
+		t.Errorf("the submit stopped a session that was still working: %v", runner.Lines())
+	}
+	if _, err := os.Stat(rec.Dir); err != nil {
+		t.Errorf("the clone at %s was deleted under a session that is still working: %v", rec.Dir, err)
+	}
+	if !strings.Contains(done.Err, "still working") {
+		t.Errorf("the row does not say the session was left running: %q", done.Err)
+	}
+}
+
+// review-code ends its turn once the draft is posted, and claude goes on holding
+// the session. Submitting from the dashboard is the usual end of that review.
+func TestSubmittingADraftWhoseSessionEndedItsTurnStopsTheSession(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner("")
+	rec := draftedInBackground(t, svc, ghc, runner)
+
+	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if done.State != review.StateArchived {
+		t.Errorf("state = %q, want the submitted review archived", done.State)
+	}
+	if !slices.ContainsFunc(runner.Lines(), func(l string) bool { return strings.Contains(l, "claude stop 6d681a76") }) {
+		t.Errorf("the submit left the agent holding the session: %v", runner.Lines())
+	}
+	if _, err := os.Stat(rec.Dir); !os.IsNotExist(err) {
+		t.Errorf("the clone at %s survived the submitted review", rec.Dir)
+	}
+}
+
+// The listing can say idle for a moment before the per-session progress file
+// catches up, the same gap progressFor reads Active for. Submitting then must
+// not stop, or delete the clone under, a session that has just started a new
+// turn.
+func TestSubmittingWhenTheListingLagsTheProgressFileLeavesTheSessionRunning(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner("")
+	rec := draftedInBackground(t, svc, ghc, runner)
+
+	jobs := t.TempDir()
+	svc.Cfg.ClaudeJobsDir = jobs
+	dir := filepath.Join(jobs, "6d681a76")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"tempo": "active", "detail": "starting…"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if slices.ContainsFunc(runner.Lines(), func(l string) bool { return strings.Contains(l, "claude stop") }) {
+		t.Errorf("the submit stopped a session the progress file still reports active: %v", runner.Lines())
+	}
+	if _, err := os.Stat(rec.Dir); err != nil {
+		t.Errorf("the clone at %s was deleted under a session the progress file still reports active: %v", rec.Dir, err)
+	}
+	if !strings.Contains(done.Err, "still working") {
+		t.Errorf("the row does not say the session was left running: %q", done.Err)
+	}
+}
+
+// The poll only rereads GitHub once the session goes idle. The session can
+// therefore replace or submit the draft after docket last read this row. Submit
+// posts only a draft it has just read as pending. It posts nothing when it
+// cannot read the reviews at all.
+func TestSubmitPostsOnlyADraftItReadAsPending(t *testing.T) {
+	tests := []struct {
+		name  string
+		spoil func(*fakeGH)
+	}{
+		{
+			name: "the session replaced it",
+			spoil: func(ghc *fakeGH) {
+				ghc.reviews = []review.GHReview{{ID: pendingID + 1, User: review.GHUser{Login: "haacked"}, State: review.StatePending}}
+			},
+		},
+		{
+			name: "the session submitted it",
+			spoil: func(ghc *fakeGH) {
+				ghc.reviews = []review.GHReview{{ID: pendingID, User: review.GHUser{Login: "haacked"}, State: "COMMENTED"}}
+			},
+		},
+		{
+			name:  "the reviews cannot be read",
+			spoil: func(ghc *fakeGH) { ghc.reviewErr = errors.New("HTTP 502") },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ghc := &fakeGH{login: "haacked", info: prInfo()}
+			svc, _ := newService(t, ghc, newFakeGit())
+			rec := reopenedWhileWorking(t, svc, ghc, bgRunner(""))
+			tt.spoil(ghc)
+
+			if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err == nil {
+				t.Error("Submit accepted a draft it had not read as pending")
+			}
+			if len(ghc.submitted) != 0 {
+				t.Errorf("Submit posted %+v to GitHub", ghc.submitted)
+			}
+		})
+	}
+}
+
+// With no answer from the agent, archiving cannot tell a finished session from
+// one still working, so it leaves the session and its clone alone.
+func TestArchiveLeavesTheSessionWhenTheAgentDoesNotAnswer(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner("")
+	rec := reopenedWhileWorking(t, svc, ghc, runner)
+	runner.Errs = map[string]error{"agents": errors.New("daemon not running")}
+
+	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if done.State != review.StateArchived {
+		t.Errorf("state = %q, want the submitted review archived", done.State)
+	}
+	if !strings.Contains(done.Err, "daemon not running") {
+		t.Errorf("the row does not say why the session was left: %q", done.Err)
+	}
+	if slices.ContainsFunc(runner.Lines(), func(l string) bool { return strings.Contains(l, "claude stop") }) {
+		t.Errorf("the archive stopped a session it could not read: %v", runner.Lines())
+	}
+	if _, err := os.Stat(rec.Dir); err != nil {
+		t.Errorf("the clone at %s was deleted under a session docket could not read: %v", rec.Dir, err)
+	}
+}
+
+// The user opens a drafted row whose last submit failed, has the session submit
+// the review, and leaves. The status line prints an archived row's Err after
+// "submitted and archived", so the old failure must not survive the archive.
+func TestArchiveDropsAnEarlierFailure(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := draftedInBackground(t, svc, ghc, bgRunner(""))
+	rec.Err = "submit review 4321 on haacked/docket#7: HTTP 502"
+	ghc.reviews = []review.GHReview{{ID: pendingID, User: review.GHUser{Login: "haacked"}, State: "COMMENTED"}}
+
+	done, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil {
+		t.Fatalf("AfterExit: %v", err)
+	}
+
+	if done.State != review.StateArchived {
+		t.Fatalf("state = %q, want the session's own submission archived", done.State)
+	}
+	if done.Err != "" {
+		t.Errorf("Err = %q, want the earlier failure dropped from the archived row", done.Err)
 	}
 }
 

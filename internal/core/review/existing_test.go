@@ -23,6 +23,48 @@ func TestAReviewedRecordIsNotSubmittable(t *testing.T) {
 	}
 }
 
+// Leaving a drafted row's background session while it works puts the row back
+// to reviewing with its draft's id, and the draft is still pending on GitHub. A
+// review that has not posted a draft yet carries no id. An interactive session
+// that is reviewing is open in a terminal, and a submit would archive the row
+// and delete the clone under it.
+func TestAReviewingRecordIsSubmittableOnceItHoldsADraft(t *testing.T) {
+	tests := []struct {
+		name string
+		rec  review.Record
+		want bool
+	}{
+		{
+			name: "background session holding a draft",
+			rec:  review.Record{State: review.StateReviewing, Mode: review.ModeBackground, ReviewID: 9},
+			want: true,
+		},
+		{
+			name: "background session with no draft yet",
+			rec:  review.Record{State: review.StateReviewing, Mode: review.ModeBackground},
+			want: false,
+		},
+		{
+			name: "interactive session holding a draft",
+			rec:  review.Record{State: review.StateReviewing, Mode: review.ModeInteractive, ReviewID: 9},
+			want: false,
+		},
+		{
+			name: "abandoned background session holding a draft",
+			rec:  review.Record{State: review.StateAbandoned, Mode: review.ModeBackground, ReviewID: 9},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.rec.Submittable(); got != tt.want {
+				t.Errorf("Submittable() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTheReviewedEventFoldsToTheReviewedState(t *testing.T) {
 	events := []review.Event{
 		event("rec-1", foldBase, "prepared", map[string]any{"title": "Fix the retry loop"}),

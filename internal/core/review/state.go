@@ -49,8 +49,21 @@ const (
 // Submittable reports whether the record has a pending review to submit. The
 // dashboard gates the submit key on it and the service refuses anything else, so
 // the rule is stated once.
+//
+// A reviewing background record can hold one too. A user who opens a drafted
+// row's session and leaves it working puts the row back to reviewing, and the
+// draft stays pending on GitHub until the session replaces it. A review that has
+// not posted a draft carries no id, and Rereview clears the id before it starts.
+//
+// A reviewing interactive record is refused. Its session is open in a terminal,
+// possibly in another docket instance, and the archive that follows a submit
+// would delete the clone under it. Archive leaves only a background session
+// running.
 func (r Record) Submittable() bool {
-	return r.State == StateDrafted && r.ReviewID != 0
+	if r.ReviewID == 0 {
+		return false
+	}
+	return r.State == StateDrafted || (r.State == StateReviewing && r.Mode == ModeBackground)
 }
 
 // WebURL is the page that shows the record's review on GitHub. The Files

@@ -21,13 +21,20 @@ type BGStatus struct {
 	// reads GitHub for what it left behind. Each engine names its own states, so
 	// its ParseStatus decides this rather than a word compared here.
 	Done bool
-	// Idle reports that the agent holds the session and the session is not
-	// working. It has ended its turn, with or without a question, or it has not
-	// started its first one.
+	// Idle reports that the agent's listing says it holds the session and the
+	// session is not working. The listing can say so just as a turn starts.
+	// Waiting, not Idle, is the test for an ended turn.
 	Idle bool
 	// Progress is what the agent says the session is doing, beyond the listing.
 	// The poll fills it in for a session that is still running.
 	Progress review.Progress
+}
+
+// Waiting reports that the session has ended its turn. The listing can say idle
+// while the progress file already says a turn is active. claude does this at
+// launch, before the first turn. Waiting therefore requires both.
+func (s BGStatus) Waiting() bool {
+	return s.Idle && !s.Progress.Active
 }
 
 // BackgroundEngine is an engine that can run a review with nobody at the

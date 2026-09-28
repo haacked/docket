@@ -148,6 +148,7 @@ func TestAFailedReadOfTheSummaryLeavesTheScreenUsable(t *testing.T) {
 func TestOpeningSubmitNeedsAPendingReview(t *testing.T) {
 	rec := draftedRecord()
 	rec.State = review.StateReviewing
+	rec.ReviewID = 0
 
 	next, _ := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
 	a := next.(App)
@@ -155,8 +156,94 @@ func TestOpeningSubmitNeedsAPendingReview(t *testing.T) {
 	if a.screen == msg.Submit {
 		t.Error("the submit screen opened on a record with nothing to submit")
 	}
-	if !strings.Contains(a.status, "drafted") {
-		t.Errorf("status = %q, want it to say only a drafted review can be submitted", a.status)
+	if !strings.Contains(a.status, "no pending review") {
+		t.Errorf("status = %q, want it to say there is no pending review to submit", a.status)
+	}
+}
+
+// Leaving a drafted row's background session while it works puts the row back to
+// reviewing, and its draft is still pending on GitHub.
+func TestOpeningSubmitOnAReviewingRowWithADraft(t *testing.T) {
+	rec := draftedRecord()
+	rec.Mode = review.ModeBackground
+	rec.State = review.StateReviewing
+
+	next, _ := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
+
+	if a := next.(App); a.screen != msg.Submit {
+		t.Errorf("screen = %v, want the submit screen for the pending review; status = %q", a.screen, a.status)
+	}
+}
+
+// An interactive reviewing row with a draft id is refused too, because its
+// session runs in a terminal and a submit would archive the row out from under
+// it. The row does have a pending review, so the message must not say it has
+// none.
+func TestOpeningSubmitOnAnInteractiveReviewingRowNamesTheOpenSession(t *testing.T) {
+	rec := draftedRecord()
+	rec.Mode = review.ModeInteractive
+	rec.State = review.StateReviewing
+
+	next, _ := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
+	a := next.(App)
+
+	if a.screen == msg.Submit {
+		t.Error("the submit screen opened on a row whose interactive session is open")
+	}
+	if strings.Contains(a.status, "no pending review") {
+		t.Errorf("status = %q, want it to say the pending review exists but its session is open", a.status)
+	}
+	if !strings.Contains(a.status, "session") {
+		t.Errorf("status = %q, want it to mention the open session", a.status)
+	}
+}
+
+// The poll keeps reading GitHub while the submit screen is open. When the
+// session posts a newer draft, ctrl+s must not send the user's event to a draft
+// they have not read.
+func TestSubmittingADraftThePollReplacedIsRefused(t *testing.T) {
+	rec := draftedRecord()
+	rec.Mode = review.ModeBackground
+	rec.State = review.StateReviewing
+	next, _ := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
+	a := next.(App)
+	replaced := rec
+	replaced.State = review.StateDrafted
+	replaced.ReviewID = rec.ReviewID + 1
+	a.dash = a.dash.SetRecords([]review.Record{replaced})
+
+	next, cmd := a.Update(msg.SubmitReview{ID: rec.ID, ReviewID: rec.ReviewID, Event: review.EventComment})
+	a = next.(App)
+
+	if cmd != nil {
+		t.Error("the submit went ahead for a draft the user has not read")
+	}
+	if a.dash.Busy[rec.ID] != "" {
+		t.Errorf("busy = %q, want the row left alone", a.dash.Busy[rec.ID])
+	}
+	if a.screen != msg.Dashboard {
+		t.Errorf("screen = %v, want the dashboard, where s opens the newer draft", a.screen)
+	}
+	if !strings.Contains(a.status, "changed") {
+		t.Errorf("status = %q, want it to say the pending review changed", a.status)
+	}
+}
+
+// An archived row keeps the id of the review it submitted. It has no session
+// and no pending review. The refusal must therefore not send the user to close
+// one.
+func TestOpeningSubmitOnAnArchivedRowSaysThereIsNothingPending(t *testing.T) {
+	rec := draftedRecord()
+	rec.State = review.StateArchived
+
+	next, _ := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
+	a := next.(App)
+
+	if a.screen == msg.Submit {
+		t.Error("the submit screen opened on an archived row")
+	}
+	if strings.Contains(a.status, "session") {
+		t.Errorf("status = %q, want it to say there is no pending review rather than name a session", a.status)
 	}
 }
 
@@ -184,7 +271,7 @@ func TestADryRunSubmitsNothingAndOpensNoEditor(t *testing.T) {
 	}{
 		{
 			name:    "submit",
-			message: msg.SubmitReview{ID: rec.ID, Event: review.EventComment},
+			message: msg.SubmitReview{ID: rec.ID, ReviewID: rec.ReviewID, Event: review.EventComment},
 			want:    []string{"Would submit", "haacked/docket#7", review.EventComment},
 		},
 		{

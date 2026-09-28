@@ -711,6 +711,20 @@ func RefuseClosed(ref pr.Ref, state review.PRState) error {
 	return nil
 }
 
+// RefuseSubmit refuses a record that has no pending review docket may submit.
+// Submittable accepts a reviewing background record. A reviewing record that
+// still holds a draft id here therefore has its session open in a terminal.
+func RefuseSubmit(rec review.Record) error {
+	switch {
+	case rec.Submittable():
+		return nil
+	case rec.State == review.StateReviewing && rec.ReviewID != 0:
+		return fmt.Errorf("%s has a pending review, but its interactive session may still be using the clone; close it first", rec.Ref)
+	default:
+		return fmt.Errorf("%s is %s with no pending review to submit", rec.Ref, rec.State)
+	}
+}
+
 // openPR reads the pull request and refuses it when it merged or closed.
 func (s *Service) openPR(ctx context.Context, ref pr.Ref) (gh.PRInfo, error) {
 	info, err := s.GH.PR(ctx, ref)
@@ -755,8 +769,8 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 	if !slices.Contains(review.SubmitEvents, event) {
 		return rec, fmt.Errorf("%q is not a review event; use one of %s", event, strings.Join(review.SubmitEvents, ", "))
 	}
-	if !rec.Submittable() {
-		return rec, fmt.Errorf("%s is %s with no pending review to submit", rec.Ref, rec.State)
+	if err := RefuseSubmit(rec); err != nil {
+		return rec, err
 	}
 
 	// The screen offers the same list, but it reads a login the service owns and
@@ -768,6 +782,20 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 	}
 	if !slices.Contains(review.SubmitEventsFor(rec.Author, me), event) {
 		return rec, fmt.Errorf("GitHub refuses an approval of your own pull request; submit %s as %s instead", rec.Ref, review.EventComment)
+	}
+
+	// A reviewing row's background session may have replaced or submitted this
+	// draft since the poll last read GitHub. GitHub refuses a submit of either id
+	// and leaves the review as it was. This check replaces GitHub's 404 or 422
+	// with a refusal that says what docket does next.
+	if rec.State == review.StateReviewing {
+		reviews, err := s.GH.Reviews(ctx, rec.Ref)
+		if err != nil {
+			return s.recordErr(rec, err)
+		}
+		if review.PendingReviewID(reviews, me) != rec.ReviewID {
+			return rec, fmt.Errorf("%s's review %d is no longer pending; docket reads GitHub for %s again once its session ends its turn", rec.Ref, rec.ReviewID, rec.Ref)
+		}
 	}
 
 	// The user is retrying, so drop what the last attempt recorded. Keeping it
@@ -990,13 +1018,20 @@ func shellSpec(line, arg string) exec.CommandSpec {
 // background review, and the agent goes on holding the session it ran until
 // something stops it. Left alone, one session would be held per review.
 //
-// A stop that fails leaves the clone alone. Archiving is something docket does
-// on its own once a review goes in, so there is nobody to weigh an agent that
-// may still be writing against a directory removed under it. The record closes
-// carrying the reason, and the directory stays for the user to deal with.
-// Abandon makes the opposite call, because there the user asked.
+// A session that is still working is left running. The user can open a drafted
+// row's session and give it more work, and submitting the draft must not cut
+// that work off. A session docket cannot read is left the same way.
+//
+// A stop that fails leaves the clone alone, and so does a session left running.
+// Archiving is something docket does on its own once a review goes in, so there
+// is nobody to weigh an agent that may still be writing against a directory
+// removed under it. The record closes, and the directory stays for the user to
+// deal with. Abandon makes the opposite call, because there the user asked.
 func (s *Service) Archive(ctx context.Context, rec review.Record) (review.Record, error) {
-	rec, stopped := s.stopBackground(ctx, rec)
+	// The status line prints an archived row's Err, and the row is hidden once it
+	// archives. A failure from an earlier step would read as this archive's.
+	rec.Err = ""
+	rec, stopped := s.stopFinished(ctx, rec)
 	if !stopped {
 		at := s.now()
 		rec.ArchivedAt = &at

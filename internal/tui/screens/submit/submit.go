@@ -127,9 +127,10 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			m.Busy = "submitting"
 			m.Body.Blur()
 			return m, msg.Send(msg.SubmitReview{
-				ID:    m.Record.ID,
-				Event: m.Event,
-				Body:  strings.TrimSpace(body),
+				ID:       m.Record.ID,
+				ReviewID: m.Record.ReviewID,
+				Event:    m.Event,
+				Body:     strings.TrimSpace(body),
 			})
 		}
 	}
