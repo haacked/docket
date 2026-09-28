@@ -103,9 +103,11 @@ The review must be submittable in list_reviews. Leave body out to keep the summa
 type server struct {
 	svc    *session.Service
 	engine string
-	// mu runs one tool call at a time. A poll reads the index and writes what it
-	// decided in separate steps. The poll's write would overwrite a start or a
-	// submit that landed between the two.
+	// mu runs one tool call at a time within this process. A poll reads the
+	// index and writes what it decided in separate steps. The poll's write would
+	// overwrite a start or a submit that landed between the two. mu does not
+	// coordinate with the TUI or with another docket mcp process, although they
+	// share the index. PollBackground documents that window.
 	mu sync.Mutex
 }
 
