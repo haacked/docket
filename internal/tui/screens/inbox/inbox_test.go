@@ -286,27 +286,6 @@ func TestAOneLinePaneStillShowsOnlyTheCursorsRow(t *testing.T) {
 	}
 }
 
-func TestWindow(t *testing.T) {
-	lines := []string{"0", "1", "2", "3", "4", "5"}
-	tests := []struct {
-		name           string
-		cursor, height int
-		want           []string
-	}{
-		{"everything fits", 2, 10, lines},
-		{"cursor at the top", 0, 3, []string{"0", "1", "2"}},
-		{"cursor in the middle", 3, 3, []string{"2", "3", "4"}},
-		{"cursor at the bottom", 5, 3, []string{"3", "4", "5"}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := window(lines, tc.cursor, tc.height); !slices.Equal(got, tc.want) {
-				t.Errorf("window = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestARowWithNoReviewPostedSaysSo(t *testing.T) {
 	m := New(Styles{}, "claude").SetSections([]requests.Section{
 		{Rows: []requests.Row{row(1, review.StateUnreviewed)}},
@@ -456,4 +435,18 @@ func TestAOneLinePaneWithNoSectionsDrawsWithoutPanicking(t *testing.T) {
 	m.Height = 1
 
 	_ = m.View()
+}
+
+func TestTOpensTheTeamsScreen(t *testing.T) {
+	_, cmd := newModel().Update(key("t"))
+
+	if got, want := sent(t, cmd), (msg.OpenTeams{}); got != want {
+		t.Errorf("t sent %#v, want %#v", got, want)
+	}
+}
+
+func TestTSendsNothingDuringTheChoice(t *testing.T) {
+	if _, cmd := asking().Update(key("t")); cmd != nil {
+		t.Errorf("t sent %#v during the choice", cmd())
+	}
 }

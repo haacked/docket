@@ -167,6 +167,8 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, msg.Send(msg.RefreshRequests{})
+	case "t":
+		return m, msg.Send(msg.OpenTeams{})
 	case "esc":
 		return m, msg.Send(msg.Goto{Screen: msg.Dashboard})
 	case "?":
@@ -233,9 +235,7 @@ func (m Model) View() string {
 		lines = append(lines, m.Styles.Group.Render(fmt.Sprintf("%s (%d)", title, len(s.Rows))))
 		switch {
 		case s.Err != nil:
-			// gh's error carries its stderr, which can run over several lines.
-			reason := strings.Join(strings.Fields(s.Err.Error()), " ")
-			lines = append(lines, m.Styles.Dim.Render(format.Truncate("  "+reason, format.Width(m.Width))))
+			lines = append(lines, m.Styles.Dim.Render(format.Truncate("  "+format.OneLine(s.Err), format.Width(m.Width))))
 		case len(s.Rows) == 0:
 			lines = append(lines, m.Styles.Dim.Render("  none"))
 		}
@@ -249,15 +249,7 @@ func (m Model) View() string {
 		lines = append(lines, "")
 	}
 
-	// A pane one line tall has no room for the header. The cursor's row is the
-	// line the user acts on.
-	if m.Height == 1 && len(lines) > 0 {
-		return lines[cursorLine]
-	}
-	if m.Height > 1 {
-		lines = window(lines, cursorLine, m.Height-1)
-	}
-	return m.header() + "\n" + strings.TrimRight(strings.Join(lines, "\n"), "\n")
+	return format.Pane(m.header(), lines, cursorLine, m.Height)
 }
 
 // header says what a mark does, because space and enter do something different
@@ -298,15 +290,6 @@ func (m Model) existingView() string {
 	}
 	lines = append(lines, "esc  back to the list")
 	return strings.Join(lines, "\n")
-}
-
-// window keeps at most height lines, placed so the cursor's line is visible.
-func window(lines []string, cursor, height int) []string {
-	if len(lines) <= height {
-		return lines
-	}
-	start := min(max(0, cursor-height/2), len(lines)-height)
-	return lines[start : start+height]
 }
 
 func (m Model) row(row requests.Row, selected bool) string {

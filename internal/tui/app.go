@@ -36,6 +36,7 @@ import (
 	"github.com/haacked/docket/internal/tui/screens/newreview"
 	"github.com/haacked/docket/internal/tui/screens/notes"
 	"github.com/haacked/docket/internal/tui/screens/submit"
+	"github.com/haacked/docket/internal/tui/screens/teams"
 )
 
 // App is the root model.
@@ -52,6 +53,7 @@ type App struct {
 	notes  notes.Model
 	help   help.Model
 	reqs   inbox.Model
+	teams  teams.Model
 	// fetched is the last search for review requests. regroup reads it whenever
 	// the records change.
 	fetched *requests.Fetched
@@ -117,6 +119,12 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 			Selected: s.Selected,
 			Dim:      s.Dim,
 		}, batchEngine(cfg.DefaultEngine)),
+		teams: teams.New(teams.Styles{
+			Row:      s.Row,
+			Selected: s.Selected,
+			Dim:      s.Dim,
+			Err:      s.Err,
+		}),
 	}
 	if initialInput != "" {
 		app.screen = msg.NewReview
@@ -180,6 +188,8 @@ func (a App) busy() bool {
 		return a.newrev.Busy != ""
 	case msg.Requests:
 		return a.reqs.Loading
+	case msg.Teams:
+		return a.teams.Loading || a.teams.Busy
 	}
 	return false
 }
@@ -243,6 +253,37 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.fetched = &message.fetched
 		a.reqs.Loading = false
 		return a.regroup(), nil
+
+	case msg.OpenTeams:
+		// A search reads the configured teams while it runs. A batch check's
+		// answer switches to the requests screen.
+		if a.reqs.Loading || a.reqs.Busy {
+			a.status = "A search or a batch check is still running. Press t again once it finishes"
+			return a, nil
+		}
+		a.screen = msg.Teams
+		a.err = nil
+		a.teams = a.teams.Load(a.liveConfig().Teams)
+		return a, a.loadTeams()
+
+	case teamsLoadedMsg:
+		a.teams = a.teams.SetMemberships(message.teams, message.err)
+		return a, nil
+
+	case msg.SaveTeams:
+		if a.dryRun {
+			a.teams.Busy = false
+			a.screen = msg.Requests
+			a.status = "Would save teams to config.toml: " + teamList(message.Teams)
+			return a, nil
+		}
+		return a, a.saveTeams(message.Teams)
+
+	case teamsSavedMsg:
+		a.teams.Busy = false
+		a.screen = msg.Requests
+		a.status = "Saved teams to config.toml: " + teamList(message.teams)
+		return a.update(msg.RefreshRequests{})
 
 	case msg.PrefillReview:
 		a.screen = msg.NewReview
@@ -663,6 +704,8 @@ func (a App) routeToScreen(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.help, cmd = a.help.Update(message)
 	case msg.Requests:
 		a.reqs, cmd = a.reqs.Update(message)
+	case msg.Teams:
+		a.teams, cmd = a.teams.Update(message)
 	default:
 		a.dash, cmd = a.dash.Update(message)
 	}
@@ -697,7 +740,7 @@ func exited(launch launchMsg, err error) tea.Msg {
 // margins.
 func (a App) View() tea.View {
 	spin := a.spinner()
-	a.dash.Spinner, a.newrev.Spinner, a.sub.Spinner, a.reqs.Spinner = spin, spin, spin, spin
+	a.dash.Spinner, a.newrev.Spinner, a.sub.Spinner, a.reqs.Spinner, a.teams.Spinner = spin, spin, spin, spin, spin
 
 	var body string
 	switch a.screen {
@@ -711,6 +754,8 @@ func (a App) View() tea.View {
 		body = a.help.View()
 	case msg.Requests:
 		body = a.reqs.View()
+	case msg.Teams:
+		body = a.teams.View()
 	default:
 		body = a.dash.View()
 	}
@@ -790,6 +835,7 @@ func (a App) fit() App {
 
 	a.dash.Width = width
 	a.reqs.Width, a.reqs.Height = width, height
+	a.teams.Width, a.teams.Height = width, height
 	a.newrev = a.newrev.SetWidth(width)
 	a.sub = a.sub.SetWidth(width)
 	a.help = a.help.SetSize(width, height)
@@ -840,14 +886,19 @@ func (a App) refuseBusy(rec review.Record) (App, bool) {
 }
 
 // login is the user a pull request's author is compared against. The service
-// caches it the first time anything reads GitHub. The copy taken at startup is
-// empty until then, so the service's is the one that is current. The root is
-// built without a service in tests, which is what the fallback is for.
+// caches it the first time anything reads GitHub.
 func (a App) login() string {
+	return a.liveConfig().GitHubUser
+}
+
+// liveConfig is the service's Config. The service caches the login and saves
+// the teams into its own copy. The copy taken at startup sees neither. The
+// fallback serves tests, which build the root without a service.
+func (a App) liveConfig() config.Config {
 	if a.svc != nil {
-		return a.svc.Cfg.GitHubUser
+		return a.svc.Cfg
 	}
-	return a.cfg.GitHubUser
+	return a.cfg
 }
 
 func (a App) record(id string) (review.Record, bool) {
@@ -874,14 +925,16 @@ func (a App) report(line string, after bool) App {
 // clears all of them. The requests screen's Busy is the exception. The batch
 // check always answers with a batchCheckedMsg, which clears it. An unrelated
 // failure that cleared it would let a second enter check and start the same
-// batch. resetBusy also leaves the line of work in flight, which only that
-// work's own failure clears.
+// batch. The teams screen's Loading is another, because the read of the user's
+// teams answers with teamsLoadedMsg even when it fails. resetBusy also leaves
+// the line of work in flight, which only that work's own failure clears.
 func (a App) resetBusy(err error) App {
 	a.err = err
 	a.dash.Busy = map[string]string{}
 	a.newrev = a.newrev.ClearBusy()
 	a.sub = a.sub.ClearBusy()
 	a.reqs.Loading = false
+	a.teams.Busy = false
 	return a
 }
 
@@ -1036,6 +1089,33 @@ func (a App) searchRequests() tea.Cmd {
 		}
 		return requestsLoadedMsg{fetched: fetched}
 	}
+}
+
+// loadTeams only reads GitHub, so a dry run may run it.
+func (a App) loadTeams() tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		teams, err := svc.Teams(context.Background())
+		return teamsLoadedMsg{teams: teams, err: err}
+	}
+}
+
+func (a App) saveTeams(teams []string) tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		if err := svc.SaveTeams(teams); err != nil {
+			return errMsg{err: err}
+		}
+		return teamsSavedMsg{teams: teams}
+	}
+}
+
+// teamList names the teams for the status line.
+func teamList(teams []string) string {
+	if len(teams) == 0 {
+		return "none"
+	}
+	return strings.Join(teams, ", ")
 }
 
 // checkBatch reads what review each pull request already has, before the batch

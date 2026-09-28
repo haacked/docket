@@ -109,7 +109,7 @@ func TestOpenHelpSizesThePaneFromTheCurrentWindow(t *testing.T) {
 
 func TestHelpScreenListsEveryScreensKeys(t *testing.T) {
 	a := app()
-	a.help = a.help.SetSize(100, 50)
+	a.help = a.help.SetSize(100, 100)
 
 	view := a.help.View()
 	for _, want := range []string{"Dashboard", "New review", "Submit", "Notes", "ctrl+c", "quit"} {

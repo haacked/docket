@@ -15,6 +15,7 @@ const (
 	Notes
 	Help
 	Requests
+	Teams
 )
 
 // Goto switches screens.
@@ -93,6 +94,14 @@ type AnswerBatch struct{ Intent string }
 
 // PrefillReview opens the new review screen with the pull request filled in.
 type PrefillReview struct{ URL string }
+
+// OpenTeams asks for the list of the user's teams, read afresh from GitHub, with
+// the ones the requests screen searches for checked.
+type OpenTeams struct{}
+
+// SaveTeams makes Teams the teams whose review requests the requests screen
+// lists. Each is an "org/team" slug.
+type SaveTeams struct{ Teams []string }
 
 // OpenHelp asks for the full key reference over whatever screen sent it.
 type OpenHelp struct{}

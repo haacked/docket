@@ -55,6 +55,12 @@ func TestEveryScreenKeepsAMarginAroundEverything(t *testing.T) {
 			a.screen = msg.Requests
 			return a
 		},
+		"teams": func(a App) App {
+			a.teams = a.teams.Load([]string{"PostHog/" + strings.Repeat("a-long-team-name-", 6)}).
+				SetMemberships(nil, errors.New(strings.Repeat("gh api user/teams: HTTP 403 ", 4)))
+			a.screen = msg.Teams
+			return a
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := lines(sizedTo(open(liveApp(rec)), width, 30))

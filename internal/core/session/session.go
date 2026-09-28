@@ -159,6 +159,24 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 	return f, nil
 }
 
+// Teams lists the teams the user belongs to on GitHub, as "org/team" slugs. It
+// writes nothing, so a dry run may call it.
+func (s *Service) Teams(ctx context.Context) ([]string, error) {
+	return s.GH.Teams(ctx)
+}
+
+// SaveTeams makes teams the ones whose review requests Requests searches for,
+// and writes them to config.toml. It writes the teams key alone, because the
+// rest of the service's Config holds defaults and expanded paths that the file
+// may leave out.
+func (s *Service) SaveTeams(teams []string) error {
+	if err := config.SaveKey(s.Paths.Config, "teams", teams); err != nil {
+		return fmt.Errorf("save teams: %w", err)
+	}
+	s.Cfg.Teams = teams
+	return nil
+}
+
 // peekLogin is Login without caching the answer, for the paths a dry run takes.
 func (s *Service) peekLogin(ctx context.Context) (string, error) {
 	if s.Cfg.GitHubUser != "" {

@@ -1,6 +1,7 @@
 package format
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -158,5 +159,26 @@ func TestWrapCutsAnItemWiderThanTheWidth(t *testing.T) {
 	}
 	if Columns(lines[1]) > 12 || !strings.HasSuffix(lines[1], "…") {
 		t.Errorf("the wide item is %q, want it cut to 12 columns", lines[1])
+	}
+}
+
+func TestWindowKeepsTheCursorsLineInView(t *testing.T) {
+	lines := []string{"0", "1", "2", "3", "4", "5"}
+	tests := []struct {
+		name           string
+		cursor, height int
+		want           []string
+	}{
+		{"everything fits", 2, 10, lines},
+		{"cursor at the top", 0, 3, []string{"0", "1", "2"}},
+		{"cursor in the middle", 3, 3, []string{"2", "3", "4"}},
+		{"cursor at the bottom", 5, 3, []string{"3", "4", "5"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := window(lines, tc.cursor, tc.height); !slices.Equal(got, tc.want) {
+				t.Errorf("window = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
