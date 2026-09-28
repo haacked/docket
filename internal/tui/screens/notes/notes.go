@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"fmt"
 	"os"
-	"strings"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -66,13 +65,19 @@ func (m Model) SetNotes(rec review.Record, markdown string, missing bool) Model 
 	return m.render()
 }
 
-// SetSize refits the pane. A width change re-renders, because glamour wraps to a
-// fixed width and moving the viewport alone would leave the old line breaks
-// behind. A height change does not: the same lines are simply clipped
-// differently, and re-wrapping a long review costs tens of milliseconds.
+// SetSize refits the screen to width by height, of which the viewport gets what
+// the header leaves. A width change re-renders, because glamour wraps to a fixed
+// width and moving the viewport alone would leave the old line breaks behind. A
+// height change does not: the same lines are simply clipped differently, and
+// re-wrapping a long review costs tens of milliseconds.
 func (m Model) SetSize(width, height int) Model {
 	m.Viewport.SetWidth(width)
-	m.Viewport.SetHeight(max(height, 1))
+	m.Viewport.SetHeight(max(height-lipgloss.Height(m.header()), 1))
+	// A taller pane keeps its scroll offset, which can leave blank rows past the
+	// last line.
+	if m.Viewport.PastBottom() {
+		m.Viewport.GotoBottom()
+	}
 	if width == m.renderedAt {
 		return m
 	}
@@ -144,9 +149,13 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s %s  %s\n", m.Styles.Label.Render("Notes"), m.Record.Ref, cmp.Or(m.Record.Title, m.Record.URL))
-	b.WriteString(m.Styles.Dim.Render(m.Record.NotesPath) + "\n\n")
-	b.WriteString(m.Viewport.View())
-	return b.String()
+	return m.header() + "\n" + m.Viewport.View()
+}
+
+// header is what View draws above the viewport: the record, the notes path, and a
+// blank line. SetSize measures it to size the viewport.
+func (m Model) header() string {
+	return fmt.Sprintf("%s %s  %s\n%s\n",
+		m.Styles.Label.Render("Notes"), m.Record.Ref, cmp.Or(m.Record.Title, m.Record.URL),
+		m.Styles.Dim.Render(m.Record.NotesPath))
 }

@@ -64,11 +64,34 @@ func (e Existing) CanAsk() bool {
 	return e.RecordID == "" && !e.NotesAt.IsZero()
 }
 
+// fieldWidth is the widest the pull request field grows, in columns of text.
+const fieldWidth = 60
+
+// SetWidth fits the pull request field to width, the room the page gives the
+// screen, up to fieldWidth. The prompt and one column for the cursor sit beside
+// the text. A width of zero is unknown and leaves the field as it is.
+func (m Model) SetWidth(width int) Model {
+	if width <= 0 {
+		return m
+	}
+	beside := format.Columns(m.Input.Prompt) + 1
+	if w := max(min(fieldWidth, width-beside), 1); w != m.Input.Width() {
+		pos := m.Input.Position()
+		m.Input.SetWidth(w)
+		// The field picks a new slice of the value only when the cursor moves
+		// outside the slice it shows. Moving to the end and back makes it pick
+		// the slice for the new width wherever the cursor was.
+		m.Input.CursorEnd()
+		m.Input.SetCursor(pos)
+	}
+	return m
+}
+
 func New(styles Styles, engines, backgroundEngines []string, engine, defaultRepo string, background bool) Model {
 	input := textinput.New()
 	input.Placeholder = "https://github.com/org/repo/pull/123"
 	input.Prompt = "› "
-	input.SetWidth(60)
+	input.SetWidth(fieldWidth)
 	// A virtual cursor renders inside the field's own string, so the root does
 	// not have to work out where on the screen the real cursor belongs.
 	input.SetVirtualCursor(true)

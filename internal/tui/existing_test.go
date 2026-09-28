@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
@@ -55,7 +57,7 @@ func TestAnExistingReviewSwitchesTheScreenToItsChoice(t *testing.T) {
 	if got.newrev.Busy != "" {
 		t.Errorf("busy = %q, want the screen ready for a choice", got.newrev.Busy)
 	}
-	if view := got.View().Content; strings.Contains(view, "enter start") || strings.Contains(view, "tab engine") {
+	if view := ansi.Strip(got.View().Content); strings.Contains(view, "enter start") || strings.Contains(view, "tab engine") {
 		t.Errorf("the footer offers keys the choice ignores:\n%s", view)
 	}
 }

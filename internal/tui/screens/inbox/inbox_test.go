@@ -267,6 +267,25 @@ func TestTheViewKeepsTheCursorLineVisibleInAShortPane(t *testing.T) {
 	}
 }
 
+// A tall status can leave the list a single line. The list still follows the
+// cursor there rather than drawing every row past the bottom of the terminal.
+func TestAOneLinePaneStillShowsOnlyTheCursorsRow(t *testing.T) {
+	m, _ := newModel().Update(key("G"))
+	m.Height = 1
+
+	view := m.View()
+
+	if !strings.Contains(view, "> [ ] o/r#3") {
+		t.Errorf("the selected row scrolled out of view:\n%s", view)
+	}
+	if strings.Contains(view, "o/r#1") {
+		t.Errorf("a pane one line tall drew other rows:\n%s", view)
+	}
+	if strings.Contains(view, "\n") {
+		t.Errorf("a pane one line tall drew more than one line:\n%s", view)
+	}
+}
+
 func TestWindow(t *testing.T) {
 	lines := []string{"0", "1", "2", "3", "4", "5"}
 	tests := []struct {
@@ -429,4 +448,12 @@ func TestARefreshCarriesTheSpinnersFrameInTheHeader(t *testing.T) {
 	if !strings.Contains(header, "⠙ refreshing…") {
 		t.Errorf("header = %q, want the frame before the refresh", header)
 	}
+}
+
+// A one-line pane with no search results yet has no row to show.
+func TestAOneLinePaneWithNoSectionsDrawsWithoutPanicking(t *testing.T) {
+	m := New(Styles{}, "claude")
+	m.Height = 1
+
+	_ = m.View()
 }

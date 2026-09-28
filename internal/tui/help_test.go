@@ -85,7 +85,7 @@ func TestHelpSwallowsKeysTheDashboardWouldOtherwiseAct(t *testing.T) {
 	}
 }
 
-// OpenHelp sizes the pane from the window size the app already knows about.
+// Help opens sized to the window size the app already knows about.
 // A normal terminal then shows a scrollable pane, not the earlier no-viewport
 // screen, which silently cut off everything past whatever the terminal's
 // rows happened to fit.

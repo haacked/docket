@@ -112,3 +112,51 @@ func TestTheSpinnerPutsItsFrameBeforeWhatIsRunning(t *testing.T) {
 		}
 	}
 }
+
+// A key and its label stay on one line, so the footer breaks only between hints.
+func TestWrapBreaksOnlyBetweenItems(t *testing.T) {
+	items := []string{"n new", "i requests", "enter resume", "R refresh all", "a show archived", "q quit"}
+
+	got := Wrap(items, " · ", 30)
+
+	for _, line := range strings.Split(got, "\n") {
+		if Columns(line) > 30 {
+			t.Errorf("line %q is %d columns, want at most 30", line, Columns(line))
+		}
+		if strings.HasPrefix(line, " · ") || strings.HasSuffix(line, " · ") {
+			t.Errorf("line %q starts or ends with the separator", line)
+		}
+	}
+	for _, item := range items {
+		if !strings.Contains(got, item) {
+			t.Errorf("%q was split or dropped:\n%s", item, got)
+		}
+	}
+}
+
+func TestWrapKeepsEverythingOnOneLineWhenItFits(t *testing.T) {
+	if got := Wrap([]string{"a b", "c d"}, " · ", 40); got != "a b · c d" {
+		t.Errorf("Wrap = %q, want one line", got)
+	}
+}
+
+// Styled items carry escape sequences, which take no columns on the terminal.
+func TestWrapMeasuresStyledItemsByTheirColumns(t *testing.T) {
+	styled := "\x1b[35mn\x1b[m new"
+	if got := Wrap([]string{styled, styled}, " · ", 13); strings.Contains(got, "\n") {
+		t.Errorf("two 5-column items and a 3-column separator fit in 13 columns, got:\n%q", got)
+	}
+}
+
+// An item too wide for any line goes on a line of its own, cut to fit.
+func TestWrapCutsAnItemWiderThanTheWidth(t *testing.T) {
+	got := Wrap([]string{"q quit", "enter start the marked pull requests", "? help"}, " · ", 12)
+
+	lines := strings.Split(got, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want the wide item alone on the middle one:\n%s", len(lines), got)
+	}
+	if Columns(lines[1]) > 12 || !strings.HasSuffix(lines[1], "…") {
+		t.Errorf("the wide item is %q, want it cut to 12 columns", lines[1])
+	}
+}

@@ -23,7 +23,7 @@ func TestDashboardListsAskAndRereviewOnce(t *testing.T) {
 			if matches[0].Short == "" {
 				t.Errorf("%q has no footer label", key)
 			}
-			if !slices.ContainsFunc(Footer(Dashboard), func(part string) bool { return strings.HasPrefix(part, key+" ") }) {
+			if !slices.ContainsFunc(Footer(Dashboard), func(e Entry) bool { return e.Key == key }) {
 				t.Errorf("the dashboard footer leaves out %q", key)
 			}
 		})

@@ -37,12 +37,24 @@ type Model struct {
 	draft string
 }
 
+// fieldWidth is the widest the body field grows, in columns.
+const fieldWidth = 60
+
 func New(styles Styles) Model {
 	body := textarea.New()
 	body.Placeholder = "Optional summary to post with the review"
-	body.SetWidth(60)
+	body.SetWidth(fieldWidth)
 	body.SetHeight(4)
 	return Model{Styles: styles, Body: body}
+}
+
+// SetWidth fits the body field to width, the room the page gives the screen, up
+// to fieldWidth. A width of zero is unknown and leaves the field as it is.
+func (m Model) SetWidth(width int) Model {
+	if width > 0 {
+		m.Body.SetWidth(min(fieldWidth, width))
+	}
+	return m
 }
 
 // For aims the screen at a record. The events come from the caller because

@@ -17,6 +17,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/engine"
@@ -148,8 +149,10 @@ func (a App) Init() tea.Cmd {
 	)
 }
 
-// Update runs the handler for the message, then starts the spinner if the
-// handler left something busy on screen.
+// Update runs the handler for the message, starts the spinner if the handler left
+// something busy on screen, and refits the screens to what the handler left on
+// the page. The refit comes last because a spinning status line is two columns
+// wider. The extra width can wrap it to one more line.
 func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := a.update(message)
 	next := model.(App)
@@ -157,7 +160,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		next.spinning = true
 		cmd = tea.Batch(cmd, next.spin.Tick)
 	}
-	return next, cmd
+	return next.fit(), cmd
 }
 
 // busy reports whether the screen on display shows work in flight. A marker on a
@@ -196,18 +199,6 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		a.width, a.height = message.Width, message.Height
-		a.dash.Width = message.Width
-		// Only the pane on screen is refitted. Re-wrapping a long review costs
-		// tens of milliseconds. A drag-resize sends a stream of these messages,
-		// and one follows every return from a child process. Opening the notes
-		// refits them, so a resize the pane sat out is not missed.
-		if a.screen == msg.Notes {
-			a.notes = a.notes.SetSize(message.Width, a.notesHeight())
-		}
-		if a.screen == msg.Help {
-			a.help = a.help.SetSize(message.Width, a.paneHeight())
-		}
-		a.reqs.Width, a.reqs.Height = message.Width, a.paneHeight()
 		return a, nil
 
 	case tea.BackgroundColorMsg:
@@ -225,17 +216,11 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if a.screen == msg.NewReview {
 			a.newrev = a.newrev.Reset()
 		}
-		// OpenNotes already refits on its own way in. Help closing back to Notes
-		// goes through here instead. A resize while help was on top would
-		// otherwise leave the pane wrapped to a stale width until the next one.
-		if a.screen == msg.Notes {
-			a.notes = a.notes.SetSize(a.width, a.notesHeight())
-		}
 		a.err = nil
 		return a, nil
 
 	case msg.OpenHelp:
-		a.help = a.help.For(a.screen).SetSize(a.width, a.paneHeight())
+		a.help = a.help.For(a.screen)
 		a.screen = msg.Help
 		a.err = nil
 		return a, nil
@@ -480,9 +465,9 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		// Aim the pane at the record before the file is read, so the header is
-		// this record's rather than the last one's until the load lands. Both
-		// calls are cheap here: there is no markdown to wrap yet.
-		a.notes = a.notes.SetNotes(rec, "", false).SetSize(a.width, a.notesHeight())
+		// this record's rather than the last one's until the load lands. The call
+		// is cheap, because there is no markdown to wrap yet.
+		a.notes = a.notes.SetNotes(rec, "", false)
 		a.screen = msg.Notes
 		a.err = nil
 		return a, a.loadNotes(rec)
@@ -708,44 +693,30 @@ func exited(launch launchMsg, err error) tea.Msg {
 	}
 }
 
+// View draws the title, the screen, the status, and the footer inside the page's
+// margins.
 func (a App) View() tea.View {
-	var b strings.Builder
-	b.WriteString(a.styles.Title.Render("docket"))
-	if a.dryRun {
-		b.WriteString(" " + a.styles.Dim.Render("dry run"))
-	}
-	b.WriteString("\n\n")
-
-	frame := ""
-	if a.spinning {
-		frame = a.spin.View()
-	}
-	spin := format.Spinner{Frame: frame, Style: a.styles.Busy}
+	spin := a.spinner()
 	a.dash.Spinner, a.newrev.Spinner, a.sub.Spinner, a.reqs.Spinner = spin, spin, spin, spin
 
+	var body string
 	switch a.screen {
 	case msg.NewReview:
-		b.WriteString(a.newrev.View())
+		body = a.newrev.View()
 	case msg.Submit:
-		b.WriteString(a.sub.View())
+		body = a.sub.View()
 	case msg.Notes:
-		b.WriteString(a.notes.View() + "\n")
+		body = a.notes.View()
 	case msg.Help:
-		b.WriteString(a.help.View() + "\n")
+		body = a.help.View()
 	case msg.Requests:
-		b.WriteString(a.reqs.View() + "\n")
+		body = a.reqs.View()
 	default:
-		b.WriteString(a.dash.View() + "\n")
+		body = a.dash.View()
 	}
 
-	if a.err != nil {
-		b.WriteString("\n" + a.styles.Err.Render(wrap(a.err.Error(), a.width)) + "\n")
-	} else if line := a.statusLine(spin); line != "" {
-		b.WriteString("\n" + wrap(line, a.width) + "\n")
-	}
-	b.WriteString("\n" + a.styles.Footer.Render(helpFor(a.screen, a.dash.ShowArchived, a.choosing())))
-
-	view := tea.NewView(b.String())
+	above, below := a.chrome()
+	view := tea.NewView(inMargins(above+"\n"+strings.TrimSuffix(body, "\n")+"\n"+below, a.inner()))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeNone
 	view.WindowTitle = "docket"
@@ -764,12 +735,76 @@ func (a App) choosing() bool {
 	return false
 }
 
+// chrome is what View draws above and below the screen. fit measures the same
+// text, so the room it gives the screen is the room View leaves.
+func (a App) chrome() (above, below string) {
+	above = a.styles.Title.Render("docket")
+	if a.dryRun {
+		above += " " + a.styles.Dim.Render("dry run")
+	}
+	status := a.statusLine()
+	if a.err != nil {
+		status = a.styles.Err.Render(wrap(a.err.Error(), a.inner()))
+	} else if status != "" {
+		status = wrap(status, a.inner())
+	}
+	below = a.footer()
+	if status != "" {
+		below = status + "\n\n" + below
+	}
+	return above + "\n", "\n" + below
+}
+
+// spinner is what every busy marker draws with. Its frame is empty while the
+// root's spinner is stopped.
+func (a App) spinner() format.Spinner {
+	frame := ""
+	if a.spinning {
+		frame = a.spin.View()
+	}
+	return format.Spinner{Frame: frame, Style: a.styles.Busy}
+}
+
+// inner is the page's width inside its margins. It is zero until the first
+// WindowSizeMsg arrives. The screens read zero as an unknown width.
+func (a App) inner() int {
+	if a.width <= 0 {
+		return 0
+	}
+	return max(a.width-2*marginX, 1)
+}
+
+// fit sizes the screens to the room the page leaves them. It measures the
+// chrome's height on every call, because the footer and the status wrap to as
+// many lines as the width needs.
+//
+// fit refits the notes only while they are on screen. Re-wrapping long notes
+// costs tens of milliseconds. A drag-resize sends a stream of WindowSizeMsg
+// values.
+func (a App) fit() App {
+	width, height := a.inner(), 0
+	if a.height > 0 {
+		above, below := a.chrome()
+		height = max(a.height-2*marginY-lipgloss.Height(above)-lipgloss.Height(below), 1)
+	}
+
+	a.dash.Width = width
+	a.reqs.Width, a.reqs.Height = width, height
+	a.newrev = a.newrev.SetWidth(width)
+	a.sub = a.sub.SetWidth(width)
+	a.help = a.help.SetSize(width, height)
+	if a.screen == msg.Notes {
+		a.notes = a.notes.SetSize(width, height)
+	}
+	return a
+}
+
 // statusLine is the work in flight followed by the last status. A status written
 // while the work runs, such as a refusal, stays on screen beside it.
-func (a App) statusLine(spin format.Spinner) string {
+func (a App) statusLine() string {
 	var parts []string
 	if a.working != "" {
-		parts = append(parts, spin.Render(a.working))
+		parts = append(parts, a.spinner().Render(a.working))
 	}
 	if a.status != "" {
 		parts = append(parts, a.styles.Dim.Render(a.status))
@@ -988,30 +1023,6 @@ func (a App) browse(rec review.Record) tea.Cmd {
 		}
 		return nil
 	}
-}
-
-// notesChrome is what View draws around the notes pane: the title, the blank
-// line under it, the record header, the notes path, the blank line under that,
-// the blank line below the pane, the status line and its blank line, and the
-// footer. Changing View's layout means changing this count.
-const notesChrome = 9
-
-// notesHeight is the room the notes pane gets. It is never cached, because a
-// WindowSizeMsg follows every return from a child process.
-func (a App) notesHeight() int {
-	return max(a.height-notesChrome, 1)
-}
-
-// paneChrome is what View draws around the help pane and the requests list:
-// the title, the blank line under it, the blank line below the pane, the status
-// line and its blank line, and the footer. Changing View's layout means changing
-// this count.
-const paneChrome = 6
-
-// paneHeight is the room the help pane and the requests list get. Either is
-// long enough to overflow an ordinary terminal on its own.
-func (a App) paneHeight() int {
-	return max(a.height-paneChrome, 1)
 }
 
 // searchRequests only reads GitHub, so a dry run may run it. The screen keeps the

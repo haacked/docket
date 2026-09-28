@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
@@ -332,5 +333,18 @@ func TestTheBusyLineCarriesTheSpinnersFrame(t *testing.T) {
 
 	if view := m.View(); !strings.Contains(view, "⠙ submitting…") {
 		t.Errorf("the view does not put the frame before what is running:\n%s", view)
+	}
+}
+
+// The body field narrows to fit a terminal narrower than its usual width, rather
+// than running past the page.
+func TestTheBodyFieldFitsTheWidthItIsGiven(t *testing.T) {
+	for _, width := range []int{40, 200} {
+		view := ansi.Strip(model().SetWidth(width).Body.View())
+		for _, line := range strings.Split(view, "\n") {
+			if w := ansi.StringWidth(line); w > min(width, 60) {
+				t.Errorf("at width %d the field's line %q is %d columns", width, line, w)
+			}
+		}
 	}
 }
