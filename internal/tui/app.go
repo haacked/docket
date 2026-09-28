@@ -256,9 +256,10 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msg.OpenTeams:
 		// A search reads the configured teams while it runs. A batch check's
-		// answer switches to the requests screen.
-		if a.reqs.Loading || a.reqs.Busy {
-			a.status = "A search or a batch check is still running. Press t again once it finishes"
+		// answer switches to the requests screen. A teams read or save that
+		// is still running would answer the screen this opens.
+		if a.reqs.Loading || a.reqs.Busy || a.teams.Loading || a.teams.Busy {
+			a.status = "A search, a batch check, or a read or save of your teams is still running. Press t again once it finishes"
 			return a, nil
 		}
 		a.screen = msg.Teams
@@ -281,7 +282,10 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case teamsSavedMsg:
 		a.teams.Busy = false
-		a.screen = msg.Requests
+		// esc lets the user leave while the save runs.
+		if a.screen == msg.Teams {
+			a.screen = msg.Requests
+		}
 		a.status = "Saved teams to config.toml: " + teamList(message.teams)
 		return a.update(msg.RefreshRequests{})
 

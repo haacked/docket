@@ -407,3 +407,56 @@ func TestTheTeamsScreenWaitsForABatchCheck(t *testing.T) {
 		t.Errorf("the view does not say why t did nothing:\n%s", a.View().Content)
 	}
 }
+
+// esc leaves the teams screen while GitHub is still answering. The answer
+// would land on a screen opened after it.
+func TestTheTeamsScreenWaitsForItsOwnRead(t *testing.T) {
+	a := app()
+	a.screen = msg.Requests
+	a.teams = a.teams.Load([]string{flags})
+
+	next, cmd := a.Update(msg.OpenTeams{})
+	a = next.(App)
+
+	if a.screen != msg.Requests {
+		t.Errorf("screen = %v, want the requests screen", a.screen)
+	}
+	if drain(cmd) != nil {
+		t.Error("the refusal read GitHub again")
+	}
+	if !strings.Contains(a.View().Content, "Press t again once it finishes") {
+		t.Errorf("the view does not say why t did nothing:\n%s", a.View().Content)
+	}
+}
+
+func TestTheTeamsScreenWaitsForItsOwnSave(t *testing.T) {
+	a := app()
+	a.screen = msg.Requests
+	a.teams.Busy = true
+
+	next, _ := a.Update(msg.OpenTeams{})
+	a = next.(App)
+
+	if a.screen != msg.Requests {
+		t.Errorf("screen = %v, want the requests screen", a.screen)
+	}
+	if !strings.Contains(a.View().Content, "Press t again once it finishes") {
+		t.Errorf("the view does not say why t did nothing:\n%s", a.View().Content)
+	}
+}
+
+// esc lets the user leave the teams screen while the save runs.
+func TestASaveThatFinishesElsewhereLeavesTheScreenAlone(t *testing.T) {
+	a := onTeams(app())
+	a.screen = msg.Dashboard
+
+	next, _ := a.Update(teamsSavedMsg{teams: []string{flags}})
+	a = next.(App)
+
+	if a.screen != msg.Dashboard {
+		t.Errorf("screen = %v, want the dashboard the user went to", a.screen)
+	}
+	if a.teams.Busy {
+		t.Error("the teams screen is still busy after the save")
+	}
+}

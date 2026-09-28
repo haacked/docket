@@ -49,6 +49,11 @@ type Service struct {
 	// stretch instead of on every tick.
 	idleMu   sync.Mutex
 	idleSeen map[string]time.Time
+
+	// cfgMu serializes the writes to config.toml and to Cfg. The poll can cache
+	// the login while the teams screen saves the teams. Without it, the rename
+	// that lands last drops the other write's key.
+	cfgMu sync.Mutex
 }
 
 // Plan is what Prepare worked out, for the UI to show before launching.
@@ -122,6 +127,8 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
 	s.Cfg.GitHubUser = login
 	if err := config.Save(s.Paths.Config, s.Cfg); err != nil {
 		return login, fmt.Errorf("cache github login: %w", err)
@@ -170,6 +177,8 @@ func (s *Service) Teams(ctx context.Context) ([]string, error) {
 // rest of the service's Config holds defaults and expanded paths that the file
 // may leave out.
 func (s *Service) SaveTeams(teams []string) error {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
 	if err := config.SaveKey(s.Paths.Config, "teams", teams); err != nil {
 		return fmt.Errorf("save teams: %w", err)
 	}

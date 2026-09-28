@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/haacked/docket/internal/core/config"
@@ -134,5 +135,39 @@ func TestSaveTeamsReportsAConfigItCannotWrite(t *testing.T) {
 
 	if err := svc.SaveTeams([]string{"PostHog/team-feature-flags"}); err == nil {
 		t.Error("SaveTeams succeeded with no directory to write config.toml in")
+	}
+}
+
+// The poll can cache the login while the teams screen saves the teams. Each
+// write must keep the other's key.
+func TestSaveTeamsAndLoginKeepEachOthersKeys(t *testing.T) {
+	for i := range 20 {
+		svc, paths := newService(t, &fakeGH{login: "haacked"}, newFakeGit())
+		svc.Cfg.GitHubUser = ""
+		want := []string{"PostHog/team-feature-flags"}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if _, err := svc.Login(context.Background()); err != nil {
+				t.Errorf("Login: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if err := svc.SaveTeams(want); err != nil {
+				t.Errorf("SaveTeams: %v", err)
+			}
+		}()
+		wg.Wait()
+
+		cfg, err := config.Load(paths.Config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.GitHubUser != "haacked" || !slices.Equal(cfg.Teams, want) {
+			t.Fatalf("run %d: github_user = %q, teams = %v, want both saved", i, cfg.GitHubUser, cfg.Teams)
+		}
 	}
 }
