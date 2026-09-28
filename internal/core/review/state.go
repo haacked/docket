@@ -166,6 +166,18 @@ func (s State) Label() string {
 	}
 }
 
+// OpenRecord is the open record for ref. The index holds one record per review.
+// A pull request that was reviewed, archived, and asked for again has two
+// records, and only the open one counts.
+func OpenRecord(records []Record, ref pr.Ref) (Record, bool) {
+	for _, rec := range records {
+		if rec.State.Open() && rec.Ref.Equal(ref) {
+			return rec, true
+		}
+	}
+	return Record{}, false
+}
+
 // Open reports whether the record still wants the user's attention.
 func (s State) Open() bool {
 	switch s {

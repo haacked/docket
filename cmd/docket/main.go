@@ -3,6 +3,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -15,6 +17,7 @@ import (
 	"github.com/haacked/docket/internal/core/git"
 	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/session"
+	"github.com/haacked/docket/internal/mcp"
 	"github.com/haacked/docket/internal/tui"
 )
 
@@ -31,6 +34,7 @@ type flags struct {
 	dryRun bool
 	help   bool
 	input  string
+	mcp    bool
 }
 
 func run() error {
@@ -64,6 +68,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// The server has no terminal to give a session. Every review it starts
+	// therefore runs in the background.
+	if opts.mcp {
+		if eng, err = engine.For(engine.BackgroundName(eng.Name())); err != nil {
+			return err
+		}
+	}
 	if err := requireTools(eng.Binary()); err != nil {
 		return err
 	}
@@ -89,6 +100,9 @@ func run() error {
 		Runner: runner,
 	}
 
+	if opts.mcp {
+		return mcp.Serve(context.Background(), svc, eng.Name())
+	}
 	return tui.Run(tui.New(svc, cfg, opts.input, opts.dryRun))
 }
 
@@ -131,6 +145,18 @@ func parseFlags(args []string) (flags, error) {
 		}
 	}
 
+	if len(rest) > 0 && rest[0] == "mcp" {
+		opts.mcp = true
+		rest = rest[1:]
+		if len(rest) > 0 {
+			return opts, errors.New("mcp takes no pull request")
+		}
+		// Every tool writes to the index or starts a session. A server that
+		// reported either without doing it would mislead the agent.
+		if opts.dryRun {
+			return opts, errors.New("mcp does not run in a dry run")
+		}
+	}
 	if len(rest) > 1 {
 		return opts, fmt.Errorf("expected at most one pull request, got %d", len(rest))
 	}
@@ -156,10 +182,15 @@ const usage = `docket runs a pull request review in a claude or codex session.
 
 Usage:
   docket [flags] [pull request]
+  docket [flags] mcp
 
 The pull request can be a URL, org/repo#123, or a bare number when default_repo
 is set in config.toml. Given one, docket opens the new review screen with the
 field filled.
+
+docket mcp serves the Model Context Protocol on stdin and stdout, so an agent
+session can start background reviews, list them, and submit them. Register it
+with: claude mcp add docket -- docket mcp
 
 Flags:
   --engine <name>   agent to run the review in (default from config.toml)

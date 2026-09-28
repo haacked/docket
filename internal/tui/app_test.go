@@ -426,15 +426,6 @@ func TestAPollThatWorksClearsTheLastFailure(t *testing.T) {
 	}
 }
 
-func TestBatchEnginePrefersTheDefaultAndFallsBackToOneWithABackgroundMode(t *testing.T) {
-	if got := batchEngine("claude"); got != "claude" {
-		t.Errorf("batchEngine(claude) = %q", got)
-	}
-	if got := batchEngine("codex"); got != "claude" {
-		t.Errorf("batchEngine(codex) = %q, want claude: codex has no background mode", got)
-	}
-}
-
 func TestTheConfiguredDefaultRunDecidesWhereTheNewReviewScreenStarts(t *testing.T) {
 	background := New(nil, config.Config{DefaultEngine: "claude", DefaultRun: config.RunBackground}, "", false)
 	if !background.newrev.Background {

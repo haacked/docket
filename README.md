@@ -2,7 +2,7 @@
 
 docket is a terminal app for reviewing pull requests. You paste a PR URL, and docket starts a `claude` or `codex` session that runs the [review-code](https://github.com/haacked/review-code) skill against that PR. Once you submit the review, docket archives the record and deletes whatever it created.
 
-**Status: early.** Starting a review in `claude` or `codex`, running it in the background under `claude`, reading what the session left on GitHub, submitting the review, reading and asking about the notes, reviewing a pull request again, starting reviews from the pull requests that request yours, and cleaning up after a submitted review are in place.
+**Status: early.** Starting a review in `claude` or `codex`, running it in the background under `claude`, reading what the session left on GitHub, submitting the review, reading and asking about the notes, reviewing a pull request again, starting reviews from the pull requests that request yours, cleaning up after a submitted review, and starting, following, and submitting reviews from an agent session are in place.
 
 ## The workflow it replaces
 
@@ -55,6 +55,26 @@ Review notes stay where `review-code` writes them, at `~/.agents/skills/review-c
 
 docket drives the `claude` and `codex` CLIs under your existing subscription. It never uses an Anthropic or OpenAI API key.
 
+## From an agent session
+
+`docket mcp` serves docket over the [Model Context Protocol](https://modelcontextprotocol.io) on stdin and stdout, so an agent session can start reviews, see where they stand, and submit them. Register it with `claude` from the directory whose sessions should have it:
+
+```
+claude mcp add docket -- docket mcp
+```
+
+`claude mcp add -s user docket -- docket mcp` registers it for every directory instead. That includes the background sessions docket starts, so a review session then has `submit_review` too. The server's instructions tell an agent to confirm the event and the body with you before it submits.
+
+It offers three tools:
+
+- `start_review` starts a background review of a pull request, as the new review screen does. When the pull request already has review notes or a review of yours, it starts nothing and says what it found. The agent then asks you whether to append or overwrite and calls it again with your answer.
+- `list_reviews` lists your open reviews and what each running session is doing. It asks `claude` about the running sessions and reads GitHub for the ones that finished, as the dashboard does every fifteen seconds, so a review whose draft is posted reads `drafted` even when no dashboard is open.
+- `submit_review` submits a drafted review as `COMMENT`, `APPROVE`, or `REQUEST_CHANGES` and archives it. Leave the body out to keep the summary review-code posted with the draft.
+
+Every review the server starts runs in the background under `claude`, because the server has no terminal to give a session, and `codex` has no background mode. When `claude` refuses a directory nobody has trusted, `start_review` names the directory. Run `claude` there once, accept the prompt, and have the agent call `start_review` again. Or press `enter` on the row in docket, which asks the same question and then starts the review. A pull request that docket clones gets a directory of its own, so this can happen once for each of them. A session that stops to ask you something shows as waiting in `list_reviews`, and `enter` on its row in docket opens it so you can answer.
+
+The server and the dashboard share the index, so a review started from an agent session shows up in a running docket, and the other way round. Abandoning a review, asking about the notes, and reviewing again are only on the dashboard. `start_review` refuses a pull request docket already has open, and when that review failed to set up or cannot start, the refusal tells the agent to have you abandon it with `x`. `--dry-run` does not apply to `docket mcp`.
+
 ## Requirements
 
 - Go 1.26, to build
@@ -71,6 +91,7 @@ At startup docket checks that `git`, `gh`, and the engine's binary are on your P
 docket                                        open the dashboard
 docket https://github.com/org/repo/pull/123   open the dashboard with that PR ready to review
 docket --dry-run o/r#123                      say what would happen, start and record nothing
+docket mcp                                    serve reviews to an agent session over MCP
 ```
 
 A pull request can be a URL, `org/repo#123`, or a bare number once `default_repo` is set in `config.toml`.

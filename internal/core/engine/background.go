@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"slices"
+
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/review"
 )
@@ -101,4 +103,18 @@ func BackgroundNames() []string {
 		}
 	}
 	return out
+}
+
+// BackgroundName is the engine a background review runs under: preferred when
+// it has a background mode, and otherwise the first engine that does. It is
+// empty when no engine has one.
+func BackgroundName(preferred string) string {
+	names := BackgroundNames()
+	if slices.Contains(names, preferred) {
+		return preferred
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
 }

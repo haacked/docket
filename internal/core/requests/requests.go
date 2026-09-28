@@ -68,7 +68,7 @@ func Group(f Fetched, records []review.Record) []Section {
 			}
 			seen = append(seen, p.Ref)
 			row := Row{PR: p}
-			if rec, ok := openRecord(p.Ref, records); ok {
+			if rec, ok := review.OpenRecord(records, p.Ref); ok {
 				row.State, row.RecordID = rec.State, rec.ID
 			}
 			s.Rows = append(s.Rows, row)
@@ -84,16 +84,4 @@ func Group(f Fetched, records []review.Record) []Section {
 		sections = append(sections, s)
 	}
 	return sections
-}
-
-// openRecord is the open record for ref. The index holds one record per review.
-// A pull request that was reviewed, archived, and asked for again has two
-// records, and only the open one counts.
-func openRecord(ref pr.Ref, records []review.Record) (review.Record, bool) {
-	for _, rec := range records {
-		if rec.State.Open() && rec.Ref.Equal(ref) {
-			return rec, true
-		}
-	}
-	return review.Record{}, false
 }

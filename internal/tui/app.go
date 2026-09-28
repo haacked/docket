@@ -118,7 +118,7 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 			Row:      s.Row,
 			Selected: s.Selected,
 			Dim:      s.Dim,
-		}, batchEngine(cfg.DefaultEngine)),
+		}, engine.BackgroundName(cfg.DefaultEngine)),
 		teams: teams.New(teams.Styles{
 			Row:      s.Row,
 			Selected: s.Selected,
@@ -1334,20 +1334,6 @@ func (a App) regroup() App {
 	return a
 }
 
-// batchEngine is the engine a batch of background reviews runs under: the
-// default engine when it has a background mode, and otherwise the first engine
-// that does. It is empty when no engine has one.
-func batchEngine(defaultEngine string) string {
-	names := engine.BackgroundNames()
-	if slices.Contains(names, defaultEngine) {
-		return defaultEngine
-	}
-	if len(names) == 0 {
-		return ""
-	}
-	return names[0]
-}
-
 // startReview routes the new review screen's request. A request with no intent
 // is the first one, which asks what review is already there before preparing.
 func (a App) startReview(start msg.StartReview) (tea.Model, tea.Cmd) {
@@ -1632,10 +1618,12 @@ func (a App) pollBackground() tea.Cmd {
 }
 
 // progressFor hands each session's progress to the dashboard, which holds no
-// engine to ask. A session that is Waiting is waiting for the user. claude's own
-// reading of the conversation can call a session blocked while its reviewer
-// agents still run. progressFor therefore drops the need of a working session.
-// A working session with no detail shows the agent's state.
+// engine to ask. A session that is Waiting is waiting for the user. The
+// dashboard draws a row as waiting when the row names a need, so a waiting
+// session always names one. claude's own reading of the conversation can call a
+// session blocked while its reviewer agents still run. progressFor therefore
+// drops the need of a working session. A working session with no detail shows
+// the agent's state.
 func progressFor(statuses map[string]engine.BGStatus) map[string]review.Progress {
 	progress := make(map[string]review.Progress, len(statuses))
 	for id, status := range statuses {

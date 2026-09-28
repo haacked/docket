@@ -381,9 +381,7 @@ func (s *Service) refuseOpen(ref pr.Ref) error {
 	if err != nil {
 		return err
 	}
-	if slices.ContainsFunc(records, func(r review.Record) bool {
-		return r.Ref.Equal(ref) && r.State.Open()
-	}) {
+	if _, ok := review.OpenRecord(records, ref); ok {
 		return fmt.Errorf("%s is already open; abandon it first", ref)
 	}
 	return nil
