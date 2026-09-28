@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/pr"
@@ -283,9 +284,9 @@ func TestAResizeReachesTheNotesPane(t *testing.T) {
 	}
 }
 
-// OpenNotes refits the pane on its own way in. Help closing back to notes
-// goes through Goto instead. A resize while help was on top would otherwise
-// leave the pane wrapped to a stale width until the next one.
+// A resize that lands while help is on top of the notes reaches the notes pane
+// once help closes back to it, rather than leaving it wrapped to a stale width
+// until the next resize.
 func TestGotoBackToNotesRefitsAResizeThatLandedWhileHelpWasOnTop(t *testing.T) {
 	rec := draftedRecord()
 	a := liveApp(rec)
@@ -301,8 +302,8 @@ func TestGotoBackToNotesRefitsAResizeThatLandedWhileHelpWasOnTop(t *testing.T) {
 	next, _ = next.(App).Update(msg.Goto{Screen: msg.Notes})
 	a = next.(App)
 
-	if got := a.notes.Viewport.Width(); got != 60 {
-		t.Errorf("notes viewport width = %d, want 60 after the resize that landed while help was open", got)
+	if got, want := a.notes.Viewport.Width(), 60-2*marginX; got != want {
+		t.Errorf("notes viewport width = %d, want %d after the resize that landed while help was open", got, want)
 	}
 }
 
@@ -372,13 +373,13 @@ func TestAFailedSubmissionLeavesTheSubmitScreenUsable(t *testing.T) {
 // just its presence.
 func TestTheDashboardFooterPlacesTheArchivedToggleBeforeHelpAndQuit(t *testing.T) {
 	want :=
-		"n new  ·  i requests  ·  enter resume  ·  s submit  ·  v notes  ·  o github  ·  c ask  ·  u re-review  ·  x abandon  ·  r refresh  ·  R refresh all  ·  a show archived  ·  ? help  ·  q quit"
-	if got := helpFor(msg.Dashboard, false, false); got != want {
+		"n new · i requests · enter resume · s submit · v notes · o github · c ask · u re-review · x abandon · r refresh · R refresh all · a show archived · ? help · q quit"
+	if got := footerOn(msg.Dashboard, false); got != want {
 		t.Errorf("footer = %q, want %q", got, want)
 	}
 
 	want = strings.Replace(want, "a show archived", "a hide archived", 1)
-	if got := helpFor(msg.Dashboard, true, false); got != want {
+	if got := footerOn(msg.Dashboard, true); got != want {
 		t.Errorf("footer with archived shown = %q, want %q", got, want)
 	}
 }
@@ -390,7 +391,7 @@ func TestTheFooterNamesTheKeysOfEachScreen(t *testing.T) {
 		msg.Notes:     {"e edit", "o github", "esc/q back", "? help"},
 		msg.Help:      {"esc/? back", "ctrl+c quit"},
 	} {
-		got := helpFor(screen, false, false)
+		got := footerOn(screen, false)
 
 		for _, part := range want {
 			if !strings.Contains(got, part) {
@@ -398,4 +399,13 @@ func TestTheFooterNamesTheKeysOfEachScreen(t *testing.T) {
 			}
 		}
 	}
+}
+
+// footerOn is the footer a screen draws on a terminal wide enough to hold it on
+// one line, without the styles that set keys apart from their labels.
+func footerOn(screen msg.Screen, showArchived bool) string {
+	a := app()
+	a.screen, a.width = screen, 400
+	a.dash.ShowArchived = showArchived
+	return ansi.Strip(a.footer())
 }

@@ -249,11 +249,15 @@ func (m Model) View() string {
 		lines = append(lines, "")
 	}
 
-	header := m.header()
+	// A pane one line tall has no room for the header. The cursor's row is the
+	// line the user acts on.
+	if m.Height == 1 && len(lines) > 0 {
+		return lines[cursorLine]
+	}
 	if m.Height > 1 {
 		lines = window(lines, cursorLine, m.Height-1)
 	}
-	return header + "\n" + strings.TrimRight(strings.Join(lines, "\n"), "\n")
+	return m.header() + "\n" + strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
 
 // header says what a mark does, because space and enter do something different

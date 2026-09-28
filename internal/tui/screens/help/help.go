@@ -82,18 +82,21 @@ var (
 		{Key: "?", Short: "help", Long: "toggle this help"},
 		{Key: "esc", Short: "back", Long: "back to the dashboard"},
 	}
-	everywhere = []Entry{{Key: "ctrl+c", Long: "quit"}}
+	everywhere = []Entry{Quit}
 )
 
-// Footer returns each entry's footer label, in table order, skipping any
+// Quit is ctrl+c, which every screen honors. helpFor ends each screen's footer
+// with it, and the help screen lists it under Everywhere.
+var Quit = Entry{Key: "ctrl+c", Short: "quit", Long: "quit"}
+
+// Footer returns the entries the footer shows, in table order, skipping any
 // entry whose Short is empty.
-func Footer(entries []Entry) []string {
-	var out []string
+func Footer(entries []Entry) []Entry {
+	var out []Entry
 	for _, e := range entries {
-		if e.Short == "" {
-			continue
+		if e.Short != "" {
+			out = append(out, e)
 		}
-		out = append(out, e.Key+" "+e.Short)
 	}
 	return out
 }
@@ -130,6 +133,11 @@ func (m Model) For(from msg.Screen) Model {
 func (m Model) SetSize(width, height int) Model {
 	m.Viewport.SetWidth(width)
 	m.Viewport.SetHeight(max(height, 1))
+	// A taller pane keeps its scroll offset, which can leave blank rows past the
+	// last line.
+	if m.Viewport.PastBottom() {
+		m.Viewport.GotoBottom()
+	}
 	return m
 }
 

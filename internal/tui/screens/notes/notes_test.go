@@ -167,3 +167,20 @@ func TestOpeningAnotherRecordStartsAtTheTop(t *testing.T) {
 		t.Error("the pane kept the last record's scroll position")
 	}
 }
+
+// A pane that grows while scrolled to the bottom stays on the last line rather
+// than showing blank rows past the end.
+func TestGrowingThePaneDoesNotScrollPastTheEnd(t *testing.T) {
+	var b strings.Builder
+	for i := range 200 {
+		fmt.Fprintf(&b, "Finding %d in the review.\n\n", i)
+	}
+	m := New(Styles{}).SetSize(80, 10).SetNotes(record(), b.String(), false)
+	m.Viewport.GotoBottom()
+
+	m = m.SetSize(80, 20)
+
+	if m.Viewport.PastBottom() {
+		t.Error("the pane is scrolled past its last line after it grew")
+	}
+}

@@ -11,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/haacked/docket/internal/core/clone"
 	"github.com/haacked/docket/internal/core/config"
@@ -281,7 +282,7 @@ func TestABatchAsksBeforeStartingAPullRequestThatAlreadyHasAReview(t *testing.T)
 	if a.reqs.Others != 1 {
 		t.Errorf("others = %d, want #8", a.reqs.Others)
 	}
-	if view := a.View().Content; strings.Contains(view, "space mark") || strings.Contains(view, "enter start") {
+	if view := ansi.Strip(a.View().Content); strings.Contains(view, "space mark") || strings.Contains(view, "enter start") {
 		t.Errorf("the footer offers the list's keys while the question is on screen:\n%s", view)
 	}
 	if records := recordsByNumber(t, svc); len(records) != 0 {

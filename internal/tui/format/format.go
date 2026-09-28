@@ -42,6 +42,33 @@ func Row(head, title, meta string, width int) (string, string) {
 	return left, Truncate(meta, width-Columns(left)-1)
 }
 
+// Wrap lays items out left to right over as many lines as width needs, with sep
+// between neighbors on a line. It breaks only between items, so a key never lands
+// on a different line from its label. An item wider than width goes on a line of
+// its own, cut to fit.
+func Wrap(items []string, sep string, width int) string {
+	var lines []string
+	line := ""
+	for _, item := range items {
+		if Columns(item) > width {
+			item = Truncate(item, width)
+		}
+		switch {
+		case line == "":
+			line = item
+		case Columns(line)+Columns(sep)+Columns(item) <= width:
+			line += sep + item
+		default:
+			lines = append(lines, line)
+			line = item
+		}
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // Ago says how long ago something happened, to the coarsest unit that fits.
 func Ago(d time.Duration) string {
 	if d < time.Minute {

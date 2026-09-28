@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/haacked/docket/internal/tui/msg"
 )
@@ -279,5 +280,41 @@ func TestTheBusyLineCarriesTheSpinnersFrame(t *testing.T) {
 
 	if view := m.View(); !strings.Contains(view, "⠙ resolving…") {
 		t.Errorf("the view does not put the frame before what is running:\n%s", view)
+	}
+}
+
+// The pull request field narrows to fit a terminal narrower than its usual width,
+// rather than running past the page.
+func TestThePullRequestFieldFitsTheWidthItIsGiven(t *testing.T) {
+	for _, width := range []int{30, 200} {
+		m := typed(model().SetWidth(width), strings.Repeat("x", 100))
+		if w := ansi.StringWidth(ansi.Strip(m.Input.View())); w > min(width, 63) {
+			t.Errorf("at width %d the field is %d columns", width, w)
+		}
+	}
+}
+
+// A terminal that narrows after the field is filled shows the end of the value,
+// where the cursor is, rather than the slice it showed at the old width.
+func TestNarrowingKeepsTheCursorInView(t *testing.T) {
+	m := typed(model(), "https://github.com/PostHog/posthog-js/pull/123456").SetWidth(30)
+
+	view := ansi.Strip(m.Input.View())
+	if !strings.Contains(view, "123456") || ansi.StringWidth(view) > 30 {
+		t.Errorf("the field shows %q, want at most 30 columns ending at the cursor", view)
+	}
+}
+
+// A cursor in the middle of the value stays in view too. The field keeps the
+// slice it showed at the old width while the cursor sits inside that slice.
+func TestNarrowingKeepsAMidValueCursorInView(t *testing.T) {
+	const url = "https://github.com/PostHog/posthog-plugin-server-extensions/pull/123456789012"
+	m := typed(model(), url)
+	m.Input.SetCursor(50)
+	m = m.SetWidth(30)
+
+	view := ansi.Strip(m.Input.View())
+	if !strings.Contains(view, url[50:60]) || ansi.StringWidth(view) > 30 {
+		t.Errorf("the field shows %q, want at most 30 columns with the cursor at %q", view, url[50:60])
 	}
 }

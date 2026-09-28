@@ -2,7 +2,7 @@
 
 docket is a terminal app for reviewing pull requests. You paste a PR URL, and docket starts a `claude` or `codex` session that runs the [review-code](https://github.com/haacked/review-code) skill against that PR. Once you submit the review, docket archives the record and deletes whatever it created.
 
-**Status: early.** Starting a review in `claude` or `codex`, reading what the session left on GitHub, submitting the review, reading the notes in the app, and cleaning up after a submitted review are in place. So is running a review in the background, under `claude` only.
+**Status: early.** Starting a review in `claude` or `codex`, running it in the background under `claude`, reading what the session left on GitHub, submitting the review, reading and asking about the notes, reviewing a pull request again, starting reviews from the pull requests that request yours, and cleaning up after a submitted review are in place.
 
 ## The workflow it replaces
 
@@ -10,7 +10,7 @@ A review takes five manual steps today. Create a worktree for a scratch reposito
 
 ## How it works
 
-docket keeps one record per PR and moves it through `preparing`, `reviewing`, `drafted`, `submitted`, and `archived`. Every transition comes from something docket observed, either a GitHub API response or a child process exit, never from what you said you would do. After the session exits, docket asks GitHub whether you have a review on that PR and whether it is still pending, then sets the state from the answer.
+docket keeps one record per PR and moves it through `preparing`, `reviewing`, `drafted`, `submitted`, and `archived`. A review session that ends without posting anything new leaves the record `unreviewed`, which the dashboard lists under "No review posted". A background review that `claude` refused to start is `not_started`, listed under "Did not start". A record you added only to ask about an existing review starts as `drafted` when your draft is still pending and as `reviewed` when it is not. Apart from `x`, which stops the session, cleans up, and leaves the record `abandoned`, every transition comes from something docket observed, either a GitHub API response or a child process exit, never from what you said you would do. After the session exits, docket asks GitHub whether you have a review on that PR and whether it is still pending, then sets the state from the answer.
 
 docket also asks whether the PR is still open. A record whose PR merged or closed is archived, unless you still have a pending review there: GitHub accepts a review on a merged PR, so that row stays, tagged `merged`, for you to submit or abandon. docket refuses to start a review on a PR that has already merged or closed. A record is only archived when docket reads GitHub for it: after a session exits, when a background review finishes, or when you press `r` or `R`.
 

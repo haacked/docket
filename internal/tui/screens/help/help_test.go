@@ -70,8 +70,8 @@ func TestFooterSkipsEntriesWithNoShortLabel(t *testing.T) {
 		{Key: "q", Short: "quit"},
 	})
 
-	want := []string{"n new", "q quit"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+	want := []string{"n", "q"}
+	if len(got) != len(want) || got[0].Key != want[0] || got[1].Key != want[1] {
 		t.Errorf("Footer() = %v, want %v", got, want)
 	}
 }
@@ -114,11 +114,23 @@ func TestFooterKeysAllAppearInTheFullHelpScreen(t *testing.T) {
 	view := sized().View()
 
 	for _, table := range [][]Entry{Dashboard, NewReview, Submit, Notes} {
-		for _, part := range Footer(table) {
-			key := strings.SplitN(part, " ", 2)[0]
-			if !strings.Contains(view, key) {
-				t.Errorf("footer key %q from %q is not shown anywhere in the full help screen", key, part)
+		for _, e := range Footer(table) {
+			if !strings.Contains(view, e.Key) {
+				t.Errorf("footer key %q (%q) is not shown anywhere in the full help screen", e.Key, e.Short)
 			}
 		}
+	}
+}
+
+// A pane that grows while scrolled to the bottom stays on the last line rather
+// than showing blank rows past the end.
+func TestGrowingThePaneDoesNotScrollPastTheEnd(t *testing.T) {
+	m := New(Styles{}).SetSize(100, 10)
+	m.Viewport.GotoBottom()
+
+	m = m.SetSize(100, 20)
+
+	if m.Viewport.PastBottom() {
+		t.Error("the pane is scrolled past its last line after it grew")
 	}
 }
