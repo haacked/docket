@@ -448,7 +448,7 @@ func TestAnUnrelatedFailureLeavesTheLineOfWorkInFlight(t *testing.T) {
 // is running. A user who cannot see it would press s again.
 func TestARowBeingSubmittedSaysSoOnTheDashboard(t *testing.T) {
 	rec := draftedRecord()
-	next, _ := liveApp(rec).Update(msg.SubmitReview{ID: rec.ID, Event: review.EventComment})
+	next, _ := liveApp(rec).Update(msg.SubmitReview{ID: rec.ID, ReviewID: rec.ReviewID, Event: review.EventComment})
 
 	next, _ = next.(App).Update(msg.Goto{Screen: msg.Dashboard})
 
@@ -460,7 +460,7 @@ func TestARowBeingSubmittedSaysSoOnTheDashboard(t *testing.T) {
 func TestADryRunSubmitLeavesNoRowSubmitting(t *testing.T) {
 	rec := draftedRecord()
 
-	next, _ := dryRunApp(rec).Update(msg.SubmitReview{ID: rec.ID, Event: review.EventComment})
+	next, _ := dryRunApp(rec).Update(msg.SubmitReview{ID: rec.ID, ReviewID: rec.ReviewID, Event: review.EventComment})
 
 	if busy := next.(App).dash.Busy; len(busy) != 0 {
 		t.Errorf("busy = %v, want no row marked: no detection follows a dry run to clear it", busy)
@@ -471,7 +471,7 @@ func TestADryRunSubmitLeavesNoRowSubmitting(t *testing.T) {
 // pending review twice.
 func TestReopeningSubmitWhileTheReviewIsSubmittingIsRefused(t *testing.T) {
 	rec := draftedRecord()
-	next, _ := liveApp(rec).Update(msg.SubmitReview{ID: rec.ID, Event: review.EventComment})
+	next, _ := liveApp(rec).Update(msg.SubmitReview{ID: rec.ID, ReviewID: rec.ReviewID, Event: review.EventComment})
 	next, _ = next.(App).Update(msg.Goto{Screen: msg.Dashboard})
 
 	next, _ = next.(App).Update(msg.OpenSubmit{ID: rec.ID})
@@ -575,7 +575,7 @@ func TestAFinishedSubmitLeavesAnotherScreenAlone(t *testing.T) {
 	first, second := draftedRecord(), draftedRecord()
 	second.ID, second.Ref.Number, second.ReviewID = "rec-2", 8, 2
 	a := liveApp(first, second)
-	next, _ := a.Update(msg.SubmitReview{ID: first.ID, Event: review.EventComment})
+	next, _ := a.Update(msg.SubmitReview{ID: first.ID, ReviewID: first.ReviewID, Event: review.EventComment})
 	next, _ = next.(App).Update(msg.OpenSubmit{ID: second.ID})
 	a = next.(App)
 	a.sub.Busy = ""

@@ -55,11 +55,14 @@ type RefreshRecords struct{ ID string }
 // OpenSubmit asks for the submit screen for a record.
 type OpenSubmit struct{ ID string }
 
-// SubmitReview submits the record's pending review.
+// SubmitReview submits the record's pending review. ReviewID is the pending
+// review the screen showed. The poll can move the row to a newer draft while the
+// screen is open. The root then refuses the submit.
 type SubmitReview struct {
-	ID    string
-	Event string
-	Body  string
+	ID       string
+	ReviewID int64
+	Event    string
+	Body     string
 }
 
 // OpenNotes asks for the notes review-code wrote for a record.

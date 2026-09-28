@@ -197,6 +197,55 @@ func TestOpeningSubmitOnAnInteractiveReviewingRowNamesTheOpenSession(t *testing.
 	}
 }
 
+// The poll keeps reading GitHub while the submit screen is open. When the
+// session posts a newer draft, ctrl+s must not send the user's event to a draft
+// they have not read.
+func TestSubmittingADraftThePollReplacedIsRefused(t *testing.T) {
+	rec := draftedRecord()
+	rec.Mode = review.ModeBackground
+	rec.State = review.StateReviewing
+	next, _ := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
+	a := next.(App)
+	replaced := rec
+	replaced.State = review.StateDrafted
+	replaced.ReviewID = rec.ReviewID + 1
+	a.dash = a.dash.SetRecords([]review.Record{replaced})
+
+	next, cmd := a.Update(msg.SubmitReview{ID: rec.ID, ReviewID: rec.ReviewID, Event: review.EventComment})
+	a = next.(App)
+
+	if cmd != nil {
+		t.Error("the submit went ahead for a draft the user has not read")
+	}
+	if a.dash.Busy[rec.ID] != "" {
+		t.Errorf("busy = %q, want the row left alone", a.dash.Busy[rec.ID])
+	}
+	if a.screen != msg.Dashboard {
+		t.Errorf("screen = %v, want the dashboard, where s opens the newer draft", a.screen)
+	}
+	if !strings.Contains(a.status, "changed") {
+		t.Errorf("status = %q, want it to say the pending review changed", a.status)
+	}
+}
+
+// An archived row keeps the id of the review it submitted. It has no session
+// and no pending review. The refusal must therefore not send the user to close
+// one.
+func TestOpeningSubmitOnAnArchivedRowSaysThereIsNothingPending(t *testing.T) {
+	rec := draftedRecord()
+	rec.State = review.StateArchived
+
+	next, _ := liveApp(rec).Update(msg.OpenSubmit{ID: rec.ID})
+	a := next.(App)
+
+	if a.screen == msg.Submit {
+		t.Error("the submit screen opened on an archived row")
+	}
+	if strings.Contains(a.status, "session") {
+		t.Errorf("status = %q, want it to say there is no pending review rather than name a session", a.status)
+	}
+}
+
 // Approving your own pull request is a 422, so the choice never reaches the
 // screen.
 func TestOpeningSubmitOnMyOwnPullRequestOffersNoApproval(t *testing.T) {
@@ -221,7 +270,7 @@ func TestADryRunSubmitsNothingAndOpensNoEditor(t *testing.T) {
 	}{
 		{
 			name:    "submit",
-			message: msg.SubmitReview{ID: rec.ID, Event: review.EventComment},
+			message: msg.SubmitReview{ID: rec.ID, ReviewID: rec.ReviewID, Event: review.EventComment},
 			want:    []string{"Would submit", "haacked/docket#7", review.EventComment},
 		},
 		{

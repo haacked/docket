@@ -49,6 +49,11 @@ func TestAReviewingRecordIsSubmittableOnceItHoldsADraft(t *testing.T) {
 			rec:  review.Record{State: review.StateReviewing, Mode: review.ModeInteractive, ReviewID: 9},
 			want: false,
 		},
+		{
+			name: "abandoned background session holding a draft",
+			rec:  review.Record{State: review.StateAbandoned, Mode: review.ModeBackground, ReviewID: 9},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {

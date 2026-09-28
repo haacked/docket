@@ -432,12 +432,8 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return a, nil
 		}
-		if !rec.Submittable() {
-			if rec.ReviewID == 0 {
-				a.status = fmt.Sprintf("%s is %s with no pending review to submit", rec.Ref, rec.State)
-			} else {
-				a.status = fmt.Sprintf("%s has a pending review, but its interactive session may still be using the clone; close it first", rec.Ref)
-			}
+		if err := session.RefuseSubmit(rec); err != nil {
+			a.status = err.Error()
 			return a, nil
 		}
 		// A row left while its review was submitting would otherwise open a
@@ -466,6 +462,17 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case msg.SubmitReview:
 		rec, ok := a.record(message.ID)
 		if !ok {
+			return a, nil
+		}
+		// The user chose the event and the body for the draft they read. A submit
+		// of a newer draft would post them on a review the user has not seen. An
+		// edited body would also replace that review's summary.
+		if rec.ReviewID != message.ReviewID {
+			a.sub = a.sub.ClearBusy()
+			if a.screen == msg.Submit && a.sub.Record.ID == rec.ID {
+				a.screen = msg.Dashboard
+			}
+			a.status = fmt.Sprintf("%s's pending review changed since you opened it, so nothing was submitted. Press s to look again", rec.Ref)
 			return a, nil
 		}
 		if a.dryRun {
@@ -1407,10 +1414,17 @@ func wouldAbandon(rec review.Record) string {
 func describe(rec review.Record) string {
 	switch rec.State {
 	case review.StateArchived:
+		line := fmt.Sprintf("%s submitted and archived. Notes stay at %s", rec.Ref, rec.NotesPath)
 		if rec.SubmittedAt == nil && rec.PRState.Closed() {
-			return fmt.Sprintf("%s is %s, so docket archived it. Notes stay at %s", rec.Ref, rec.PRState.Label(), rec.NotesPath)
+			line = fmt.Sprintf("%s is %s, so docket archived it. Notes stay at %s", rec.Ref, rec.PRState.Label(), rec.NotesPath)
 		}
-		return fmt.Sprintf("%s submitted and archived. Notes stay at %s", rec.Ref, rec.NotesPath)
+		// Archive can leave the session running and its clone in place. It puts
+		// the reason in Err. The row goes to the hidden Archived group. This line
+		// is therefore the only place the user sees that reason.
+		if rec.Err != "" {
+			line += "; " + rec.Err
+		}
+		return line
 	case review.StateDrafted:
 		if rec.PRState.Closed() {
 			return fmt.Sprintf("%s is %s and your review is still pending. Press s to submit it or x to abandon", rec.Ref, rec.PRState.Label())
@@ -1510,17 +1524,15 @@ func (a App) pollBackground() tea.Cmd {
 }
 
 // progressFor hands each session's progress to the dashboard, which holds no
-// engine to ask. A session is waiting for the user when the listing reports it
-// idle and the status file does not report it active, which claude does at
-// launch before the first turn. claude's own reading of the conversation can
-// call a session blocked while its reviewer agents still run, so a working
-// session's need is dropped. A working session with no detail shows the agent's
-// state.
+// engine to ask. A session that is Waiting is waiting for the user. claude's own
+// reading of the conversation can call a session blocked while its reviewer
+// agents still run. progressFor therefore drops the need of a working session.
+// A working session with no detail shows the agent's state.
 func progressFor(statuses map[string]engine.BGStatus) map[string]review.Progress {
 	progress := make(map[string]review.Progress, len(statuses))
 	for id, status := range statuses {
 		p := status.Progress
-		if status.Idle && !p.Active {
+		if status.Waiting() {
 			p.Needs = cmp.Or(p.Needs, "your input")
 		} else {
 			p.Needs = ""

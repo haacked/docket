@@ -711,6 +711,20 @@ func RefuseClosed(ref pr.Ref, state review.PRState) error {
 	return nil
 }
 
+// RefuseSubmit refuses a record that has no pending review docket may submit.
+// Submittable accepts a reviewing background record. A reviewing record that
+// still holds a draft id here therefore has its session open in a terminal.
+func RefuseSubmit(rec review.Record) error {
+	switch {
+	case rec.Submittable():
+		return nil
+	case rec.State == review.StateReviewing && rec.ReviewID != 0:
+		return fmt.Errorf("%s has a pending review, but its interactive session may still be using the clone; close it first", rec.Ref)
+	default:
+		return fmt.Errorf("%s is %s with no pending review to submit", rec.Ref, rec.State)
+	}
+}
+
 // openPR reads the pull request and refuses it when it merged or closed.
 func (s *Service) openPR(ctx context.Context, ref pr.Ref) (gh.PRInfo, error) {
 	info, err := s.GH.PR(ctx, ref)
@@ -755,8 +769,8 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 	if !slices.Contains(review.SubmitEvents, event) {
 		return rec, fmt.Errorf("%q is not a review event; use one of %s", event, strings.Join(review.SubmitEvents, ", "))
 	}
-	if !rec.Submittable() {
-		return rec, fmt.Errorf("%s is %s with no pending review to submit", rec.Ref, rec.State)
+	if err := RefuseSubmit(rec); err != nil {
+		return rec, err
 	}
 
 	// The screen offers the same list, but it reads a login the service owns and
@@ -770,20 +784,17 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 		return rec, fmt.Errorf("GitHub refuses an approval of your own pull request; submit %s as %s instead", rec.Ref, review.EventComment)
 	}
 
-	// A reviewing row's background session may have replaced this draft since the
-	// row was last read, because the poll only rereads GitHub once the session
-	// goes idle. Re-checking here narrows, but does not close, the window where a
-	// stale id posts to an already-deleted review, or where archiving after that
-	// post orphans the session's replacement draft.
+	// A reviewing row's background session may have replaced or submitted this
+	// draft since the poll last read GitHub. GitHub refuses a submit of either id
+	// and leaves the review as it was. This check replaces GitHub's 404 or 422
+	// with a refusal that says what docket does next.
 	if rec.State == review.StateReviewing {
 		reviews, err := s.GH.Reviews(ctx, rec.Ref)
 		if err != nil {
 			return s.recordErr(rec, err)
 		}
-		if !slices.ContainsFunc(reviews, func(r review.GHReview) bool {
-			return r.ID == rec.ReviewID && strings.EqualFold(r.State, review.StatePending)
-		}) {
-			return rec, fmt.Errorf("%s's review %d is no longer pending; refresh %s and try again", rec.Ref, rec.ReviewID, rec.Ref)
+		if review.PendingReviewID(reviews, me) != rec.ReviewID {
+			return rec, fmt.Errorf("%s's review %d is no longer pending; docket reads GitHub for %s again once its session ends its turn", rec.Ref, rec.ReviewID, rec.Ref)
 		}
 	}
 
@@ -1017,6 +1028,9 @@ func shellSpec(line, arg string) exec.CommandSpec {
 // removed under it. The record closes, and the directory stays for the user to
 // deal with. Abandon makes the opposite call, because there the user asked.
 func (s *Service) Archive(ctx context.Context, rec review.Record) (review.Record, error) {
+	// The status line prints an archived row's Err, and the row is hidden once it
+	// archives. A failure from an earlier step would read as this archive's.
+	rec.Err = ""
 	rec, stopped := s.stopFinished(ctx, rec)
 	if !stopped {
 		at := s.now()

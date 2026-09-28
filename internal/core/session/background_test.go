@@ -722,10 +722,10 @@ func TestArchiveKeepsTheCloneWhenTheStopFails(t *testing.T) {
 	}
 }
 
-// reopenedWhileWorking is a background review that posted its draft, whose
-// session the user then opened, gave more work, and left while it was working.
-// That puts the row back to reviewing, holding the draft's id.
-func reopenedWhileWorking(t *testing.T, svc *Service, ghc *fakeGH, runner *exec.Fake) review.Record {
+// draftedInBackground is a background review whose session posted its draft and
+// ended its turn. The poll has read it as drafted. The agent's listing stays
+// idle.
+func draftedInBackground(t *testing.T, svc *Service, ghc *fakeGH, runner *exec.Fake) review.Record {
 	t.Helper()
 	startedBackground(t, svc, runner)
 	ghc.reviews = []review.GHReview{{ID: pendingID, User: review.GHUser{Login: "haacked"}, State: review.StatePending}}
@@ -734,9 +734,21 @@ func reopenedWhileWorking(t *testing.T, svc *Service, ghc *fakeGH, runner *exec.
 	if err != nil {
 		t.Fatal(err)
 	}
+	if records[0].State != review.StateDrafted {
+		t.Fatalf("state = %q, want the draft detected", records[0].State)
+	}
+	return records[0]
+}
+
+// reopenedWhileWorking is a background review that posted its draft, whose
+// session the user then opened, gave more work, and left while it was working.
+// That puts the row back to reviewing. The row keeps the draft's id.
+func reopenedWhileWorking(t *testing.T, svc *Service, ghc *fakeGH, runner *exec.Fake) review.Record {
+	t.Helper()
+	posted := draftedInBackground(t, svc, ghc, runner)
 
 	runner.Results["agents"] = exec.Result{Stdout: bgListing("6d681a76", bgSession, "working", true)}
-	rec, err := svc.AfterExit(context.Background(), records[0], nil)
+	rec, err := svc.AfterExit(context.Background(), posted, nil)
 	if err != nil {
 		t.Fatalf("AfterExit: %v", err)
 	}
@@ -780,18 +792,10 @@ func TestSubmittingWhileTheSessionWorksLeavesTheSessionRunning(t *testing.T) {
 func TestSubmittingADraftWhoseSessionEndedItsTurnStopsTheSession(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
-	runner := bgRunner(idleListing("6d681a76", bgSession))
-	rec := startedBackground(t, svc, runner)
-	ghc.reviews = []review.GHReview{{ID: pendingID, User: review.GHUser{Login: "haacked"}, State: review.StatePending}}
-	records, _, err := svc.PollBackground(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if records[0].State != review.StateDrafted {
-		t.Fatalf("state = %q, want the draft detected", records[0].State)
-	}
+	runner := bgRunner("")
+	rec := draftedInBackground(t, svc, ghc, runner)
 
-	done, err := svc.Submit(context.Background(), records[0], review.EventComment, "")
+	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -814,16 +818,8 @@ func TestSubmittingADraftWhoseSessionEndedItsTurnStopsTheSession(t *testing.T) {
 func TestSubmittingWhenTheListingLagsTheProgressFileLeavesTheSessionRunning(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
-	runner := bgRunner(idleListing("6d681a76", bgSession))
-	rec := startedBackground(t, svc, runner)
-	ghc.reviews = []review.GHReview{{ID: pendingID, User: review.GHUser{Login: "haacked"}, State: review.StatePending}}
-	records, _, err := svc.PollBackground(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if records[0].State != review.StateDrafted {
-		t.Fatalf("state = %q, want the draft detected", records[0].State)
-	}
+	runner := bgRunner("")
+	rec := draftedInBackground(t, svc, ghc, runner)
 
 	jobs := t.TempDir()
 	svc.Cfg.ClaudeJobsDir = jobs
@@ -835,7 +831,7 @@ func TestSubmittingWhenTheListingLagsTheProgressFileLeavesTheSessionRunning(t *t
 		t.Fatal(err)
 	}
 
-	done, err := svc.Submit(context.Background(), records[0], review.EventComment, "")
+	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -851,23 +847,47 @@ func TestSubmittingWhenTheListingLagsTheProgressFileLeavesTheSessionRunning(t *t
 	}
 }
 
-// The session can replace the draft with a new pending review after docket last
-// read GitHub for this row, since the poll only rereads once the session goes
-// idle. Submitting the stale id must not post to a review that is no longer
-// pending, which could submit a review the session had already deleted, or
-// archive the row and leave the session's replacement draft untracked.
-func TestSubmitRefusesADraftTheSessionAlreadyReplaced(t *testing.T) {
-	ghc := &fakeGH{login: "haacked", info: prInfo()}
-	svc, _ := newService(t, ghc, newFakeGit())
-	runner := bgRunner("")
-	rec := reopenedWhileWorking(t, svc, ghc, runner)
-	ghc.reviews = []review.GHReview{{ID: pendingID + 1, User: review.GHUser{Login: "haacked"}, State: review.StatePending}}
-
-	if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err == nil {
-		t.Error("Submit accepted a draft the session had already replaced")
+// The poll only rereads GitHub once the session goes idle. The session can
+// therefore replace or submit the draft after docket last read this row. Submit
+// posts only a draft it has just read as pending. It posts nothing when it
+// cannot read the reviews at all.
+func TestSubmitPostsOnlyADraftItReadAsPending(t *testing.T) {
+	tests := []struct {
+		name  string
+		spoil func(*fakeGH)
+	}{
+		{
+			name: "the session replaced it",
+			spoil: func(ghc *fakeGH) {
+				ghc.reviews = []review.GHReview{{ID: pendingID + 1, User: review.GHUser{Login: "haacked"}, State: review.StatePending}}
+			},
+		},
+		{
+			name: "the session submitted it",
+			spoil: func(ghc *fakeGH) {
+				ghc.reviews = []review.GHReview{{ID: pendingID, User: review.GHUser{Login: "haacked"}, State: "COMMENTED"}}
+			},
+		},
+		{
+			name:  "the reviews cannot be read",
+			spoil: func(ghc *fakeGH) { ghc.reviewErr = errors.New("HTTP 502") },
+		},
 	}
-	if len(ghc.submitted) != 0 {
-		t.Errorf("Submit posted %+v to GitHub", ghc.submitted)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ghc := &fakeGH{login: "haacked", info: prInfo()}
+			svc, _ := newService(t, ghc, newFakeGit())
+			rec := reopenedWhileWorking(t, svc, ghc, bgRunner(""))
+			tt.spoil(ghc)
+
+			if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err == nil {
+				t.Error("Submit accepted a draft it had not read as pending")
+			}
+			if len(ghc.submitted) != 0 {
+				t.Errorf("Submit posted %+v to GitHub", ghc.submitted)
+			}
+		})
 	}
 }
 
@@ -896,6 +916,29 @@ func TestArchiveLeavesTheSessionWhenTheAgentDoesNotAnswer(t *testing.T) {
 	}
 	if _, err := os.Stat(rec.Dir); err != nil {
 		t.Errorf("the clone at %s was deleted under a session docket could not read: %v", rec.Dir, err)
+	}
+}
+
+// The user opens a drafted row whose last submit failed, has the session submit
+// the review, and leaves. The status line prints an archived row's Err after
+// "submitted and archived", so the old failure must not survive the archive.
+func TestArchiveDropsAnEarlierFailure(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := draftedInBackground(t, svc, ghc, bgRunner(""))
+	rec.Err = "submit review 4321 on haacked/docket#7: HTTP 502"
+	ghc.reviews = []review.GHReview{{ID: pendingID, User: review.GHUser{Login: "haacked"}, State: "COMMENTED"}}
+
+	done, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil {
+		t.Fatalf("AfterExit: %v", err)
+	}
+
+	if done.State != review.StateArchived {
+		t.Fatalf("state = %q, want the session's own submission archived", done.State)
+	}
+	if done.Err != "" {
+		t.Errorf("Err = %q, want the earlier failure dropped from the archived row", done.Err)
 	}
 }
 

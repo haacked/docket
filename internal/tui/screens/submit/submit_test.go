@@ -92,7 +92,7 @@ func TestSubmittingSendsTheEventAndTheBodyUp(t *testing.T) {
 	}
 
 	got := cmd()
-	want := msg.SubmitReview{ID: "rec-1", Event: m.Event, Body: "Two things worth changing."}
+	want := msg.SubmitReview{ID: "rec-1", ReviewID: 4321, Event: m.Event, Body: "Two things worth changing."}
 	if got != want {
 		t.Errorf("got %#v, want %#v", got, want)
 	}
