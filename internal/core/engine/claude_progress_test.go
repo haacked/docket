@@ -36,8 +36,8 @@ func TestTrustRunsClaudeInTheDirectoryAndExits(t *testing.T) {
 	if spec.Path != "claude" || spec.Dir != "/tmp/clone" {
 		t.Errorf("spec = %s, want claude in the directory", spec)
 	}
-	if len(spec.Args) != 1 || spec.Args[0] != "/exit" {
-		t.Errorf("args = %q, want only /exit", spec.Args)
+	if len(spec.Args) == 0 || spec.Args[len(spec.Args)-1] != "/exit" {
+		t.Errorf("args = %q, want /exit as the first message", spec.Args)
 	}
 }
 

@@ -3,11 +3,11 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/review"
-	"github.com/haacked/docket/internal/core/tier"
 )
 
 // StartBackground launches the review as a detached session.
@@ -15,13 +15,21 @@ import (
 // No --session-id. claude refuses one here ("--bg manages the session id") and
 // mints its own, so a background record carries no id until ParseBackgroundID
 // reads the short one back and the first poll fills in the full one.
+//
+// The session gets none of docket's own tools. It reads what the pull request's
+// author wrote. Nobody is there to confirm a tool call. --disallowedTools takes
+// every argument after it, so it follows the prompt.
 func (Claude) StartBackground(rec review.Record, _ Paths) exec.CommandSpec {
 	return exec.CommandSpec{
 		Path: "claude",
-		Args: []string{"--bg", "/review-code " + reviewArgs(rec) + unattended},
+		Args: slices.Concat([]string{"--bg", "/review-code " + reviewArgs(rec) + unattended}, userSettings, []string{"--disallowedTools", docketTools}),
 		Dir:  rec.Dir,
 	}
 }
+
+// docketTools is the permission rule that matches every tool of an MCP server
+// registered under the name docket, which is the name the README gives it.
+const docketTools = "mcp__docket"
 
 // unattended answers review-code's pre-flight context clear, because nobody is at
 // the terminal to answer it. reviewArgs answers the prompt about a notes file that already
@@ -139,7 +147,7 @@ func (Claude) ParseStatus(res exec.Result) (map[string]BGStatus, error) {
 // so a match there could belong to another record. Only a directory this record
 // has to itself can answer.
 func (Claude) RecoverBackgroundID(rec review.Record, res exec.Result) (string, bool) {
-	if rec.Dir == "" || rec.Tier != tier.Tier2 || rec.StartedAt.IsZero() {
+	if !rec.HasClone() || rec.StartedAt.IsZero() {
 		return "", false
 	}
 	var entries []agentEntry
@@ -147,11 +155,11 @@ func (Claude) RecoverBackgroundID(rec review.Record, res exec.Result) (string, b
 		return "", false
 	}
 
-	dir := resolve(rec.Dir)
+	dir := RealPath(rec.Dir)
 	cutoff := rec.StartedAt.Add(-startTolerance).UnixMilli()
 	best, bestAt := "", int64(0)
 	for _, entry := range entries {
-		if entry.ID == "" || entry.StartedAt < cutoff || resolve(entry.CWD) != dir {
+		if entry.ID == "" || entry.StartedAt < cutoff || RealPath(entry.CWD) != dir {
 			continue
 		}
 		if best == "" || entry.StartedAt < bestAt {

@@ -131,17 +131,7 @@ func Plural(n int, noun string) string {
 // Existing says in one line what review of a pull request is already there. It
 // is empty when there is none.
 func Existing(found review.Found) string {
-	var parts []string
-	if !found.NotesAt.IsZero() {
-		parts = append(parts, "notes from "+found.NotesAt.Format("2006-01-02"))
-	}
-	if found.PendingID != 0 {
-		parts = append(parts, "pending draft on GitHub")
-	}
-	if found.Submitted {
-		parts = append(parts, "submitted review on GitHub")
-	}
-	return strings.Join(parts, " · ")
+	return strings.Join(found.Phrases(), " · ")
 }
 
 // Width is the terminal width, or 80 before the first WindowSizeMsg arrives.

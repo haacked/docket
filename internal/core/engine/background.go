@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"slices"
+
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/review"
 )
@@ -35,6 +37,16 @@ type BGStatus struct {
 // launch, before the first turn. Waiting therefore requires both.
 func (s BGStatus) Waiting() bool {
 	return s.Idle && !s.Progress.Active
+}
+
+// Need is what a waiting session needs from the user, when the agent named one.
+// claude's own reading of the conversation can name a need while the session's
+// reviewer agents still run. A session that is not waiting therefore has none.
+func (s BGStatus) Need() string {
+	if !s.Waiting() {
+		return ""
+	}
+	return s.Progress.Needs
 }
 
 // BackgroundEngine is an engine that can run a review with nobody at the
@@ -101,4 +113,18 @@ func BackgroundNames() []string {
 		}
 	}
 	return out
+}
+
+// BackgroundName is the engine a background review runs under: preferred when
+// it has a background mode, and otherwise the first engine that does. It is
+// empty when no engine has one.
+func BackgroundName(preferred string) string {
+	names := BackgroundNames()
+	if slices.Contains(names, preferred) {
+		return preferred
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
 }

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,19 @@ func TestStartBackgroundForcesTheReviewPastItsPrompts(t *testing.T) {
 	// record's would store an id the session never had.
 	if strings.Contains(line, "--session-id") {
 		t.Errorf("command %s passes a session id claude ignores", line)
+	}
+}
+
+// An interactive session keeps docket's tools, because the user answers the
+// permission prompt.
+func TestABackgroundReviewGetsNoneOfDocketsTools(t *testing.T) {
+	args := Claude{}.StartBackground(record(), Paths{}).Args
+	if len(args) < 2 || !slices.Equal(args[len(args)-2:], []string{"--disallowedTools", "mcp__docket"}) {
+		t.Errorf("args = %q, want --disallowedTools mcp__docket at the end", args)
+	}
+
+	if line := (Claude{}).Start(record(), Paths{}).String(); strings.Contains(line, "--disallowedTools") {
+		t.Errorf("command %s takes docket's tools from a session the user is in", line)
 	}
 }
 

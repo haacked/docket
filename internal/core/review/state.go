@@ -113,6 +113,12 @@ func (r Record) InProgress() bool {
 	return r.State == StatePreparing || r.State == StateReviewing
 }
 
+// HasClone reports whether the record has a clone of its own. Every tier-1
+// record shares the scratch directory.
+func (r Record) HasClone() bool {
+	return r.Tier == tier.Tier2 && r.Dir != ""
+}
+
 // Adopted reports whether the record took over an existing review and has run no
 // review session of its own. The dashboard opens the re-review choice for it and
 // the service refuses to resume it, so the rule is stated once.
@@ -164,6 +170,18 @@ func (s State) Label() string {
 	default:
 		return string(s)
 	}
+}
+
+// OpenRecord is the open record for ref. The index holds one record per review.
+// A pull request that was reviewed, archived, and asked for again has two
+// records, and only the open one counts.
+func OpenRecord(records []Record, ref pr.Ref) (Record, bool) {
+	for _, rec := range records {
+		if rec.State.Open() && rec.Ref.Equal(ref) {
+			return rec, true
+		}
+	}
+	return Record{}, false
 }
 
 // Open reports whether the record still wants the user's attention.
@@ -233,6 +251,10 @@ type Record struct {
 	PriorPendingID int64  `json:"prior_pending_id"`
 	Err            string `json:"err"`
 	Intent         Intent `json:"intent"`
+	// CloneInUse records that Archive found the session that asked for it
+	// running inside the clone. Archive then left the record open and the clone
+	// in place.
+	CloneInUse bool `json:"clone_in_use"`
 	// AskSessionID names the question-and-answer session about the notes. docket
 	// keeps it apart from SessionID, so asking about a review never replaces the
 	// review session that enter resumes.

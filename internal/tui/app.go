@@ -27,7 +27,6 @@ import (
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
-	"github.com/haacked/docket/internal/core/tier"
 	"github.com/haacked/docket/internal/tui/format"
 	"github.com/haacked/docket/internal/tui/msg"
 	"github.com/haacked/docket/internal/tui/screens/dashboard"
@@ -118,7 +117,7 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 			Row:      s.Row,
 			Selected: s.Selected,
 			Dim:      s.Dim,
-		}, batchEngine(cfg.DefaultEngine)),
+		}, engine.BackgroundName(cfg.DefaultEngine)),
 		teams: teams.New(teams.Styles{
 			Row:      s.Row,
 			Selected: s.Selected,
@@ -602,7 +601,9 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.stamp != (index.StatMark{}) {
 			a.indexStamp = message.stamp
 		}
-		return a, nil
+		// Another process, such as docket mcp, can start a background review
+		// that this dashboard has no tick outstanding for.
+		return a.armPoll()
 
 	case preparedMsg:
 		a.screen = msg.Dashboard
@@ -1334,20 +1335,6 @@ func (a App) regroup() App {
 	return a
 }
 
-// batchEngine is the engine a batch of background reviews runs under: the
-// default engine when it has a background mode, and otherwise the first engine
-// that does. It is empty when no engine has one.
-func batchEngine(defaultEngine string) string {
-	names := engine.BackgroundNames()
-	if slices.Contains(names, defaultEngine) {
-		return defaultEngine
-	}
-	if len(names) == 0 {
-		return ""
-	}
-	return names[0]
-}
-
 // startReview routes the new review screen's request. A request with no intent
 // is the first one, which asks what review is already there before preparing.
 func (a App) startReview(start msg.StartReview) (tea.Model, tea.Cmd) {
@@ -1513,7 +1500,7 @@ func (a App) explainResume(rec review.Record) tea.Cmd {
 }
 
 func wouldAbandon(rec review.Record) string {
-	if rec.Tier == tier.Tier2 && rec.Dir != "" {
+	if rec.HasClone() {
 		return fmt.Sprintf("Would abandon %s and delete %s", rec.Ref, rec.Dir)
 	}
 	return fmt.Sprintf("Would abandon %s; docket created nothing to delete", rec.Ref)
@@ -1611,7 +1598,13 @@ func (a App) applyPoll(polled bgPolledMsg) (tea.Model, tea.Cmd) {
 		a.dash = a.dash.SetRecords(polled.records)
 		a.dash.Background = polled.progress
 	}
-	if !a.watching() || a.polling {
+	return a.armPoll()
+}
+
+// armPoll arms the background tick when a record is running and no tick is
+// outstanding. A dry run never polls, because a poll writes what it finds.
+func (a App) armPoll() (tea.Model, tea.Cmd) {
+	if a.dryRun || !a.watching() || a.polling {
 		return a, nil
 	}
 	a.polling = true
@@ -1632,18 +1625,18 @@ func (a App) pollBackground() tea.Cmd {
 }
 
 // progressFor hands each session's progress to the dashboard, which holds no
-// engine to ask. A session that is Waiting is waiting for the user. claude's own
-// reading of the conversation can call a session blocked while its reviewer
-// agents still run. progressFor therefore drops the need of a working session.
-// A working session with no detail shows the agent's state.
+// engine to ask. A session that is Waiting is waiting for the user. The
+// dashboard draws a row as waiting when the row names a need, so a waiting
+// session always names one. A working session with no detail shows the agent's
+// state.
 func progressFor(statuses map[string]engine.BGStatus) map[string]review.Progress {
 	progress := make(map[string]review.Progress, len(statuses))
 	for id, status := range statuses {
 		p := status.Progress
+		p.Needs = status.Need()
 		if status.Waiting() {
 			p.Needs = cmp.Or(p.Needs, "your input")
 		} else {
-			p.Needs = ""
 			p.Detail = cmp.Or(p.Detail, status.State)
 		}
 		progress[id] = p

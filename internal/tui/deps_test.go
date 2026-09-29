@@ -25,15 +25,28 @@ func refuse(t *testing.T, pattern string, banned ...string) {
 	}
 }
 
+// terminal lists the packages that draw to the terminal.
+var terminal = []string{
+	"charm.land/",
+	"github.com/charmbracelet/",
+	"github.com/haacked/docket/internal/tui",
+}
+
 // TestCoreHasNoUIDependencies keeps the core packages usable without a terminal.
 // The rule is easy to break by reaching for a lipgloss style while editing core,
 // and nothing else would notice.
 func TestCoreHasNoUIDependencies(t *testing.T) {
-	refuse(t, "github.com/haacked/docket/internal/core/...",
-		"charm.land/",
-		"github.com/charmbracelet/",
-		"github.com/haacked/docket/internal/tui",
-	)
+	refuse(t, "github.com/haacked/docket/internal/core/...", append(terminal,
+		"github.com/haacked/docket/internal/mcp",
+		"github.com/modelcontextprotocol/",
+	)...)
+}
+
+// TestTheMCPServerHoldsNoTerminal keeps the MCP server from depending on the
+// TUI. The server speaks the protocol on stdout. Anything that draws to the
+// terminal would corrupt it.
+func TestTheMCPServerHoldsNoTerminal(t *testing.T) {
+	refuse(t, "github.com/haacked/docket/internal/mcp/...", terminal...)
 }
 
 // TestScreensHoldNoService is what makes the screens testable with synthetic key

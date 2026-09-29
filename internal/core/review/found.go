@@ -13,6 +13,21 @@ type Found struct {
 	Submitted bool
 }
 
+// Phrases names each review that is there, in the words docket shows the user.
+func (f Found) Phrases() []string {
+	var out []string
+	if !f.NotesAt.IsZero() {
+		out = append(out, "notes from "+f.NotesAt.Format(time.DateOnly))
+	}
+	if f.PendingID != 0 {
+		out = append(out, "pending draft on GitHub")
+	}
+	if f.Submitted {
+		out = append(out, "submitted review on GitHub")
+	}
+	return out
+}
+
 // Any reports whether there is a review the user has to choose what to do with.
 func (f Found) Any() bool {
 	return !f.NotesAt.IsZero() || f.PendingID != 0 || f.Submitted

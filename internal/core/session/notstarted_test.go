@@ -168,8 +168,13 @@ func TestRestartRefusesAPullRequestThatMergedSince(t *testing.T) {
 	ghc.info.State = review.PRMerged
 	svc.Runner = bgRunner(bgListing("6d681a76", bgSession, "working", true))
 
-	if _, err := svc.Restart(context.Background(), storedByID(t, svc, rec.ID)); err == nil {
+	_, err := svc.Restart(context.Background(), storedByID(t, svc, rec.ID))
+	if err == nil {
 		t.Fatal("Restart started a review of a merged pull request")
+	}
+	// The MCP server reads ErrClosed to stop telling the agent to start again.
+	if !errors.Is(err, ErrClosed) || !strings.HasSuffix(err.Error(), "is merged, so there is nothing left to review") {
+		t.Errorf("err = %v, want the merged refusal wrapping ErrClosed", err)
 	}
 	if got := storedByID(t, svc, rec.ID); got.State != review.StateNotStarted {
 		t.Errorf("state = %q, want the row left as it was", got.State)

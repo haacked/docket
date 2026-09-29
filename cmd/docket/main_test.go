@@ -28,6 +28,14 @@ func TestParseFlags(t *testing.T) {
 		{name: "unknown flag", args: []string{"--nope"}, fails: true},
 		{name: "flag with no value", args: []string{"--engine"}, fails: true},
 		{name: "two pull requests", args: []string{"1", "2"}, fails: true},
+		{name: "mcp", args: []string{"mcp"}, want: flags{mcp: true}},
+		{
+			name: "mcp with flags",
+			args: []string{"--home", "/tmp/docket", "mcp", "--engine", "claude"},
+			want: flags{home: "/tmp/docket", engine: "claude", mcp: true},
+		},
+		{name: "mcp with a pull request", args: []string{"mcp", "o/r#2"}, fails: true},
+		{name: "mcp in a dry run", args: []string{"--dry-run", "mcp"}, fails: true},
 	}
 
 	for _, tc := range tests {
