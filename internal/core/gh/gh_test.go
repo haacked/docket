@@ -281,7 +281,7 @@ func TestTeamsAsksForEveryPageOfTheUsersTeams(t *testing.T) {
 		t.Fatalf("calls = %v, want one", fake.Lines())
 	}
 	line := fake.Calls[0].String()
-	for _, want := range []string{"api", "user/teams", "--paginate", "--slurp", "per_page=100"} {
+	for _, want := range []string{"api", "GET", "user/teams", "--paginate", "--slurp", "per_page=100"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("command %s is missing %q", line, want)
 		}

@@ -150,8 +150,12 @@ type teamsLoadedMsg struct {
 }
 
 // teamsSavedMsg means config.toml now names teams as the ones the requests
-// screen searches for.
-type teamsSavedMsg struct{ teams []string }
+// screen searches for, or carries why the save failed. It carries its own
+// failure so that an unrelated errMsg cannot clear the save's busy marker.
+type teamsSavedMsg struct {
+	teams []string
+	err   error
+}
 
 // batchCheckedMsg reports what review each pull request in a batch already has,
 // in the order the rows are drawn. failed holds one line per pull request the

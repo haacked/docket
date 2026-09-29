@@ -256,15 +256,20 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msg.OpenTeams:
 		// A search reads the configured teams while it runs. A batch check's
-		// answer switches to the requests screen. A teams read or save that
-		// is still running would answer the screen this opens.
-		if a.reqs.Loading || a.reqs.Busy || a.teams.Loading || a.teams.Busy {
-			a.status = "A search, a batch check, or a read or save of your teams is still running. Press t again once it finishes"
+		// answer and a finished save each switch to the requests screen.
+		if a.reqs.Loading || a.reqs.Busy || a.teams.Busy {
+			a.status = "A search, a batch check, or a save of your teams is still running. Press t again once it finishes"
 			return a, nil
 		}
+		reading := a.teams.Loading
 		a.screen = msg.Teams
 		a.err = nil
 		a.teams = a.teams.Load(a.liveConfig().Teams)
+		// A read still running from an earlier visit answers this one.
+		// SetMemberships keeps the rows Load checked.
+		if reading {
+			return a, nil
+		}
 		return a, a.loadTeams()
 
 	case teamsLoadedMsg:
@@ -282,6 +287,10 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case teamsSavedMsg:
 		a.teams.Busy = false
+		if message.err != nil {
+			a.err = message.err
+			return a, nil
+		}
 		// esc lets the user leave while the save runs.
 		if a.screen == msg.Teams {
 			a.screen = msg.Requests
@@ -900,7 +909,7 @@ func (a App) login() string {
 // fallback serves tests, which build the root without a service.
 func (a App) liveConfig() config.Config {
 	if a.svc != nil {
-		return a.svc.Cfg
+		return a.svc.Config()
 	}
 	return a.cfg
 }
@@ -929,16 +938,16 @@ func (a App) report(line string, after bool) App {
 // clears all of them. The requests screen's Busy is the exception. The batch
 // check always answers with a batchCheckedMsg, which clears it. An unrelated
 // failure that cleared it would let a second enter check and start the same
-// batch. The teams screen's Loading is another, because the read of the user's
-// teams answers with teamsLoadedMsg even when it fails. resetBusy also leaves
-// the line of work in flight, which only that work's own failure clears.
+// batch. The teams screen's Loading and Busy are exceptions too, because the read
+// and the save of the user's teams each answer with their own message even when
+// they fail. resetBusy also leaves the line of work in flight, which only that
+// work's own failure clears.
 func (a App) resetBusy(err error) App {
 	a.err = err
 	a.dash.Busy = map[string]string{}
 	a.newrev = a.newrev.ClearBusy()
 	a.sub = a.sub.ClearBusy()
 	a.reqs.Loading = false
-	a.teams.Busy = false
 	return a
 }
 
@@ -1107,10 +1116,7 @@ func (a App) loadTeams() tea.Cmd {
 func (a App) saveTeams(teams []string) tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
-		if err := svc.SaveTeams(teams); err != nil {
-			return errMsg{err: err}
-		}
-		return teamsSavedMsg{teams: teams}
+		return teamsSavedMsg{teams: teams, err: svc.SaveTeams(teams)}
 	}
 }
 

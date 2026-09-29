@@ -170,7 +170,7 @@ func hasKey(lines []string, key string) bool {
 }
 
 func TestViewListsTheTeamsScreensKeys(t *testing.T) {
-	lines := section(t, New(Styles{}).SetSize(100, 200).View(), "Teams")
+	lines := section(t, sized().View(), "Teams")
 
 	for _, want := range []string{"space", "enter", "esc"} {
 		if !hasKey(lines, want) {
@@ -180,7 +180,7 @@ func TestViewListsTheTeamsScreensKeys(t *testing.T) {
 }
 
 func TestViewListsTUnderReviewRequests(t *testing.T) {
-	lines := section(t, New(Styles{}).SetSize(100, 200).View(), "Review requests")
+	lines := section(t, sized().View(), "Review requests")
 
 	if !hasKey(lines, "t") {
 		t.Errorf("the Review requests section does not list t:\n%s", strings.Join(lines, "\n"))

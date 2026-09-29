@@ -50,10 +50,18 @@ type Service struct {
 	idleMu   sync.Mutex
 	idleSeen map[string]time.Time
 
-	// cfgMu serializes the writes to config.toml and to Cfg. The poll can cache
-	// the login while the teams screen saves the teams. Without it, the rename
-	// that lands last drops the other write's key.
+	// cfgMu guards config.toml and the fields of Cfg that change after startup:
+	// the login and the teams. The poll can cache the login while the teams
+	// screen saves the teams. Without the lock, the rename that lands last drops
+	// the other write's key, and a search can read the teams mid-save.
 	cfgMu sync.Mutex
+}
+
+// Config is a copy of Cfg taken under the lock that its writers hold.
+func (s *Service) Config() config.Config {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.Cfg
 }
 
 // Plan is what Prepare worked out, for the UI to show before launching.
@@ -120,8 +128,8 @@ func (s *Service) Records() ([]review.Record, error) {
 // Login is the GitHub login docket compares review authors against. docket caches
 // it in config.toml, because every detection needs it.
 func (s *Service) Login(ctx context.Context) (string, error) {
-	if s.Cfg.GitHubUser != "" {
-		return s.Cfg.GitHubUser, nil
+	if login := s.Config().GitHubUser; login != "" {
+		return login, nil
 	}
 	login, err := s.peekLogin(ctx)
 	if err != nil {
@@ -130,7 +138,7 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 	s.Cfg.GitHubUser = login
-	if err := config.Save(s.Paths.Config, s.Cfg); err != nil {
+	if err := config.SaveKey(s.Paths.Config, "github_user", login); err != nil {
 		return login, fmt.Errorf("cache github login: %w", err)
 	}
 	return login, nil
@@ -147,7 +155,8 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 // team it cannot resolve, so one misspelled slug would otherwise hide every
 // request.
 func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
-	me := s.Cfg.GitHubUser
+	cfg := s.Config()
+	me := cfg.GitHubUser
 	if me == "" {
 		var err error
 		if me, err = s.GH.Login(ctx); err != nil {
@@ -159,7 +168,7 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 		return requests.Fetched{}, err
 	}
 	f := requests.Fetched{Mine: mine}
-	for _, team := range s.Cfg.Teams {
+	for _, team := range cfg.Teams {
 		prs, err := s.GH.ReviewRequests(ctx, "team-review-requested:"+team)
 		f.Teams = append(f.Teams, requests.Team{Slug: team, PRs: prs, Err: err})
 	}
@@ -188,8 +197,8 @@ func (s *Service) SaveTeams(teams []string) error {
 
 // peekLogin is Login without caching the answer, for the paths a dry run takes.
 func (s *Service) peekLogin(ctx context.Context) (string, error) {
-	if s.Cfg.GitHubUser != "" {
-		return s.Cfg.GitHubUser, nil
+	if login := s.Config().GitHubUser; login != "" {
+		return login, nil
 	}
 	return s.GH.Login(ctx)
 }

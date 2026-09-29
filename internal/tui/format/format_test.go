@@ -1,6 +1,7 @@
 package format
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -180,5 +181,15 @@ func TestWindowKeepsTheCursorsLineInView(t *testing.T) {
 				t.Errorf("window = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// gh's errors carry its stderr, which can run over several lines. A screen that
+// drew them as they are would push its footer down.
+func TestOneLineJoinsAMultiLineError(t *testing.T) {
+	got := OneLine(errors.New("gh exited 1: gh: HTTP 403\nThis API operation needs the \"read:org\" scope"))
+
+	if want := `gh exited 1: gh: HTTP 403 This API operation needs the "read:org" scope`; got != want {
+		t.Errorf("OneLine = %q, want %q", got, want)
 	}
 }

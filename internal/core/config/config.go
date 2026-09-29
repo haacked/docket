@@ -141,14 +141,9 @@ func expand(cfg Config) Config {
 	return cfg
 }
 
-// Save writes config.toml. docket calls it to cache the GitHub login.
-func Save(path string, cfg Config) error {
-	return write(path, cfg)
-}
-
 // SaveKey sets one key in config.toml and keeps every other key as the file has
-// it. A default the file leaves out stays out of it. An edit made while docket
-// runs survives. The rewrite drops the file's comments.
+// it. A default the file leaves out stays out of it. An edit to another key made
+// while docket runs survives. The rewrite drops the file's comments.
 func SaveKey(path, key string, value any) error {
 	values := map[string]any{}
 	data, err := os.ReadFile(path)

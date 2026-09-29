@@ -112,8 +112,7 @@ func TestTheSearchAfterSaveTeamsLooksForTheSavedTeams(t *testing.T) {
 
 func TestSaveTeamsWithNoneCheckedClearsTheTeams(t *testing.T) {
 	svc, paths := newService(t, &fakeGH{login: "haacked"}, newFakeGit())
-	svc.Cfg.Teams = []string{"PostHog/team-feature-flags"}
-	if err := config.Save(paths.Config, svc.Cfg); err != nil {
+	if err := os.WriteFile(paths.Config, []byte("teams = [\"PostHog/team-feature-flags\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,11 +129,17 @@ func TestSaveTeamsWithNoneCheckedClearsTheTeams(t *testing.T) {
 	}
 }
 
+// The next search reads the service's teams. After a failed save they must still
+// be the teams config.toml holds.
 func TestSaveTeamsReportsAConfigItCannotWrite(t *testing.T) {
 	svc := &Service{Paths: config.Paths{Config: filepath.Join(t.TempDir(), "missing", "config.toml")}}
+	svc.Cfg.Teams = []string{"PostHog/old"}
 
 	if err := svc.SaveTeams([]string{"PostHog/team-feature-flags"}); err == nil {
 		t.Error("SaveTeams succeeded with no directory to write config.toml in")
+	}
+	if !slices.Equal(svc.Cfg.Teams, []string{"PostHog/old"}) {
+		t.Errorf("teams = %v, want the old teams kept after a failed save", svc.Cfg.Teams)
 	}
 }
 
@@ -170,4 +175,27 @@ func TestSaveTeamsAndLoginKeepEachOthersKeys(t *testing.T) {
 			t.Fatalf("run %d: github_user = %q, teams = %v, want both saved", i, cfg.GitHubUser, cfg.Teams)
 		}
 	}
+}
+
+// A search can start while the teams screen saves: enter, then esc and r before
+// the save finishes. Run under -race, this test fails when Requests reads the
+// teams without the lock.
+func TestRequestsDuringSaveTeams(t *testing.T) {
+	svc, _ := newService(t, &fakeGH{login: "haacked"}, newFakeGit())
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if err := svc.SaveTeams([]string{"PostHog/team-feature-flags"}); err != nil {
+			t.Errorf("SaveTeams: %v", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if _, err := svc.Requests(context.Background()); err != nil {
+			t.Errorf("Requests: %v", err)
+		}
+	}()
+	wg.Wait()
 }

@@ -238,7 +238,10 @@ func TestAFailedSaveKeepsTheTeamsScreen(t *testing.T) {
 	svc.Paths.Config = filepath.Join(t.TempDir(), "missing", "config.toml")
 	a = onTeams(a)
 	_, cmd := a.Update(msg.SaveTeams{Teams: []string{flags}})
-	failed := only[errMsg](t, cmd)
+	failed := only[teamsSavedMsg](t, cmd)
+	if failed.err == nil {
+		t.Fatal("the save of an unwritable config.toml reported no error")
+	}
 
 	next, _ := a.Update(failed)
 	a = next.(App)
@@ -248,6 +251,23 @@ func TestAFailedSaveKeepsTheTeamsScreen(t *testing.T) {
 	}
 	if a.teams.Busy {
 		t.Error("the teams screen is still busy, so enter cannot save again")
+	}
+	if a.err == nil {
+		t.Error("the failed save shows no error")
+	}
+}
+
+// The read and the save of the teams each answer with their own message. An
+// unrelated failure that cleared their markers would let t or enter start that
+// work again while it runs.
+func TestAnUnrelatedErrorLeavesTheTeamsWorkBusy(t *testing.T) {
+	a := onTeams(app())
+
+	next, _ := a.Update(errMsg{err: errors.New("read the index")})
+	a = next.(App)
+
+	if !a.teams.Busy || !a.teams.Loading {
+		t.Errorf("busy = %v, loading = %v, want both kept", a.teams.Busy, a.teams.Loading)
 	}
 }
 
@@ -408,9 +428,9 @@ func TestTheTeamsScreenWaitsForABatchCheck(t *testing.T) {
 	}
 }
 
-// esc leaves the teams screen while GitHub is still answering. The answer
-// would land on a screen opened after it.
-func TestTheTeamsScreenWaitsForItsOwnRead(t *testing.T) {
+// esc leaves the teams screen while GitHub is still answering. The read that
+// is still running answers the screen t opens next.
+func TestTheTeamsScreenReusesARunningRead(t *testing.T) {
 	a := app()
 	a.screen = msg.Requests
 	a.teams = a.teams.Load([]string{flags})
@@ -418,14 +438,14 @@ func TestTheTeamsScreenWaitsForItsOwnRead(t *testing.T) {
 	next, cmd := a.Update(msg.OpenTeams{})
 	a = next.(App)
 
-	if a.screen != msg.Requests {
-		t.Errorf("screen = %v, want the requests screen", a.screen)
+	if a.screen != msg.Teams {
+		t.Errorf("screen = %v, want the teams screen", a.screen)
 	}
 	if drain(cmd) != nil {
-		t.Error("the refusal read GitHub again")
+		t.Error("the screen started a second read of the user's teams")
 	}
-	if !strings.Contains(a.View().Content, "Press t again once it finishes") {
-		t.Errorf("the view does not say why t did nothing:\n%s", a.View().Content)
+	if !a.teams.Loading {
+		t.Error("the screen does not show that GitHub is still answering")
 	}
 }
 
