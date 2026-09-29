@@ -363,12 +363,12 @@ func (m Model) existingView() string {
 func (m Model) row(row requests.Row, selected bool) string {
 	cursor := "  "
 	style := m.Styles.Row
-	if row.IsDraft {
-		style = m.Styles.Dim
-	}
 	if selected {
 		cursor = "> "
 		style = m.Styles.Selected
+	}
+	if row.IsDraft {
+		style = style.Faint(true)
 	}
 	mark := "[ ]"
 	if m.Marked[row.Ref.URL()] {

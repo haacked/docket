@@ -243,6 +243,20 @@ func TestAShownDraftIsDrawnFaint(t *testing.T) {
 	}
 }
 
+// The cursor's style does not undo the faint that marks a draft.
+func TestTheSelectedDraftIsDrawnFaint(t *testing.T) {
+	m := withDraft()
+	m.Styles.Selected = lipgloss.NewStyle().Bold(true)
+	m, _ = m.Update(key("d"))
+	m, _ = m.Update(key("g"))
+
+	for _, line := range strings.Split(m.View(), "\n") {
+		if strings.Contains(line, "> ") && strings.Contains(line, "o/r#1") && !strings.Contains(line, "\x1b[1;2m") && !strings.Contains(line, "\x1b[2;1m") {
+			t.Errorf("the selected draft is not faint: %q", line)
+		}
+	}
+}
+
 // The user can still mark a shown draft. Hiding it again drops its mark, because
 // a batch would otherwise start a row the user cannot see.
 func TestADraftCanBeMarkedWhileShownAndHidingItDropsTheMark(t *testing.T) {
