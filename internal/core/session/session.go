@@ -1226,7 +1226,7 @@ func (s *Service) callerInClone(rec review.Record) bool {
 	if s.CallerDir == "" || !rec.HasClone() {
 		return false
 	}
-	rel, err := filepath.Rel(engine.Resolve(rec.Dir), engine.Resolve(s.CallerDir))
+	rel, err := filepath.Rel(engine.RealPath(rec.Dir), engine.RealPath(s.CallerDir))
 	return err == nil && filepath.IsLocal(rel)
 }
 

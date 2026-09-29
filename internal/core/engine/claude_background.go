@@ -155,11 +155,11 @@ func (Claude) RecoverBackgroundID(rec review.Record, res exec.Result) (string, b
 		return "", false
 	}
 
-	dir := Resolve(rec.Dir)
+	dir := RealPath(rec.Dir)
 	cutoff := rec.StartedAt.Add(-startTolerance).UnixMilli()
 	best, bestAt := "", int64(0)
 	for _, entry := range entries {
-		if entry.ID == "" || entry.StartedAt < cutoff || Resolve(entry.CWD) != dir {
+		if entry.ID == "" || entry.StartedAt < cutoff || RealPath(entry.CWD) != dir {
 			continue
 		}
 		if best == "" || entry.StartedAt < bestAt {
