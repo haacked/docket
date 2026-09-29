@@ -179,10 +179,12 @@ func TestViewListsTheTeamsScreensKeys(t *testing.T) {
 	}
 }
 
-func TestViewListsTUnderReviewRequests(t *testing.T) {
+func TestViewListsTheReviewRequestsKeys(t *testing.T) {
 	lines := section(t, sized().View(), "Review requests")
 
-	if !hasKey(lines, "t") {
-		t.Errorf("the Review requests section does not list t:\n%s", strings.Join(lines, "\n"))
+	for _, want := range []string{"o", "t"} {
+		if !hasKey(lines, want) {
+			t.Errorf("the Review requests section does not list %q:\n%s", want, strings.Join(lines, "\n"))
+		}
 	}
 }

@@ -162,6 +162,15 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		default:
 			return m, msg.Send(msg.PrefillReview{URL: row.Ref.URL()})
 		}
+	case "o":
+		row, ok := m.Selected()
+		switch {
+		case !ok:
+		case row.RecordID != "":
+			return m, msg.Send(msg.OpenOnGitHub{ID: row.RecordID})
+		default:
+			return m, msg.Send(msg.OpenPullRequest{URL: row.Ref.URL()})
+		}
 	case "r":
 		if m.Loading {
 			return m, nil

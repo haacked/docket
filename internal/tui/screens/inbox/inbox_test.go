@@ -201,6 +201,34 @@ func TestEnterOnAnEmptyListSendsNothing(t *testing.T) {
 	}
 }
 
+// o lets the user read a pull request before they decide whether to review it.
+func TestOOpensTheSelectedPullRequest(t *testing.T) {
+	_, cmd := newModel().Update(key("o"))
+
+	if got, want := sent(t, cmd), (msg.OpenPullRequest{URL: row(1, "").Ref.URL()}); got != want {
+		t.Errorf("o sent %#v, want %#v", got, want)
+	}
+}
+
+// A row with an open record opens its review, the way o does on the dashboard.
+func TestOOnARowWithARecordOpensItsReview(t *testing.T) {
+	m, _ := newModel().Update(key("j"))
+
+	_, cmd := m.Update(key("o"))
+
+	if got, want := sent(t, cmd), (msg.OpenOnGitHub{ID: "rec-2"}); got != want {
+		t.Errorf("o sent %#v, want %#v", got, want)
+	}
+}
+
+func TestOOnAnEmptyListSendsNothing(t *testing.T) {
+	m := New(Styles{}, "claude").SetSections([]requests.Section{{}})
+
+	if _, cmd := m.Update(key("o")); cmd != nil {
+		t.Errorf("o on an empty list sent %#v", cmd())
+	}
+}
+
 func TestSpaceMarksNothingWhenNoEngineHasABackgroundMode(t *testing.T) {
 	m := newModel()
 	m.Engine = ""

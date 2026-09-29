@@ -3,6 +3,7 @@
 package review
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,11 +67,12 @@ func (r Record) Submittable() bool {
 	return r.State == StateDrafted || (r.State == StateReviewing && r.Mode == ModeBackground)
 }
 
-// WebURL is the page that shows the record's review on GitHub. The Files
-// changed tab shows a pending review's comments inline, to its author only.
+// WebURL is the page that shows the record's review on GitHub. A draft opens on
+// the Conversation tab at the pending review. GitHub shows a pending review to
+// its author only.
 func (r Record) WebURL() string {
 	if r.State == StateDrafted {
-		return r.Ref.URL() + "/files"
+		return r.Ref.URL() + "#pullrequestreview-" + strconv.FormatInt(r.ReviewID, 10)
 	}
 	return r.Ref.URL()
 }
