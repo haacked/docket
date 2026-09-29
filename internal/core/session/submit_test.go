@@ -338,6 +338,13 @@ func TestSubmitFromInsideTheCloneWaitsForTheSessionToEnd(t *testing.T) {
 
 func TestCallerInCloneMatchesOnlyTheRecordsOwnClone(t *testing.T) {
 	clone := filepath.Join(t.TempDir(), "clones", "haacked", "docket", "pr-7")
+	if err := os.MkdirAll(filepath.Join(clone, "internal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(filepath.Dir(clone), link); err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name      string
 		callerDir string
@@ -346,6 +353,7 @@ func TestCallerInCloneMatchesOnlyTheRecordsOwnClone(t *testing.T) {
 	}{
 		{name: "the clone", callerDir: clone, tier: tier.Tier2, want: true},
 		{name: "inside the clone", callerDir: filepath.Join(clone, "internal"), tier: tier.Tier2, want: true},
+		{name: "the clone through a symlink", callerDir: filepath.Join(link, "pr-7"), tier: tier.Tier2, want: true},
 		{name: "a sibling sharing the prefix", callerDir: clone + "-other", tier: tier.Tier2},
 		{name: "the parent", callerDir: filepath.Dir(clone), tier: tier.Tier2},
 		// Every tier-1 record shares the scratch directory.

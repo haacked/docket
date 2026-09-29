@@ -7,7 +7,6 @@ import (
 
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/review"
-	"github.com/haacked/docket/internal/core/tier"
 )
 
 // StartBackground launches the review as a detached session.
@@ -147,7 +146,7 @@ func (Claude) ParseStatus(res exec.Result) (map[string]BGStatus, error) {
 // so a match there could belong to another record. Only a directory this record
 // has to itself can answer.
 func (Claude) RecoverBackgroundID(rec review.Record, res exec.Result) (string, bool) {
-	if rec.Dir == "" || rec.Tier != tier.Tier2 || rec.StartedAt.IsZero() {
+	if !rec.HasClone() || rec.StartedAt.IsZero() {
 		return "", false
 	}
 	var entries []agentEntry

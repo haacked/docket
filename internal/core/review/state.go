@@ -113,6 +113,12 @@ func (r Record) InProgress() bool {
 	return r.State == StatePreparing || r.State == StateReviewing
 }
 
+// HasClone reports whether the record has a clone of its own. Every tier-1
+// record shares the scratch directory.
+func (r Record) HasClone() bool {
+	return r.Tier == tier.Tier2 && r.Dir != ""
+}
+
 // Adopted reports whether the record took over an existing review and has run no
 // review session of its own. The dashboard opens the re-review choice for it and
 // the service refuses to resume it, so the rule is stated once.

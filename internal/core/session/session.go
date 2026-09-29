@@ -1211,23 +1211,17 @@ func (s *Service) Abandon(ctx context.Context, rec review.Record) (review.Record
 // which tears it down at its own session end. docket reports that worktree and
 // never deletes it.
 func (s *Service) cleanup(rec review.Record) error {
-	if !hasClone(rec) {
+	if !rec.HasClone() {
 		return nil
 	}
 	return s.Cloner.Remove(rec.Dir)
-}
-
-// hasClone reports whether rec has a clone of its own. Every tier-1 record
-// shares the scratch directory.
-func hasClone(rec review.Record) bool {
-	return rec.Tier == tier.Tier2 && rec.Dir != ""
 }
 
 // callerInClone reports whether the agent session this service runs under works
 // inside rec's clone. A tier-1 record has no directory of its own, so a match on
 // the scratch directory would not say which record the caller belongs to.
 func (s *Service) callerInClone(rec review.Record) bool {
-	if s.CallerDir == "" || !hasClone(rec) {
+	if s.CallerDir == "" || !rec.HasClone() {
 		return false
 	}
 	rel, err := filepath.Rel(engine.Resolve(rec.Dir), engine.Resolve(s.CallerDir))

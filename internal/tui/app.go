@@ -27,7 +27,6 @@ import (
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
-	"github.com/haacked/docket/internal/core/tier"
 	"github.com/haacked/docket/internal/tui/format"
 	"github.com/haacked/docket/internal/tui/msg"
 	"github.com/haacked/docket/internal/tui/screens/dashboard"
@@ -1501,7 +1500,7 @@ func (a App) explainResume(rec review.Record) tea.Cmd {
 }
 
 func wouldAbandon(rec review.Record) string {
-	if rec.Tier == tier.Tier2 && rec.Dir != "" {
+	if rec.HasClone() {
 		return fmt.Sprintf("Would abandon %s and delete %s", rec.Ref, rec.Dir)
 	}
 	return fmt.Sprintf("Would abandon %s; docket created nothing to delete", rec.Ref)

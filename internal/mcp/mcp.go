@@ -92,7 +92,7 @@ const startDescription = `Starts a review-code review of a pull request in a bac
 
 When the pull request already has review notes or a review of yours, this refuses and says what it found. Ask the user whether to append (review what changed since) or overwrite (review the whole pull request again), then call it again with existing set to the answer.
 
-claude runs a background session only in a directory someone has trusted, and it asks that question only in a terminal. When it refuses, the error names the directory. The user runs claude there once and accepts the trust prompt, then start_review starts the same review again. Each pull request docket clones gets a directory of its own, so this can happen once for each of them.
+claude runs a background session only in a directory someone has trusted, and it asks whether to trust a directory only in a terminal. When it refuses, the error names the directory. The user runs claude there once and accepts the trust prompt, then start_review starts the same review again. Each pull request docket clones gets a directory of its own, so this can happen once for each of them.
 
 A pull request docket already has open is refused. The error says how the user clears it.`
 
@@ -100,6 +100,11 @@ const submitDescription = `Submits the pending review docket is tracking for a p
 
 The review must be submittable in list_reviews. Leave body out to keep the summary review-code posted with the draft. GitHub refuses an approval of your own pull request. This publishes the review under the user's name and cannot be undone, so confirm the event and the body with the user first.`
 
+// server holds the tool handlers. Each handler detaches its context from the
+// request. The SDK cancels a request's context when the client cancels the call
+// or disconnects. A cancelled context kills the command that is running, which
+// could stop a submit after GitHub accepted it or an archive before it removed
+// the clone.
 type server struct {
 	svc    *session.Service
 	engine string
@@ -168,6 +173,7 @@ func version() string {
 func (s *server) list(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, listOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ctx = context.WithoutCancel(ctx)
 
 	records, statuses, err := s.svc.PollBackground(ctx)
 	if records == nil {
@@ -188,6 +194,7 @@ func (s *server) list(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (
 func (s *server) start(ctx context.Context, _ *sdk.CallToolRequest, in startInput) (*sdk.CallToolResult, startOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ctx = context.WithoutCancel(ctx)
 
 	ref, err := in.ref(s.svc.Config().DefaultRepo)
 	if err != nil {
@@ -263,7 +270,7 @@ func alreadyOpen(rec review.Record) error {
 func started(rec review.Record, plan string, err error) (*sdk.CallToolResult, startOutput, error) {
 	switch {
 	case errors.Is(err, session.ErrUntrusted):
-		return nil, startOutput{}, fmt.Errorf("%w. %s asks that question only in a terminal, so run %s in that directory once and accept its trust prompt, then call start_review again", err, rec.Engine, rec.Engine)
+		return nil, startOutput{}, fmt.Errorf("%w. %s asks whether to trust a directory only in a terminal, so run %s in that directory once and accept its trust prompt, then call start_review again", err, rec.Engine, rec.Engine)
 	case errors.Is(err, session.ErrClosed):
 		return nil, startOutput{}, fmt.Errorf("%w. To close it, %s", err, abandonRow)
 	case err != nil && rec.State == review.StateNotStarted:
@@ -289,7 +296,10 @@ func askExisting(ref pr.Ref, found review.Found) error {
 // that cannot reach the agent still returns the records, so its failure is
 // reported only when rec is still not submittable. A GitHub read that fails
 // puts its error on the record rather than on the poll, so an error the record
-// did not carry before the poll is reported too.
+// did not carry before the poll is reported too. A record the poll leaves
+// submitted also carries an error. That error says why Archive kept the record
+// open, so poll reports the record as already on GitHub before that rule
+// applies.
 func (s *server) poll(ctx context.Context, rec review.Record) (review.Record, error) {
 	records, _, pollErr := s.svc.PollBackground(ctx)
 	if records == nil {
@@ -301,6 +311,9 @@ func (s *server) poll(ctx context.Context, rec review.Record) (review.Record, er
 	}
 	if polled.Submittable() {
 		return polled, nil
+	}
+	if polled.State == review.StateSubmitted {
+		return polled, fmt.Errorf("the review of %s is already on GitHub, so there is nothing to submit. %s", polled.Ref, polled.Err)
 	}
 	if pollErr != nil {
 		return polled, fmt.Errorf("docket could not ask %s whether the session finished: %w", polled.Engine, pollErr)
@@ -314,6 +327,7 @@ func (s *server) poll(ctx context.Context, rec review.Record) (review.Record, er
 func (s *server) submit(ctx context.Context, _ *sdk.CallToolRequest, in submitInput) (*sdk.CallToolResult, Review, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ctx = context.WithoutCancel(ctx)
 
 	ref, err := in.ref(s.svc.Config().DefaultRepo)
 	if err != nil {
