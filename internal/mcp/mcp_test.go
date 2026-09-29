@@ -421,7 +421,7 @@ func TestStartReviewExplainsAnUntrustedDirectoryAndStartsItAgainAfterwards(t *te
 	if len(records) != 1 || records[0].State != review.StateNotStarted {
 		t.Fatalf("records = %+v, want one that did not start", records)
 	}
-	refused(t, res, records[0].Dir, "accept its trust prompt")
+	refused(t, res, records[0].Dir, "accept its trust prompt", "claude --setting-sources user /exit", "enter on the review's row")
 	omits(t, res, "press x")
 
 	delete(f.runner.Errs, "--bg")
@@ -723,6 +723,49 @@ func TestSubmitReviewSaysWhenTheReviewClosedWhileItRead(t *testing.T) {
 
 	refused(t, res, "archived")
 	omits(t, res, "start_review")
+}
+
+// The same submission from inside the clone leaves the record submitted, because
+// the archive waits for the session. Its error is that reason, not a failed read
+// of GitHub.
+func TestSubmitReviewFromInsideTheCloneSaysTheSessionsSubmissionIsOnGitHub(t *testing.T) {
+	f := newFixture(t)
+	f.started(t)
+	f.svc.CallerDir = f.records(t)[0].Dir
+	now := time.Now()
+	f.gh.post(review.GHReview{ID: 55, State: "COMMENTED", SubmittedAt: &now})
+	f.agents("done", "idle")
+
+	res := f.submit(t, map[string]any{"event": review.EventComment})
+
+	refused(t, res, "already on GitHub")
+	omits(t, res, "could not tell", "start_review")
+}
+
+// docket reads the draft of a review session it opened in a terminal only when
+// that session ends. submit_review must not tell that session there is no draft.
+func TestSubmitReviewTellsAnInteractiveSessionWhenDocketReadsItsDraft(t *testing.T) {
+	f := newFixture(t)
+	ref, err := pr.ParseRef(pull, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := f.svc.Prepare(t.Context(), ref, "claude", review.ModeInteractive, review.IntentReview)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if _, _, err := f.svc.LaunchSpec(t.Context(), rec); err != nil {
+		t.Fatalf("LaunchSpec: %v", err)
+	}
+	f.gh.post(review.GHReview{ID: 55, State: review.StatePending})
+
+	res := f.submit(t, map[string]any{"event": review.EventComment})
+
+	refused(t, res, "when that session ends")
+	omits(t, res, "no pending review")
+	if len(f.gh.submits) != 0 {
+		t.Errorf("submits = %v, want none", f.gh.submits)
+	}
 }
 
 func TestSubmitReviewRefusesAPullRequestDocketIsNotReviewing(t *testing.T) {

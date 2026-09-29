@@ -889,6 +889,7 @@ func (s *Service) rearm(rec review.Record, intent review.Intent, mode review.Mod
 	rec.Mode = mode
 	rec.SessionID = ""
 	rec.Err = ""
+	rec.CloneInUse = false
 	// The record is written before the launch that marks it reviewing. Until
 	// then it must not read as drafted, or another instance could submit the
 	// draft this review is about to replace.

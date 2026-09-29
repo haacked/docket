@@ -371,9 +371,35 @@ func TestRefreshAllLeavesAnArchiveThatWaitsForASession(t *testing.T) {
 	}
 }
 
+// u on a row whose archive waited reviews it again. The new review has no
+// session in the clone yet, so R must read it again.
+func TestRereviewClearsTheCloneInUse(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := drafted(t, svc, ghc, unlisted)
+	svc.CallerDir = rec.Dir
+	if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	svc.CallerDir = ""
+
+	if _, err := svc.Rereview(context.Background(), storedByID(t, svc, rec.ID), review.IntentAppend, review.ModeInteractive); err != nil {
+		t.Fatalf("Rereview: %v", err)
+	}
+
+	if got := storedByID(t, svc, rec.ID); got.CloneInUse {
+		t.Errorf("stored record is %q with clone in use, want the flag cleared", got.State)
+	}
+}
+
 func TestCallerInCloneMatchesOnlyTheRecordsOwnClone(t *testing.T) {
 	clone := filepath.Join(t.TempDir(), "clones", "haacked", "docket", "pr-7")
 	if err := os.MkdirAll(filepath.Join(clone, "internal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The sibling has to exist, or RealPath leaves it unresolved beside a clone
+	// that resolves through a symlink such as macOS's /var.
+	if err := os.MkdirAll(clone+"-other", 0o755); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(t.TempDir(), "link")

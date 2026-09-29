@@ -4,6 +4,7 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -92,7 +93,7 @@ const startDescription = `Starts a review-code review of a pull request in a bac
 
 When the pull request already has review notes or a review of yours, this refuses and says what it found. Ask the user whether to append (review what changed since) or overwrite (review the whole pull request again), then call it again with existing set to the answer.
 
-claude runs a background session only in a directory someone has trusted, and it asks whether to trust a directory only in a terminal. When it refuses, the error names the directory. The user runs claude there once and accepts the trust prompt, then start_review starts the same review again. Each pull request docket clones gets a directory of its own, so this can happen once for each of them.
+claude runs a background session only in a directory someone has trusted, and it asks whether to trust a directory only in a terminal. When it refuses, the error names the directory and the command the user runs there once to accept the trust prompt, then start_review starts the same review again. Tell the user to run that command rather than a plain claude, which would run the hooks in the pull request's own settings. Each pull request docket clones gets a directory of its own, so this can happen once for each of them.
 
 A pull request docket already has open is refused. The error says how the user clears it.`
 
@@ -211,7 +212,7 @@ func (s *server) start(ctx context.Context, _ *sdk.CallToolRequest, in startInpu
 			return nil, startOutput{}, alreadyOpen(rec)
 		}
 		rec, err := s.svc.Restart(ctx, rec)
-		return started(rec, "", err)
+		return s.started(rec, "", err)
 	}
 
 	found, err := s.svc.Existing(ctx, ref)
@@ -236,7 +237,7 @@ func (s *server) start(ctx context.Context, _ *sdk.CallToolRequest, in startInpu
 		return nil, startOutput{}, err
 	}
 	rec, err = s.svc.StartBackground(ctx, rec)
-	return started(rec, plan.Description(), err)
+	return s.started(rec, plan.Description(), err)
 }
 
 // abandonRow is how the user closes an open review that no tool can move on.
@@ -249,6 +250,11 @@ const startOver = "To start over, " + abandonRow + ", then call start_review aga
 // names the next step for the state the review is in. No tool abandons a
 // record, so a review that cannot move on names the dashboard key that does.
 func alreadyOpen(rec review.Record) error {
+	// A submitted record's Err says why the archive has not finished, which is not
+	// a failure.
+	if rec.State == review.StateSubmitted {
+		return fmt.Errorf("the review of %s is already on GitHub, so there is nothing to start. %s", rec.Ref, cmp.Or(rec.Err, "Pressing r on its row in docket finishes cleaning up"))
+	}
 	msg := fmt.Sprintf("docket already has a review of %s open, and its state is %s", rec.Ref, rec.State)
 	if rec.Err != "" {
 		msg += " after this error: " + rec.Err
@@ -258,8 +264,6 @@ func alreadyOpen(rec review.Record) error {
 		return fmt.Errorf("%s. submit_review submits it", msg)
 	case rec.State == review.StateReviewing, rec.State == review.StatePreparing && rec.Err == "":
 		return fmt.Errorf("%s. list_reviews shows where it stands", msg)
-	case rec.State == review.StateSubmitted:
-		return fmt.Errorf("%s. The review is already on GitHub, so there is nothing to start. Pressing r on its row in docket finishes cleaning up", msg)
 	default:
 		return fmt.Errorf("%s. %s", msg, startOver)
 	}
@@ -267,10 +271,10 @@ func alreadyOpen(rec review.Record) error {
 
 // started reports a background launch. A launch that claude refused for trust
 // says what the user has to run, because no terminal here can ask them.
-func started(rec review.Record, plan string, err error) (*sdk.CallToolResult, startOutput, error) {
+func (s *server) started(rec review.Record, plan string, err error) (*sdk.CallToolResult, startOutput, error) {
 	switch {
 	case errors.Is(err, session.ErrUntrusted):
-		return nil, startOutput{}, fmt.Errorf("%w. %s asks whether to trust a directory only in a terminal, so run %s in that directory once and accept its trust prompt, then call start_review again", err, rec.Engine, rec.Engine)
+		return nil, startOutput{}, fmt.Errorf("%w. %s asks whether to trust a directory only in a terminal. %s", err, rec.Engine, s.trustAdvice(rec))
 	case errors.Is(err, session.ErrClosed):
 		return nil, startOutput{}, fmt.Errorf("%w. To close it, %s", err, abandonRow)
 	case err != nil && rec.State == review.StateNotStarted:
@@ -283,6 +287,18 @@ func started(rec review.Record, plan string, err error) (*sdk.CallToolResult, st
 		return nil, startOutput{}, err
 	}
 	return nil, startOutput{Review: view(rec, nil), Plan: plan}, nil
+}
+
+// trustAdvice says how the user trusts rec's directory. It names the command
+// TrustSpec builds. A plain claude there would load the pull request's own
+// settings and run the hooks its author committed.
+func (s *server) trustAdvice(rec review.Record) string {
+	const row = "press enter on the review's row in docket, which asks the same question and then starts the review"
+	spec, err := s.svc.TrustSpec(rec)
+	if err != nil {
+		return "Have the user " + row
+	}
+	return fmt.Sprintf("Have the user run `%s` in that directory once and accept its trust prompt, then call start_review again, or %s", strings.Join(append([]string{spec.Path}, spec.Args...), " "), row)
 }
 
 // askExisting refuses a start that has to choose what to do with the review that
@@ -340,6 +356,10 @@ func (s *server) submit(ctx context.Context, _ *sdk.CallToolRequest, in submitIn
 	rec, ok := review.OpenRecord(records, ref)
 	if !ok {
 		return nil, Review{}, fmt.Errorf("docket has no open review of %s; start_review starts one", ref)
+	}
+	// docket reads an interactive session's draft only when the session exits.
+	if rec.State == review.StateReviewing && rec.Mode == review.ModeInteractive {
+		return nil, Review{}, fmt.Errorf("%s is still in the review session docket opened in a terminal. docket reads its draft from GitHub when that session ends. The user can then press s on its row in docket, or an agent can call submit_review again", ref)
 	}
 	// Only a poll reads the draft a background session posted. Until then the
 	// record holds no review id, and Submit refuses it although the draft is on
