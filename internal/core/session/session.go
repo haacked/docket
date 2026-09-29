@@ -169,14 +169,11 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 		return requests.Fetched{}, err
 	}
 	f := requests.Fetched{Mine: mine}
-	check := caughtUpCheck{s: s, me: me}
-	for _, p := range mine {
-		check.checked = append(check.checked, p.Ref)
-	}
+	check := caughtUpCheck{s: s, me: me, skip: refsOf(mine)}
 	for _, team := range s.Config().Teams {
 		query := "team-review-requested:" + team + " -author:" + me
 		prs, err := s.GH.ReviewRequests(ctx, query)
-		if err == nil && len(prs) > 0 {
+		if err == nil {
 			if prs, err = check.drop(ctx, prs); err != nil {
 				err = fmt.Errorf("could not tell which of these you already reviewed: %w", err)
 			}
@@ -200,39 +197,49 @@ type caughtUpCheck struct {
 	s         *Service
 	me        string
 	searched  bool
-	reviewed  []requests.PR
+	reviewed  []pr.Ref
 	searchErr error
-	checked   []pr.Ref
+	skip      []pr.Ref
 	caught    []pr.Ref
 }
 
 // drop checks only the pull requests that are both in prs and in the reviewed-by
-// search, because each check costs up to two calls. A check that fails keeps
-// every row.
+// search, because each check costs up to two calls. A check that fails ends the
+// checks of this team's rows. The team then keeps every row that no check found
+// caught up.
 func (c *caughtUpCheck) drop(ctx context.Context, prs []requests.PR) ([]requests.PR, error) {
+	if len(prs) == 0 {
+		return prs, nil
+	}
 	if !c.searched {
 		c.searched = true
-		c.reviewed, c.searchErr = c.s.GH.ReviewRequests(ctx, "reviewed-by:"+c.me+" -author:"+c.me)
+		var reviewed []requests.PR
+		reviewed, c.searchErr = c.s.GH.ReviewRequests(ctx, "reviewed-by:"+c.me+" -author:"+c.me)
+		c.reviewed = refsOf(reviewed)
 	}
 	if c.searchErr != nil {
 		return prs, c.searchErr
 	}
 	for _, p := range prs {
-		if slices.ContainsFunc(c.checked, p.Ref.Equal) || !slices.ContainsFunc(c.reviewed, func(r requests.PR) bool { return r.Ref.Equal(p.Ref) }) {
+		if slices.ContainsFunc(c.skip, p.Ref.Equal) || !slices.ContainsFunc(c.reviewed, p.Ref.Equal) {
 			continue
 		}
+		c.skip = append(c.skip, p.Ref)
 		caught, err := c.caughtUp(ctx, p.Ref)
 		if err != nil {
-			return prs, err
+			return c.withoutCaught(prs), err
 		}
-		c.checked = append(c.checked, p.Ref)
 		if caught {
 			c.caught = append(c.caught, p.Ref)
 		}
 	}
+	return c.withoutCaught(prs), nil
+}
+
+func (c *caughtUpCheck) withoutCaught(prs []requests.PR) []requests.PR {
 	return slices.DeleteFunc(slices.Clone(prs), func(p requests.PR) bool {
 		return slices.ContainsFunc(c.caught, p.Ref.Equal)
-	}), nil
+	})
 }
 
 // caughtUp reads the reviews first, because a pull request with none of the
@@ -251,6 +258,14 @@ func (c *caughtUpCheck) caughtUp(ctx context.Context, ref pr.Ref) (bool, error) 
 		return false, err
 	}
 	return slices.Contains(commits, info.HeadRefOid), nil
+}
+
+func refsOf(prs []requests.PR) []pr.Ref {
+	refs := make([]pr.Ref, 0, len(prs))
+	for _, p := range prs {
+		refs = append(refs, p.Ref)
+	}
+	return refs
 }
 
 // Teams lists the teams the user belongs to on GitHub, as "org/team" slugs. It

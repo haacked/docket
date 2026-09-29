@@ -104,7 +104,7 @@ func TestTheSearchAfterSaveTeamsLooksForTheSavedTeams(t *testing.T) {
 		t.Fatalf("Requests: %v", err)
 	}
 
-	want := []string{"user-review-requested:haacked", "team-review-requested:PostHog/team-feature-flags -author:haacked"}
+	want := []string{"user-review-requested:haacked", teamQuery("PostHog/team-feature-flags")}
 	if !slices.Equal(fake.searches, want) {
 		t.Errorf("searches = %v, want %v", fake.searches, want)
 	}
