@@ -114,6 +114,7 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 		help:  help.New(help.Styles{Group: s.Group, Label: s.Label}),
 		reqs: inbox.New(inbox.Styles{
 			Group:    s.Group,
+			Assignee: s.Label,
 			Row:      s.Row,
 			Selected: s.Selected,
 			Dim:      s.Dim,

@@ -1028,6 +1028,9 @@ func TestRequestsSearchesForTheUserAndThenEachTeamInOrder(t *testing.T) {
 	if !slices.Equal(fake.searches, want) {
 		t.Errorf("searches = %v, want %v", fake.searches, want)
 	}
+	if f.Login != "haacked" {
+		t.Errorf("login = %q, want haacked for requests.Group to find the user's assignments", f.Login)
+	}
 	if len(f.Mine) != 1 || f.Mine[0].Ref != mine.Ref {
 		t.Errorf("mine = %v", f.Mine)
 	}

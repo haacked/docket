@@ -20,14 +20,21 @@ import (
 
 type Styles struct {
 	Group    lipgloss.Style
+	Assignee lipgloss.Style
 	Row      lipgloss.Style
 	Selected lipgloss.Style
 	Dim      lipgloss.Style
 }
 
 type Model struct {
+	// Sections is what the screen draws: every section SetSections was given,
+	// less the draft pull requests while ShowDrafts is false.
 	Sections []requests.Section
-	Cursor   int
+	all      []requests.Section
+	// ShowDrafts is false until the user presses d, so the list starts with only
+	// the pull requests that are ready for review.
+	ShowDrafts bool
+	Cursor     int
 	// Marked holds the URLs the user marked with space. A key on the URL rather
 	// than the cursor position keeps each mark on its pull request when a
 	// refresh reorders the rows.
@@ -67,7 +74,10 @@ func New(styles Styles, engine string) Model {
 // open record, because a batch would skip it and the mark would claim otherwise.
 func (m Model) SetSections(sections []requests.Section) Model {
 	selected, had := m.Selected()
-	m.Sections = sections
+	m.all, m.Sections = sections, sections
+	if !m.ShowDrafts {
+		m.Sections = withoutDrafts(sections)
+	}
 
 	rows := m.rows()
 	for url := range m.Marked {
@@ -83,6 +93,34 @@ func (m Model) SetSections(sections []requests.Section) Model {
 	}
 	m.Cursor = min(max(m.Cursor, 0), max(0, len(rows)-1))
 	return m
+}
+
+// withoutDrafts drops the draft pull requests from sections, and any group
+// they leave empty. It keeps every section, so a section's index is the same in
+// both lists.
+func withoutDrafts(sections []requests.Section) []requests.Section {
+	out := make([]requests.Section, 0, len(sections))
+	for _, s := range sections {
+		var groups []requests.AssigneeGroup
+		for _, g := range s.Groups {
+			rows := slices.DeleteFunc(slices.Clone(g.Rows), func(r requests.Row) bool { return r.IsDraft })
+			if len(rows) > 0 {
+				g.Rows = rows
+				groups = append(groups, g)
+			}
+		}
+		s.Groups = groups
+		out = append(out, s)
+	}
+	return out
+}
+
+// hiddenIn counts the drafts that withoutDrafts dropped from section i.
+func (m Model) hiddenIn(i int) int {
+	if m.ShowDrafts || i >= len(m.all) {
+		return 0
+	}
+	return len(m.all[i].Rows()) - len(m.Sections[i].Rows())
 }
 
 // SetExisting switches the screen to asking what to do with the marked pull
@@ -109,7 +147,7 @@ func (m Model) Selected() (requests.Row, bool) {
 func (m Model) rows() []requests.Row {
 	var rows []requests.Row
 	for _, s := range m.Sections {
-		rows = append(rows, s.Rows...)
+		rows = append(rows, s.Rows()...)
 	}
 	return rows
 }
@@ -176,6 +214,9 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, msg.Send(msg.RefreshRequests{})
+	case "d":
+		m.ShowDrafts = !m.ShowDrafts
+		return m.SetSections(m.all), nil
 	case "t":
 		return m, msg.Send(msg.OpenTeams{})
 	case "esc":
@@ -236,29 +277,47 @@ func (m Model) View() string {
 	var lines []string
 	cursorLine := 0
 	index := 0
-	for _, s := range m.Sections {
+	for i, s := range m.Sections {
 		title := "Requested of me"
 		if s.Team != "" {
 			title = s.Team
 		}
-		lines = append(lines, m.Styles.Group.Render(fmt.Sprintf("%s (%d)", title, len(s.Rows))))
+		count, hidden := len(s.Rows()), m.hiddenIn(i)
+		heading := m.Styles.Group.Render(fmt.Sprintf("%s (%d)", title, count))
+		if hidden > 0 {
+			heading += m.Styles.Dim.Render(fmt.Sprintf(" · %d %s hidden", hidden, format.Plural(hidden, "draft")))
+		}
+		lines = append(lines, heading)
 		switch {
 		case s.Err != nil:
 			lines = append(lines, m.Styles.Dim.Render(format.Truncate("  "+format.OneLine(s.Err), format.Width(m.Width))))
-		case len(s.Rows) == 0:
+		case count == 0 && hidden == 0:
 			lines = append(lines, m.Styles.Dim.Render("  none"))
 		}
-		for _, row := range s.Rows {
-			if index == m.Cursor {
-				cursorLine = len(lines)
+		for _, g := range s.Groups {
+			lines = append(lines, m.Styles.Assignee.Render(fmt.Sprintf("  %s (%d)", assignedTo(g), len(g.Rows))))
+			for _, row := range g.Rows {
+				if index == m.Cursor {
+					cursorLine = len(lines)
+				}
+				lines = append(lines, m.row(row, index == m.Cursor))
+				index++
 			}
-			lines = append(lines, m.row(row, index == m.Cursor))
-			index++
 		}
 		lines = append(lines, "")
 	}
 
 	return format.Pane(m.header(), lines, cursorLine, m.Height)
+}
+
+func assignedTo(g requests.AssigneeGroup) string {
+	switch {
+	case g.Mine:
+		return "Assigned to me"
+	case g.Assignee == "":
+		return "Unassigned"
+	}
+	return "Assigned to " + g.Assignee
 }
 
 // header says what a mark does, because space and enter do something different
@@ -307,6 +366,9 @@ func (m Model) row(row requests.Row, selected bool) string {
 	if selected {
 		cursor = "> "
 		style = m.Styles.Selected
+	}
+	if row.IsDraft {
+		style = style.Faint(true)
 	}
 	mark := "[ ]"
 	if m.Marked[row.Ref.URL()] {

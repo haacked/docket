@@ -13,7 +13,7 @@ import (
 // the way they once did. choosing means the screen is asking what to do with a
 // review that already exists. That question lists its own keys. The screen's
 // other keys do nothing until the user answers it.
-func helpFor(screen msg.Screen, showArchived, choosing bool) []help.Entry {
+func helpFor(screen msg.Screen, showArchived, showDrafts, choosing bool) []help.Entry {
 	if choosing {
 		return []help.Entry{help.Quit}
 	}
@@ -25,7 +25,14 @@ func helpFor(screen msg.Screen, showArchived, choosing bool) []help.Entry {
 	case msg.Notes:
 		return append(help.Footer(help.Notes), help.Quit)
 	case msg.Requests:
-		return append(help.Footer(help.Requests), help.Quit)
+		drafts := help.Entry{Key: "d", Short: "show drafts"}
+		if showDrafts {
+			drafts.Short = "hide drafts"
+		}
+		// ? and esc are the table's last two footer entries. The drafts toggle
+		// goes in before them, where "d" sits in the table.
+		entries := help.Footer(help.Requests)
+		return append(slices.Insert(entries, len(entries)-2, drafts), help.Quit)
 	case msg.Teams:
 		return append(help.Footer(help.Teams), help.Quit)
 	case msg.Help:
@@ -48,7 +55,7 @@ func helpFor(screen msg.Screen, showArchived, choosing bool) []help.Entry {
 // style the full help screen gives them, so they stand out from their labels.
 func (a App) footer() string {
 	var hints []string
-	for _, e := range helpFor(a.screen, a.dash.ShowArchived, a.choosing()) {
+	for _, e := range helpFor(a.screen, a.dash.ShowArchived, a.reqs.ShowDrafts, a.choosing()) {
 		hints = append(hints, a.styles.Label.Render(e.Key)+" "+a.styles.Footer.Render(e.Short))
 	}
 	return format.Wrap(hints, a.styles.Footer.Render(" · "), format.Width(a.inner()))

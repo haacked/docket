@@ -4,7 +4,9 @@
 package requests
 
 import (
+	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/haacked/docket/internal/core/pr"
@@ -16,6 +18,7 @@ type PR struct {
 	Ref       pr.Ref
 	Title     string
 	Author    string
+	Assignees []string
 	IsDraft   bool
 	UpdatedAt time.Time
 }
@@ -30,9 +33,11 @@ type Team struct {
 }
 
 // Fetched is what one refresh read from GitHub: the requests that name the user
-// and each configured team's. It carries no records, so the root can regroup the
-// screen when the index changes without searching GitHub again.
+// and each configured team's. Login is the user the searches named. It carries no
+// records, so the root can regroup the screen when the index changes without
+// searching GitHub again.
 type Fetched struct {
+	Login string
 	Mine  []PR
 	Teams []Team
 }
@@ -48,20 +53,38 @@ type Row struct {
 // Section is one heading on the screen. Team is empty for the requests that name
 // the user. Err is the team's Err.
 type Section struct {
-	Team string
-	Rows []Row
-	Err  error
+	Team   string
+	Groups []AssigneeGroup
+	Err    error
+}
+
+// Rows lists the section's rows in the order the screen draws them.
+func (s Section) Rows() []Row {
+	var rows []Row
+	for _, g := range s.Groups {
+		rows = append(rows, g.Rows...)
+	}
+	return rows
+}
+
+// AssigneeGroup is the rows of one section that share an assignee. Mine marks
+// the pull requests assigned to the user. Assignee is empty for those and for the
+// pull requests assigned to nobody.
+type AssigneeGroup struct {
+	Mine     bool
+	Assignee string
+	Rows     []Row
 }
 
 // Group builds the requests that name the user as the first section and then a
 // section per team in the order given. A pull request that asks for both the user
 // and a team appears only in the first section, and one that asks for two teams
-// appears only under the first of them. Each section lists the most recently
-// updated pull request first.
+// appears only under the first of them. Each section groups its rows by assignee
+// (see byAssignee).
 func Group(f Fetched, records []review.Record) []Section {
 	var seen []pr.Ref
 	section := func(team string, prs []PR) Section {
-		s := Section{Team: team}
+		var rows []Row
 		for _, p := range prs {
 			if slices.ContainsFunc(seen, p.Ref.Equal) {
 				continue
@@ -71,10 +94,9 @@ func Group(f Fetched, records []review.Record) []Section {
 			if rec, ok := review.OpenRecord(records, p.Ref); ok {
 				row.State, row.RecordID = rec.State, rec.ID
 			}
-			s.Rows = append(s.Rows, row)
+			rows = append(rows, row)
 		}
-		slices.SortStableFunc(s.Rows, func(a, b Row) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
-		return s
+		return Section{Team: team, Groups: byAssignee(rows, f.Login)}
 	}
 
 	sections := []Section{section("", f.Mine)}
@@ -84,4 +106,38 @@ func Group(f Fetched, records []review.Record) []Section {
 		sections = append(sections, s)
 	}
 	return sections
+}
+
+// byAssignee puts the pull requests assigned to me first, then the ones assigned
+// to nobody, and then a group for each other assignee in alphabetical order. A
+// pull request with several assignees appears only once: under me when I am one
+// of them, and otherwise under the first assignee GitHub lists. Each group lists
+// the most recently updated pull request first.
+func byAssignee(rows []Row, me string) []AssigneeGroup {
+	slices.SortStableFunc(rows, func(a, b Row) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
+	var mine, nobody []Row
+	others := map[string][]Row{}
+	for _, row := range rows {
+		switch {
+		case slices.ContainsFunc(row.Assignees, func(login string) bool { return strings.EqualFold(login, me) }):
+			mine = append(mine, row)
+		case len(row.Assignees) == 0:
+			nobody = append(nobody, row)
+		default:
+			others[row.Assignees[0]] = append(others[row.Assignees[0]], row)
+		}
+	}
+
+	var groups []AssigneeGroup
+	if len(mine) > 0 {
+		groups = append(groups, AssigneeGroup{Mine: true, Rows: mine})
+	}
+	if len(nobody) > 0 {
+		groups = append(groups, AssigneeGroup{Rows: nobody})
+	}
+	caseless := func(a, b string) int { return strings.Compare(strings.ToLower(a), strings.ToLower(b)) }
+	for _, login := range slices.SortedFunc(maps.Keys(others), caseless) {
+		groups = append(groups, AssigneeGroup{Assignee: login, Rows: others[login]})
+	}
+	return groups
 }

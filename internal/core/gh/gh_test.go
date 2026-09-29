@@ -158,7 +158,7 @@ func TestErrorsSayWhichPullRequest(t *testing.T) {
 // The search asks for every page at once, and gh wraps each page's object in an
 // outer array, so the items of every page have to be gathered.
 func TestReviewRequestsReadsEverySearchPage(t *testing.T) {
-	body := `[{"total_count":2,"items":[{"html_url":"https://github.com/haacked/docket/pull/7","title":"Add a thing","draft":true,"user":{"login":"someone"},"updated_at":"2026-09-20T10:00:00Z"}]},` +
+	body := `[{"total_count":2,"items":[{"html_url":"https://github.com/haacked/docket/pull/7","title":"Add a thing","draft":true,"user":{"login":"someone"},"assignees":[{"login":"alice"},{"login":"bob"}],"updated_at":"2026-09-20T10:00:00Z"}]},` +
 		`{"total_count":2,"items":[{"html_url":"https://github.com/PostHog/posthog/pull/42","title":"Fix it","draft":false,"user":{"login":"other"},"updated_at":"2026-09-21T10:00:00Z"}]}]`
 	fake := &exec.Fake{Results: map[string]exec.Result{"search/issues": {Stdout: body}}}
 
@@ -180,7 +180,10 @@ func TestReviewRequestsReadsEverySearchPage(t *testing.T) {
 	if want := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC); !first.UpdatedAt.Equal(want) {
 		t.Errorf("updated = %v, want %v", first.UpdatedAt, want)
 	}
-	if prs[1].Ref.String() != "PostHog/posthog#42" || prs[1].IsDraft {
+	if !slices.Equal(first.Assignees, []string{"alice", "bob"}) {
+		t.Errorf("assignees = %v, want alice and bob", first.Assignees)
+	}
+	if prs[1].Ref.String() != "PostHog/posthog#42" || prs[1].IsDraft || len(prs[1].Assignees) != 0 {
 		t.Errorf("second = %+v", prs[1])
 	}
 }

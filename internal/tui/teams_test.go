@@ -365,7 +365,7 @@ func TestTheTeamsScreensReadCarriesTheSpinnersFrame(t *testing.T) {
 }
 
 func TestTheTeamsFooterListsItsKeys(t *testing.T) {
-	entries := helpFor(msg.Teams, false, false)
+	entries := helpFor(msg.Teams, false, false, false)
 
 	var keys []string
 	for _, e := range entries {
@@ -382,7 +382,7 @@ func TestTheTeamsFooterListsItsKeys(t *testing.T) {
 }
 
 func TestTheRequestsFooterListsTheTeamsKey(t *testing.T) {
-	entries := helpFor(msg.Requests, false, false)
+	entries := helpFor(msg.Requests, false, false, false)
 
 	if !slices.ContainsFunc(entries, func(e help.Entry) bool { return e.Key == "t" }) {
 		t.Errorf("footer = %+v, want t", entries)
