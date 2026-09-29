@@ -69,9 +69,10 @@ func (r Record) Submittable() bool {
 
 // WebURL is the page that shows the record's review on GitHub. A draft opens on
 // the Conversation tab at the pending review. GitHub shows a pending review to
-// its author only.
+// its author only. A reviewing record that holds a review id is a draft its
+// session may replace, and it opens the same way.
 func (r Record) WebURL() string {
-	if r.State == StateDrafted {
+	if r.ReviewID != 0 && (r.State == StateDrafted || r.State == StateReviewing) {
 		return r.Ref.URL() + "#pullrequestreview-" + strconv.FormatInt(r.ReviewID, 10)
 	}
 	return r.Ref.URL()

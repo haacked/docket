@@ -26,6 +26,11 @@ func TestWebURLOpensADraftAtItsReview(t *testing.T) {
 			want: "https://github.com/haacked/docket/pull/7",
 		},
 		{
+			name: "a reopened draft still running",
+			rec:  review.Record{Ref: ref, State: review.StateReviewing, ReviewID: 4321},
+			want: "https://github.com/haacked/docket/pull/7#pullrequestreview-4321",
+		},
+		{
 			name: "a review still running",
 			rec:  review.Record{Ref: ref, State: review.StateReviewing},
 			want: "https://github.com/haacked/docket/pull/7",
