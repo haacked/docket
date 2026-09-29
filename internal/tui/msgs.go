@@ -150,8 +150,9 @@ type teamsLoadedMsg struct {
 }
 
 // teamsSavedMsg means config.toml now names teams as the ones the requests
-// screen searches for, or carries why the save failed. It carries its own
-// failure so that an unrelated errMsg cannot clear the save's busy marker.
+// screen searches for, or carries why the save failed. The save answers with
+// this message even when it fails, which is what lets resetBusy leave the
+// teams screen's Busy alone.
 type teamsSavedMsg struct {
 	teams []string
 	err   error

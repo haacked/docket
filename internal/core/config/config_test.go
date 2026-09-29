@@ -3,7 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -291,7 +291,7 @@ func TestSaveKeyCreatesAMissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(cfg.Teams, []string{"o/a"}) {
+	if !slices.Equal(cfg.Teams, []string{"o/a"}) {
 		t.Errorf("teams = %v, want [o/a]", cfg.Teams)
 	}
 }

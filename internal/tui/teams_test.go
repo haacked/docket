@@ -389,42 +389,39 @@ func TestTheRequestsFooterListsTheTeamsKey(t *testing.T) {
 	}
 }
 
-// Saving the teams searches again, so the teams screen waits for the search
-// that is running.
-func TestTheTeamsScreenWaitsForASearch(t *testing.T) {
-	a := app()
-	a.screen = msg.Requests
-	a.reqs.Loading = true
-
-	next, cmd := a.Update(msg.OpenTeams{})
-	a = next.(App)
-
-	if a.screen != msg.Requests {
-		t.Errorf("screen = %v, want the requests screen", a.screen)
+// t refuses while work runs that would answer the screen it opens or take the
+// user off it.
+func TestTheTeamsScreenWaitsForWorkThatWouldAnswerIt(t *testing.T) {
+	tests := []struct {
+		name string
+		busy func(*App)
+	}{
+		// A save searches again, and the running search could answer after it.
+		{"a search", func(a *App) { a.reqs.Loading = true }},
+		// A batch check's answer switches to the requests screen.
+		{"a batch check", func(a *App) { a.reqs.Busy = true }},
+		// A finished save switches to the requests screen.
+		{"a save of the teams", func(a *App) { a.teams.Busy = true }},
 	}
-	if drain(cmd) != nil {
-		t.Error("the refusal read GitHub")
-	}
-	if !strings.Contains(a.View().Content, "Press t again once it finishes") {
-		t.Errorf("the view does not say why t did nothing:\n%s", a.View().Content)
-	}
-}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := app()
+			a.screen = msg.Requests
+			tc.busy(&a)
 
-// A batch check's answer switches to the requests screen, which would take the
-// user off the teams screen.
-func TestTheTeamsScreenWaitsForABatchCheck(t *testing.T) {
-	a := app()
-	a.screen = msg.Requests
-	a.reqs.Busy = true
+			next, cmd := a.Update(msg.OpenTeams{})
+			a = next.(App)
 
-	next, _ := a.Update(msg.OpenTeams{})
-	a = next.(App)
-
-	if a.screen != msg.Requests {
-		t.Errorf("screen = %v, want the requests screen", a.screen)
-	}
-	if !strings.Contains(a.View().Content, "Press t again once it finishes") {
-		t.Errorf("the view does not say why t did nothing:\n%s", a.View().Content)
+			if a.screen != msg.Requests {
+				t.Errorf("screen = %v, want the requests screen", a.screen)
+			}
+			if drain(cmd) != nil {
+				t.Error("the refusal read GitHub")
+			}
+			if !strings.Contains(a.View().Content, "Press t again once it finishes") {
+				t.Errorf("the view does not say why t did nothing:\n%s", a.View().Content)
+			}
+		})
 	}
 }
 
@@ -449,28 +446,12 @@ func TestTheTeamsScreenReusesARunningRead(t *testing.T) {
 	}
 }
 
-func TestTheTeamsScreenWaitsForItsOwnSave(t *testing.T) {
-	a := app()
-	a.screen = msg.Requests
-	a.teams.Busy = true
-
-	next, _ := a.Update(msg.OpenTeams{})
-	a = next.(App)
-
-	if a.screen != msg.Requests {
-		t.Errorf("screen = %v, want the requests screen", a.screen)
-	}
-	if !strings.Contains(a.View().Content, "Press t again once it finishes") {
-		t.Errorf("the view does not say why t did nothing:\n%s", a.View().Content)
-	}
-}
-
 // esc lets the user leave the teams screen while the save runs.
 func TestASaveThatFinishesElsewhereLeavesTheScreenAlone(t *testing.T) {
 	a := onTeams(app())
 	a.screen = msg.Dashboard
 
-	next, _ := a.Update(teamsSavedMsg{teams: []string{flags}})
+	next, cmd := a.Update(teamsSavedMsg{teams: []string{flags}})
 	a = next.(App)
 
 	if a.screen != msg.Dashboard {
@@ -478,5 +459,22 @@ func TestASaveThatFinishesElsewhereLeavesTheScreenAlone(t *testing.T) {
 	}
 	if a.teams.Busy {
 		t.Error("the teams screen is still busy after the save")
+	}
+	if drain(cmd) != nil {
+		t.Error("the save searched GitHub for a screen that is not showing")
+	}
+}
+
+// esc then r during a save starts a search. The save leaves that search to
+// answer, because GitHub's searches for one user run one at a time.
+func TestASaveThatFinishesDuringASearchStartsNoOther(t *testing.T) {
+	a := onTeams(app())
+	a.screen = msg.Requests
+	a.reqs.Loading = true
+
+	_, cmd := a.Update(teamsSavedMsg{teams: []string{flags}})
+
+	if drain(cmd) != nil {
+		t.Error("the save started a second search while one was running")
 	}
 }

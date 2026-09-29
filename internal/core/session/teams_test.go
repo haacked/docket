@@ -152,19 +152,16 @@ func TestSaveTeamsAndLoginKeepEachOthersKeys(t *testing.T) {
 		want := []string{"PostHog/team-feature-flags"}
 
 		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, err := svc.Login(context.Background()); err != nil {
 				t.Errorf("Login: %v", err)
 			}
-		}()
-		go func() {
-			defer wg.Done()
+		})
+		wg.Go(func() {
 			if err := svc.SaveTeams(want); err != nil {
 				t.Errorf("SaveTeams: %v", err)
 			}
-		}()
+		})
 		wg.Wait()
 
 		cfg, err := config.Load(paths.Config)
@@ -184,18 +181,15 @@ func TestRequestsDuringSaveTeams(t *testing.T) {
 	svc, _ := newService(t, &fakeGH{login: "haacked"}, newFakeGit())
 
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if err := svc.SaveTeams([]string{"PostHog/team-feature-flags"}); err != nil {
 			t.Errorf("SaveTeams: %v", err)
 		}
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		if _, err := svc.Requests(context.Background()); err != nil {
 			t.Errorf("Requests: %v", err)
 		}
-	}()
+	})
 	wg.Wait()
 }

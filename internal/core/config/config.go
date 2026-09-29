@@ -161,7 +161,7 @@ func SaveKey(path, key string, value any) error {
 
 // write replaces config.toml through a temporary file and a rename. A reader
 // never sees half a file.
-func write(path string, v any) error {
+func write(path string, v map[string]any) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".config.toml.*")
 	if err != nil {
 		return fmt.Errorf("create temp config: %w", err)

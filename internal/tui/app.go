@@ -255,22 +255,23 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a.regroup(), nil
 
 	case msg.OpenTeams:
-		// A search reads the configured teams while it runs. A batch check's
-		// answer and a finished save each switch to the requests screen.
+		// A save searches again, so a search that is still running could answer
+		// after the save's search and show the old teams. A batch check's answer
+		// and a finished save each switch to the requests screen.
 		if a.reqs.Loading || a.reqs.Busy || a.teams.Busy {
 			a.status = "A search, a batch check, or a save of your teams is still running. Press t again once it finishes"
 			return a, nil
 		}
-		reading := a.teams.Loading
+		// A read still running from an earlier visit answers this one.
+		// SetMemberships keeps the rows Load checked.
+		var read tea.Cmd
+		if !a.teams.Loading {
+			read = a.loadTeams()
+		}
 		a.screen = msg.Teams
 		a.err = nil
 		a.teams = a.teams.Load(a.liveConfig().Teams)
-		// A read still running from an earlier visit answers this one.
-		// SetMemberships keeps the rows Load checked.
-		if reading {
-			return a, nil
-		}
-		return a, a.loadTeams()
+		return a, read
 
 	case teamsLoadedMsg:
 		a.teams = a.teams.SetMemberships(message.teams, message.err)
@@ -296,6 +297,12 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			a.screen = msg.Requests
 		}
 		a.status = "Saved teams to config.toml: " + teamList(message.teams)
+		// The next i searches afresh, so a search for a screen that is not
+		// showing would be thrown away. A search that is already running keeps
+		// GitHub's searches one at a time.
+		if a.screen != msg.Requests || a.reqs.Loading {
+			return a, nil
+		}
 		return a.update(msg.RefreshRequests{})
 
 	case msg.PrefillReview:
