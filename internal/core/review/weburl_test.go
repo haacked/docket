@@ -7,7 +7,7 @@ import (
 	"github.com/haacked/docket/internal/core/review"
 )
 
-func TestWebURLOpensADraftOnTheFilesTab(t *testing.T) {
+func TestWebURLOpensADraftAtItsReview(t *testing.T) {
 	ref := pr.Ref{Org: "haacked", Repo: "docket", Number: 7}
 
 	tests := []struct {
@@ -18,12 +18,17 @@ func TestWebURLOpensADraftOnTheFilesTab(t *testing.T) {
 		{
 			name: "a drafted review",
 			rec:  review.Record{Ref: ref, State: review.StateDrafted, ReviewID: 4321},
-			want: "https://github.com/haacked/docket/pull/7/files",
+			want: "https://github.com/haacked/docket/pull/7#pullrequestreview-4321",
 		},
 		{
 			name: "a submitted review",
 			rec:  review.Record{Ref: ref, State: review.StateReviewed, ReviewID: 4321},
 			want: "https://github.com/haacked/docket/pull/7",
+		},
+		{
+			name: "a reopened draft still running",
+			rec:  review.Record{Ref: ref, State: review.StateReviewing, ReviewID: 4321},
+			want: "https://github.com/haacked/docket/pull/7#pullrequestreview-4321",
 		},
 		{
 			name: "a review still running",

@@ -7,21 +7,20 @@ import (
 	"strings"
 
 	"github.com/haacked/docket/internal/core/exec"
-	"github.com/haacked/docket/internal/core/review"
 )
 
-// Browse opens the record's review on GitHub in the user's browser.
-func (s *Service) Browse(rec review.Record) error {
-	if err := s.Runner.Start(BrowseSpec(rec)); err != nil {
-		return fmt.Errorf("open %s in the browser: %w", rec.WebURL(), err)
+// Browse opens url in the user's browser.
+func (s *Service) Browse(url string) error {
+	if err := s.Runner.Start(BrowseSpec(url)); err != nil {
+		return fmt.Errorf("open %s in the browser: %w", url, err)
 	}
 	return nil
 }
 
 // BrowseSpec is exported so that a dry run can print the command Browse
 // would run.
-func BrowseSpec(rec review.Record) exec.CommandSpec {
-	return BrowserSpec(os.Getenv("BROWSER"), runtime.GOOS, rec.WebURL())
+func BrowseSpec(url string) exec.CommandSpec {
+	return BrowserSpec(os.Getenv("BROWSER"), runtime.GOOS, url)
 }
 
 // BrowserSpec builds the command that opens url. browser is $BROWSER. With no

@@ -559,13 +559,10 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return a, nil
 		}
-		a.err = nil
-		if a.dryRun {
-			a.status = "Would run: " + session.BrowseSpec(rec).String()
-			return a, nil
-		}
-		a.status = "Opening " + rec.WebURL()
-		return a, a.browse(rec)
+		return a.browse(rec.WebURL())
+
+	case msg.OpenPullRequest:
+		return a.browse(message.URL)
 
 	case notesLoadedMsg:
 		// The read runs in a command, so it can land after the user opened another
@@ -1100,10 +1097,16 @@ func (a App) editNotes(rec review.Record) tea.Cmd {
 
 // browse needs no terminal, so it runs through the service's runner rather
 // than taking the screen the way editNotes does.
-func (a App) browse(rec review.Record) tea.Cmd {
+func (a App) browse(url string) (tea.Model, tea.Cmd) {
+	a.err = nil
+	if a.dryRun {
+		a.status = "Would run: " + session.BrowseSpec(url).String()
+		return a, nil
+	}
+	a.status = "Opening " + url
 	svc := a.svc
-	return func() tea.Msg {
-		if err := svc.Browse(rec); err != nil {
+	return a, func() tea.Msg {
+		if err := svc.Browse(url); err != nil {
 			return errMsg{err: err}
 		}
 		return nil

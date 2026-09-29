@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/haacked/docket/internal/core/pr"
@@ -117,8 +118,9 @@ func TestSubmitRefusesARecordWithNothingPending(t *testing.T) {
 			svc, _ := newService(t, ghc, newFakeGit())
 			rec := tt.spoil(drafted(t, svc, ghc, unlisted))
 
-			if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err == nil {
-				t.Fatal("Submit accepted a record with no pending review")
+			_, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+			if err == nil || !strings.Contains(err.Error(), "no pending review") {
+				t.Fatalf("Submit answered %v, want a refusal that says there is no pending review", err)
 			}
 
 			if len(ghc.submitted) != 0 {
@@ -149,8 +151,9 @@ func TestSubmitRefusesADraftWhoseInteractiveSessionIsOpen(t *testing.T) {
 		t.Fatalf("record is %q with review %d, want reviewing and still holding review %d", rec.State, rec.ReviewID, pendingID)
 	}
 
-	if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err == nil {
-		t.Error("Submit accepted a draft whose interactive session is open")
+	_, err = svc.Submit(context.Background(), rec, review.EventComment, "")
+	if err == nil || !strings.Contains(err.Error(), "interactive session") {
+		t.Errorf("Submit answered %v, want a refusal that names the open interactive session", err)
 	}
 	if len(ghc.submitted) != 0 {
 		t.Errorf("Submit posted %+v to GitHub", ghc.submitted)

@@ -75,6 +75,9 @@ type EditNotes struct{ ID string }
 // OpenOnGitHub opens a record's review on GitHub in the browser.
 type OpenOnGitHub struct{ ID string }
 
+// OpenPullRequest opens a pull request's URL in the browser.
+type OpenPullRequest struct{ URL string }
+
 // OpenRequests asks for the list of pull requests waiting on the user's review,
 // searched afresh.
 type OpenRequests struct{}
