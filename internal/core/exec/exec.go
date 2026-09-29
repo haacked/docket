@@ -22,6 +22,8 @@ type CommandSpec struct {
 	Args  []string
 	Dir   string
 	Unset []string
+	// Set holds NAME=value entries. Each replaces any inherited value of NAME.
+	Set []string
 }
 
 func (s CommandSpec) String() string {
@@ -29,10 +31,14 @@ func (s CommandSpec) String() string {
 	if s.Dir != "" {
 		fmt.Fprintf(&b, "[%s] ", s.Dir)
 	}
-	if len(s.Unset) > 0 {
+	if len(s.Unset) > 0 || len(s.Set) > 0 {
 		b.WriteString("env")
 		for _, name := range s.Unset {
 			fmt.Fprintf(&b, " -u %s", name)
+		}
+		for _, kv := range s.Set {
+			name, value, _ := strings.Cut(kv, "=")
+			fmt.Fprintf(&b, " %s=%s", name, quote(value))
 		}
 		b.WriteByte(' ')
 	}
@@ -51,19 +57,24 @@ func quote(arg string) string {
 }
 
 // Env returns the environment for the spec: the given environment minus the
-// names in Unset.
+// names in Unset and the names Set assigns, followed by the entries in Set.
 func (s CommandSpec) Env(environ []string) []string {
-	if len(s.Unset) == 0 {
+	if len(s.Unset) == 0 && len(s.Set) == 0 {
 		return environ
 	}
-	out := make([]string, 0, len(environ))
+	drop := slices.Clone(s.Unset)
+	for _, kv := range s.Set {
+		name, _, _ := strings.Cut(kv, "=")
+		drop = append(drop, name)
+	}
+	out := make([]string, 0, len(environ)+len(s.Set))
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
-		if !slices.Contains(s.Unset, name) {
+		if !slices.Contains(drop, name) {
 			out = append(out, kv)
 		}
 	}
-	return out
+	return append(out, s.Set...)
 }
 
 // Result is what a finished command produced.

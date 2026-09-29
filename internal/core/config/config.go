@@ -20,9 +20,9 @@ const DefaultReviewCodeDir = "~/.agents/skills/review-code"
 // session id on the command line.
 const DefaultCodexSessionsDir = "~/.codex/sessions"
 
-// DefaultClaudeJobsDir is where claude's background service keeps a status file
-// for each background session. docket reads it to show what a session is doing.
-const DefaultClaudeJobsDir = "~/.claude/jobs"
+// DefaultClaudeConfigDir is where claude keeps its login, its conversations,
+// and its background jobs when CLAUDE_CONFIG_DIR is unset.
+const DefaultClaudeConfigDir = "~/.claude"
 
 // EngineClaude is the engine docket uses when config.toml names none.
 const EngineClaude = "claude"
@@ -38,7 +38,14 @@ const (
 type Config struct {
 	ReviewCodeDir    string `toml:"review_code_dir"`
 	CodexSessionsDir string `toml:"codex_sessions_dir"`
-	ClaudeJobsDir    string `toml:"claude_jobs_dir"`
+	// ClaudeConfigDir is the CLAUDE_CONFIG_DIR a new review runs claude under.
+	// The variable picks the account. Empty means claude's own default. docket then
+	// unsets the variable rather than setting it to DefaultClaudeConfigDir,
+	// because claude looks up a different keychain entry whenever it is set.
+	ClaudeConfigDir string `toml:"claude_config_dir"`
+	// ClaudeDefaultDir is DefaultClaudeConfigDir with the tilde expanded. Load
+	// fills it in. The file never sets it.
+	ClaudeDefaultDir string `toml:"-"`
 	DefaultEngine    string `toml:"default_engine"`
 	DefaultRun       string `toml:"default_run"`
 	GitHubUser       string `toml:"github_user"`
@@ -96,6 +103,18 @@ func (p Paths) EnsureDirs() error {
 	return nil
 }
 
+// ClaudeJobsDir is where claude's background service keeps a status file for
+// each background session run under configDir. An empty configDir is claude's
+// default account. The result is "" for that account on a Config that Load did
+// not fill in.
+func (c Config) ClaudeJobsDir(configDir string) string {
+	dir := cmp.Or(configDir, c.ClaudeDefaultDir)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "jobs")
+}
+
 // CloneDir is where a tier-2 clone of one pull request lives.
 func (p Paths) CloneDir(org, repo string, number int) string {
 	return filepath.Join(p.Clones, org, repo, fmt.Sprintf("pr-%d", number))
@@ -106,14 +125,13 @@ func Load(path string) (Config, error) {
 	cfg := Config{
 		ReviewCodeDir:    DefaultReviewCodeDir,
 		CodexSessionsDir: DefaultCodexSessionsDir,
-		ClaudeJobsDir:    DefaultClaudeJobsDir,
 		DefaultEngine:    EngineClaude,
 		DefaultRun:       RunBackground,
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return expand(cfg), nil
+			return checkClaudeConfigDir(path, expand(cfg))
 		}
 		return cfg, fmt.Errorf("read %s: %w", path, err)
 	}
@@ -127,7 +145,17 @@ func Load(path string) (Config, error) {
 	if cfg.DefaultRun != RunBackground && cfg.DefaultRun != RunTerminal {
 		return cfg, fmt.Errorf("%s: default_run is %q, want %q or %q", path, cfg.DefaultRun, RunBackground, RunTerminal)
 	}
-	return expand(cfg), nil
+	return checkClaudeConfigDir(path, expand(cfg))
+}
+
+// checkClaudeConfigDir refuses a relative claude config dir. docket runs some
+// claude commands in the review's directory and others in its own, so a
+// relative dir would name a different account for each.
+func checkClaudeConfigDir(path string, cfg Config) (Config, error) {
+	if cfg.ClaudeConfigDir != "" && !filepath.IsAbs(cfg.ClaudeConfigDir) {
+		return cfg, fmt.Errorf("%s: the claude config dir %q from claude_config_dir or CLAUDE_CONFIG_DIR is relative; give an absolute path or one that starts with ~", path, cfg.ClaudeConfigDir)
+	}
+	return cfg, nil
 }
 
 // expand fills in the defaults a config.toml left out and resolves the ~ in
@@ -135,7 +163,8 @@ func Load(path string) (Config, error) {
 func expand(cfg Config) Config {
 	cfg.ReviewCodeDir = ExpandHome(cmp.Or(cfg.ReviewCodeDir, DefaultReviewCodeDir))
 	cfg.CodexSessionsDir = ExpandHome(cmp.Or(cfg.CodexSessionsDir, DefaultCodexSessionsDir))
-	cfg.ClaudeJobsDir = ExpandHome(cmp.Or(cfg.ClaudeJobsDir, DefaultClaudeJobsDir))
+	cfg.ClaudeConfigDir = ExpandHome(cmp.Or(cfg.ClaudeConfigDir, os.Getenv("CLAUDE_CONFIG_DIR")))
+	cfg.ClaudeDefaultDir = ExpandHome(DefaultClaudeConfigDir)
 	cfg.DefaultEngine = cmp.Or(cfg.DefaultEngine, EngineClaude)
 	cfg.DefaultRun = cmp.Or(cfg.DefaultRun, RunBackground)
 	return cfg

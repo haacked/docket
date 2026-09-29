@@ -29,28 +29,29 @@ func snapshot(t *testing.T, rec review.Record, eventType string) review.Event {
 func TestFoldClearsFieldsASnapshotZeroes(t *testing.T) {
 	submitted := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	full := review.Record{
-		ID:             "rec-1",
-		Ref:            pr.Ref{Org: "haacked", Repo: "docket", Number: 7},
-		URL:            "https://github.com/haacked/docket/pull/7",
-		Title:          "Add a thing",
-		Author:         "haacked",
-		Engine:         "claude",
-		Mode:           review.ModeInteractive,
-		Dir:            "/tmp/clone",
-		SessionID:      "session-1",
-		BGID:           "bg-1",
-		StartedAt:      submitted.Add(-time.Hour),
-		SubmittedAt:    &submitted,
-		ArchivedAt:     &submitted,
-		State:          review.StateDrafted,
-		ReviewID:       99,
-		NotesPath:      "/tmp/notes.md",
-		PriorReviewIDs: []int64{1, 2},
-		Err:            "the session died",
-		Intent:         review.IntentAppend,
-		AskSessionID:   "ask-1",
-		AskStartedAt:   submitted.Add(-time.Minute),
-		PRState:        review.PRMerged,
+		ID:              "rec-1",
+		Ref:             pr.Ref{Org: "haacked", Repo: "docket", Number: 7},
+		URL:             "https://github.com/haacked/docket/pull/7",
+		Title:           "Add a thing",
+		Author:          "haacked",
+		Engine:          "claude",
+		Mode:            review.ModeInteractive,
+		Dir:             "/tmp/clone",
+		SessionID:       "session-1",
+		BGID:            "bg-1",
+		StartedAt:       submitted.Add(-time.Hour),
+		SubmittedAt:     &submitted,
+		ArchivedAt:      &submitted,
+		State:           review.StateDrafted,
+		ReviewID:        99,
+		NotesPath:       "/tmp/notes.md",
+		PriorReviewIDs:  []int64{1, 2},
+		Err:             "the session died",
+		Intent:          review.IntentAppend,
+		AskSessionID:    "ask-1",
+		AskStartedAt:    submitted.Add(-time.Minute),
+		PRState:         review.PRMerged,
+		ClaudeConfigDir: "/Users/me/.claude-automation",
 	}
 
 	cleared := review.Record{ID: "rec-1", State: review.StateReviewing}
@@ -80,5 +81,22 @@ func TestRecordFieldsAreNeverOmitEmpty(t *testing.T) {
 		if slices.Contains(strings.Split(tag, ",")[1:], "omitempty") {
 			t.Errorf("Record.%s is tagged omitempty, so a snapshot that clears it drops the key and Fold keeps the stale value", field.Name)
 		}
+	}
+}
+
+// The index keeps every record docket ever wrote. The key that holds a record's
+// account is therefore part of the file format.
+func TestRecordStoresItsClaudeAccountUnderClaudeConfigDir(t *testing.T) {
+	raw, err := json.Marshal(review.Record{ClaudeConfigDir: "/Users/me/.claude-automation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if got := fields["claude_config_dir"]; got != "/Users/me/.claude-automation" {
+		t.Errorf("claude_config_dir = %v, want the record's account in %s", got, raw)
 	}
 }

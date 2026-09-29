@@ -80,6 +80,6 @@ func (Claude) Untrusted(res exec.Result) bool {
 // The session that runs /exit would otherwise run the project's SessionStart
 // hooks as soon as the user accepts. userSettings keeps them out, and claude
 // still shows the prompt and records the answer (verified on 2.1.284).
-func (Claude) TrustSpec(dir string) exec.CommandSpec {
-	return exec.CommandSpec{Path: "claude", Args: append(slices.Clone(userSettings), "/exit"), Dir: dir}
+func (Claude) TrustSpec(dir string, paths Paths) exec.CommandSpec {
+	return claudeCommand(paths, dir, append(slices.Clone(userSettings), "/exit")...)
 }

@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,91 @@ func TestStringShowsDirectoryScrubbedEnvironmentAndQuoting(t *testing.T) {
 	want := "[/tmp/x] env -u CLAUDECODE -u CLAUDE_CONFIG_DIR codex -C /tmp/x '$review-code https://example.com/pull/1 --draft'"
 	if got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestStringPutsTheUnsetsBeforeTheAssignments(t *testing.T) {
+	spec := CommandSpec{
+		Path:  "claude",
+		Args:  []string{"agents", "--json", "--all"},
+		Unset: []string{"CLAUDECODE"},
+		Set:   []string{"CLAUDE_CONFIG_DIR=/Users/me/.claude-automation"},
+	}
+
+	got := spec.String()
+	want := "env -u CLAUDECODE CLAUDE_CONFIG_DIR=/Users/me/.claude-automation claude agents --json --all"
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestStringQuotesAnAssignedValue(t *testing.T) {
+	spec := CommandSpec{Path: "claude", Args: []string{"stop", "6d681a76"}, Set: []string{"CLAUDE_CONFIG_DIR=/Users/me/Claude Accounts/work"}}
+
+	got := spec.String()
+	want := "env CLAUDE_CONFIG_DIR='/Users/me/Claude Accounts/work' claude stop 6d681a76"
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestStringWithNothingToChangeInTheEnvironmentHasNoEnvPrefix(t *testing.T) {
+	spec := CommandSpec{Path: "claude", Args: []string{"stop", "6d681a76"}}
+
+	if got := spec.String(); got != "claude stop 6d681a76" {
+		t.Errorf("got %s, want the command alone", got)
+	}
+}
+
+// docket may run with another account's CLAUDE_CONFIG_DIR exported. The child
+// has to see only the value the spec assigns.
+func TestEnvReplacesAVariableTheSpecAssigns(t *testing.T) {
+	spec := CommandSpec{Set: []string{"CLAUDE_CONFIG_DIR=/Users/me/.claude-automation"}}
+
+	got := spec.Env([]string{"CLAUDE_CONFIG_DIR=/elsewhere", "CLAUDE_CONFIG_DIR_OLD=/o", "HOME=/h"})
+
+	want := []string{"CLAUDE_CONFIG_DIR_OLD=/o", "HOME=/h", "CLAUDE_CONFIG_DIR=/Users/me/.claude-automation"}
+	if !slices.Equal(got, want) {
+		t.Errorf("env = %v, want %v", got, want)
+	}
+}
+
+func TestEnvAddsAnAssignedVariableTheEnvironmentLacks(t *testing.T) {
+	spec := CommandSpec{Set: []string{"CLAUDE_CONFIG_DIR=/Users/me/.claude-automation"}}
+
+	got := spec.Env([]string{"HOME=/h"})
+
+	want := []string{"HOME=/h", "CLAUDE_CONFIG_DIR=/Users/me/.claude-automation"}
+	if !slices.Equal(got, want) {
+		t.Errorf("env = %v, want %v", got, want)
+	}
+}
+
+func TestEnvUnsetsAndAssignsTogether(t *testing.T) {
+	spec := CommandSpec{Unset: []string{"CLAUDECODE"}, Set: []string{"CLAUDE_CONFIG_DIR=/Users/me/.claude-automation"}}
+
+	got := spec.Env([]string{"CLAUDECODE=1", "CLAUDE_CONFIG_DIR=/elsewhere", "HOME=/h"})
+
+	want := []string{"HOME=/h", "CLAUDE_CONFIG_DIR=/Users/me/.claude-automation"}
+	if !slices.Equal(got, want) {
+		t.Errorf("env = %v, want %v", got, want)
+	}
+}
+
+func TestRealRunsTheCommandWithTheAssignedVariables(t *testing.T) {
+	t.Setenv("DOCKET_EXEC_TEST", "from the parent")
+	spec := CommandSpec{
+		Path: "sh",
+		Args: []string{"-c", `printf %s "$DOCKET_EXEC_TEST"`},
+		Set:  []string{"DOCKET_EXEC_TEST=from the spec"},
+	}
+
+	res, err := Real{}.Run(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Stdout != "from the spec" {
+		t.Errorf("stdout = %q, want the value the spec assigns", res.Stdout)
 	}
 }
 

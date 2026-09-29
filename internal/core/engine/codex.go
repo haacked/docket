@@ -25,7 +25,7 @@ func (Codex) NewSessionID() string { return "" }
 
 // scrubbed are the variables a claude session exports that would tell codex it
 // is running inside one. docket may be launched from a claude session itself.
-var scrubbed = []string{"CLAUDECODE", "CLAUDE_CONFIG_DIR"}
+var scrubbed = []string{"CLAUDECODE", claudeConfigDir}
 
 func (Codex) Start(rec review.Record, paths Paths) exec.CommandSpec {
 	return codexSpec(rec.Dir, paths, "$review-code "+reviewArgs(rec))

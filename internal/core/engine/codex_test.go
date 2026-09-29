@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/review"
 )
 
@@ -91,23 +92,25 @@ func TestCodexStartRunsTheReviewAsADraftInTheRecordsDirectory(t *testing.T) {
 }
 
 // docket may be launched from a claude session, and the variables that session
-// exports tell codex it is running inside one.
+// exports tell codex it is running inside one. A claude account's directory
+// means nothing to codex. Codex drops it too.
 func TestCodexUnsetsTheClaudeEnvironment(t *testing.T) {
 	rec := codexRecord("/tmp/clone", time.Now())
-	paths := Paths{Grant: grants}
-
-	start := Codex{}.Start(rec, paths)
 	rec.SessionID = "01998e2c-0000-7000-8000-000000000001"
+	paths := Paths{Grant: grants, ClaudeConfig: automation}
 	resume, ok := Codex{}.Resume(rec, paths)
 	if !ok {
 		t.Fatal("Resume refused a record with a session id")
 	}
 
-	for name, unset := range map[string][]string{"start": start.Unset, "resume": resume.Unset} {
-		for _, want := range []string{"CLAUDECODE", "CLAUDE_CONFIG_DIR"} {
-			if !slices.Contains(unset, want) {
-				t.Errorf("%s unsets %v, want %s among them", name, unset, want)
-			}
+	for name, spec := range map[string]exec.CommandSpec{
+		"start":  Codex{}.Start(rec, paths),
+		"resume": resume,
+		"ask":    Codex{}.Ask(rec, paths),
+	} {
+		got := spec.Env([]string{"CLAUDECODE=1", "CLAUDE_CONFIG_DIR=/elsewhere", "HOME=/h"})
+		if !slices.Equal(got, []string{"HOME=/h"}) {
+			t.Errorf("%s runs with %v, want only HOME", name, got)
 		}
 	}
 }

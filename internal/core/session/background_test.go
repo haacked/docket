@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/haacked/docket/internal/core/exec"
+	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
 )
 
@@ -56,23 +57,60 @@ func bgRunner(listing string) *exec.Fake {
 // startedBackground is a tier-2 review already running in the background.
 func startedBackground(t *testing.T, svc *Service, runner *exec.Fake) review.Record {
 	t.Helper()
-	rec, err := launchBackground(t, svc, runner)
+	rec, err := launchBackground(t, svc, runner, unlisted)
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
 	return rec
 }
 
-// launchBackground prepares a tier-2 background review and starts it against
-// runner, returning what the start returned.
-func launchBackground(t *testing.T, svc *Service, runner *exec.Fake) (review.Record, error) {
+// launchBackground prepares a tier-2 background review of ref and starts it
+// against runner, returning what the start returned.
+func launchBackground(t *testing.T, svc *Service, runner *exec.Fake, ref pr.Ref) (review.Record, error) {
 	t.Helper()
 	svc.Runner = runner
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), ref, "claude", review.ModeBackground, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 	return svc.StartBackground(context.Background(), rec)
+}
+
+// lostLaunch stores rec the way a docket killed between the launch and the
+// append of its id would have left it.
+func lostLaunch(t *testing.T, svc *Service, rec review.Record) {
+	t.Helper()
+	rec.BGID = ""
+	if err := svc.append(rec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// lostListing is a listing of the running session rec launched, which recovery
+// matches by rec's directory and start time.
+func lostListing(rec review.Record) string {
+	return `[{"id": "6d681a76", "kind": "background",
+		"cwd": "` + rec.Dir + `", "startedAt": ` + msOf(rec.StartedAt) + `,
+		"sessionId": "` + bgSession + `", "state": "working", "status": "busy", "pid": 7}]`
+}
+
+// defaultJobs gives claude's default account a directory of its own and
+// returns where that account's status files go.
+func defaultJobs(t *testing.T, svc *Service) string {
+	t.Helper()
+	svc.Cfg.ClaudeDefaultDir = t.TempDir()
+	return svc.Cfg.ClaudeJobsDir("")
+}
+
+func writeJobState(t *testing.T, jobs, id, body string) {
+	t.Helper()
+	dir := filepath.Join(jobs, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // claude refuses the --session-id a background start passes and mints its own,
@@ -642,18 +680,8 @@ func TestAPollAdoptsASessionTheLaunchNeverRecorded(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	runner := bgRunner("[]")
 	rec := startedBackground(t, svc, runner)
-
-	// The record as a docket killed between the launch and the second append
-	// would have left it.
-	lost := rec
-	lost.BGID = ""
-	if err := svc.append(lost); err != nil {
-		t.Fatal(err)
-	}
-
-	runner.Results["agents"] = exec.Result{Stdout: `[{"id": "6d681a76", "kind": "background",
-		"cwd": "` + rec.Dir + `", "startedAt": ` + msOf(rec.StartedAt) + `,
-		"sessionId": "` + bgSession + `", "state": "working", "status": "busy", "pid": 7}]`}
+	lostLaunch(t, svc, rec)
+	runner.Results["agents"] = exec.Result{Stdout: lostListing(rec)}
 
 	records, statuses, err := svc.PollBackground(context.Background())
 	if err != nil {
@@ -676,13 +704,7 @@ func TestAPollClosesALaunchThatStartedNothing(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 	runner := bgRunner("[]")
-	rec := startedBackground(t, svc, runner)
-
-	lost := rec
-	lost.BGID = ""
-	if err := svc.append(lost); err != nil {
-		t.Fatal(err)
-	}
+	lostLaunch(t, svc, startedBackground(t, svc, runner))
 
 	records, _, err := svc.PollBackground(context.Background())
 	if err != nil {
@@ -820,16 +842,7 @@ func TestSubmittingWhenTheListingLagsTheProgressFileLeavesTheSessionRunning(t *t
 	svc, _ := newService(t, ghc, newFakeGit())
 	runner := bgRunner("")
 	rec := draftedInBackground(t, svc, ghc, runner)
-
-	jobs := t.TempDir()
-	svc.Cfg.ClaudeJobsDir = jobs
-	dir := filepath.Join(jobs, "6d681a76")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"tempo": "active", "detail": "starting…"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeJobState(t, defaultJobs(t, svc), "6d681a76", `{"tempo": "active", "detail": "starting…"}`)
 
 	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
 	if err != nil {

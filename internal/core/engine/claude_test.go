@@ -38,9 +38,6 @@ func TestStartRunsTheReviewAsADraftInTheRecordsDirectory(t *testing.T) {
 			t.Errorf("command %s is missing %q", line, want)
 		}
 	}
-	if len(spec.Unset) != 0 {
-		t.Errorf("claude needs nothing unset, got %v", spec.Unset)
-	}
 }
 
 func TestStartWithoutAnIdStillRunsTheReview(t *testing.T) {
@@ -61,7 +58,7 @@ func TestResumeReopensTheStoredSession(t *testing.T) {
 	if !ok {
 		t.Fatal("Resume refused a record with a session id")
 	}
-	if want := "[/tmp/clone] claude --resume 1ce5f0ad-0000-4000-8000-000000000001 --setting-sources user"; spec.String() != want {
+	if want := "[/tmp/clone] env -u CLAUDE_CONFIG_DIR claude --resume 1ce5f0ad-0000-4000-8000-000000000001 --setting-sources user"; spec.String() != want {
 		t.Errorf("got  %s\nwant %s", spec, want)
 	}
 }
@@ -77,7 +74,7 @@ func TestEverySessionLoadsOnlyTheUsersSettings(t *testing.T) {
 		"ask":        Claude{}.Ask(rec, Paths{}),
 		"resume":     resume,
 		"background": Claude{}.StartBackground(rec, Paths{}),
-		"trust":      Claude{}.TrustSpec(rec.Dir),
+		"trust":      Claude{}.TrustSpec(rec.Dir, Paths{}),
 	} {
 		i := slices.Index(spec.Args, "--setting-sources")
 		if i < 0 || i+1 >= len(spec.Args) || spec.Args[i+1] != "user" {

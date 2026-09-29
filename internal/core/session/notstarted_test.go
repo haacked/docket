@@ -3,8 +3,6 @@ package session
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -21,7 +19,7 @@ func refusedLaunch(t *testing.T, svc *Service, stderr string) (review.Record, er
 	return launchBackground(t, svc, &exec.Fake{
 		Results: map[string]exec.Result{"--bg": {Stderr: stderr, ExitCode: 1}},
 		Errs:    map[string]error{"--bg": errors.New("claude exited 1: " + strings.TrimSpace(stderr))},
-	})
+	}, unlisted)
 }
 
 // A launch the agent refused ran no session, so nothing on GitHub can say
@@ -137,15 +135,7 @@ func TestTrustSpecRunsTheAgentInTheRecordsDirectory(t *testing.T) {
 func TestPollReportsWhatEachRunningSessionIsDoing(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
-	jobs := t.TempDir()
-	svc.Cfg.ClaudeJobsDir = jobs
-	if err := os.MkdirAll(filepath.Join(jobs, "6d681a76"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	state := `{"detail": "7 review agents dispatched", "tempo": "blocked", "needs": "permission to run gh"}`
-	if err := os.WriteFile(filepath.Join(jobs, "6d681a76", "state.json"), []byte(state), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeJobState(t, defaultJobs(t, svc), "6d681a76", `{"detail": "7 review agents dispatched", "tempo": "blocked", "needs": "permission to run gh"}`)
 	rec := startedBackground(t, svc, bgRunner(bgListing("6d681a76", bgSession, "working", true)))
 
 	_, statuses, err := svc.PollBackground(context.Background())

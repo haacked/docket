@@ -32,7 +32,7 @@ func (s *Service) StartBackground(ctx context.Context, rec review.Record) (revie
 		return rec, err
 	}
 
-	res, err := s.Runner.Run(ctx, bg.StartBackground(rec, s.enginePaths()))
+	res, err := s.Runner.Run(ctx, bg.StartBackground(rec, s.enginePaths(rec.ClaudeConfigDir)))
 	if err != nil {
 		if bg.Untrusted(res) {
 			err = fmt.Errorf("%s %w %s yet", rec.Engine, ErrUntrusted, rec.Dir)
@@ -76,7 +76,7 @@ func (s *Service) TrustSpec(rec review.Record) (exec.CommandSpec, error) {
 	if err != nil {
 		return exec.CommandSpec{}, err
 	}
-	return bg.TrustSpec(rec.Dir), nil
+	return bg.TrustSpec(rec.Dir, s.enginePaths(rec.ClaudeConfigDir)), nil
 }
 
 // Restart launches again a background review the agent refused. It reads
@@ -110,7 +110,7 @@ func (s *Service) ExplainRestart(ctx context.Context, rec review.Record) (exec.C
 	if err != nil {
 		return exec.CommandSpec{}, err
 	}
-	return bg.StartBackground(rec, s.enginePaths()), nil
+	return bg.StartBackground(rec, s.enginePaths(rec.ClaudeConfigDir)), nil
 }
 
 // PollBackground asks each agent how its sessions are doing and reads GitHub for
@@ -131,28 +131,29 @@ func (s *Service) PollBackground(ctx context.Context) ([]review.Record, map[stri
 	if err != nil {
 		return nil, nil, err
 	}
-	// One listing answers for every record of an engine, so the records are
-	// grouped rather than asked about one at a time.
-	byEngine := map[string][]int{}
+	// One listing answers for every record of an engine and account. The poll
+	// therefore groups the records rather than asking about each one.
+	groups := map[listing][]int{}
 	for i, rec := range records {
 		if rec.BackgroundRunning() {
-			byEngine[rec.Engine] = append(byEngine[rec.Engine], i)
+			key := listingOf(rec)
+			groups[key] = append(groups[key], i)
 		}
 	}
 
 	// A record whose launch never got its id written needs one before it can be
 	// asked about, so recovery runs first and folds its finds into the groups.
-	records, byEngine = s.recoverLost(ctx, records, byEngine)
+	records, groups = s.recoverLost(ctx, records, groups)
 
 	statuses := make(map[string]engine.BGStatus)
-	paths := s.enginePaths()
 	var failure error
-	for name, indexes := range byEngine {
-		bg, ok := engine.Background(name)
+	for key, indexes := range groups {
+		bg, ok := engine.Background(key.engine)
 		if !ok {
 			continue
 		}
-		found, err := s.statuses(ctx, bg)
+		paths := s.enginePaths(key.claudeConfig)
+		found, err := s.statuses(ctx, bg, paths)
 		if err != nil {
 			// The agent is the only thing that can answer, so its records stay
 			// as they are and the next tick asks again.
@@ -178,6 +179,17 @@ func (s *Service) PollBackground(ctx context.Context) ([]review.Record, map[stri
 	return records, statuses, failure
 }
 
+// listing names one agent listing: an engine, and the claude account whose
+// sessions it lists.
+type listing struct {
+	engine       string
+	claudeConfig string
+}
+
+func listingOf(rec review.Record) listing {
+	return listing{engine: rec.Engine, claudeConfig: rec.ClaudeConfigDir}
+}
+
 // recoverLost adopts the sessions that background records launched but never
 // recorded. StartBackground writes the id in a second append, so a docket killed
 // between the launch and that write leaves a record naming no session, which
@@ -187,20 +199,21 @@ func (s *Service) PollBackground(ctx context.Context) ([]review.Record, map[stri
 // A record with no session to find is one whose launch failed before it started
 // anything. Detection closes it rather than leaving a row that reads as running
 // for ever.
-func (s *Service) recoverLost(ctx context.Context, records []review.Record, byEngine map[string][]int) ([]review.Record, map[string][]int) {
-	lost := map[string][]int{}
+func (s *Service) recoverLost(ctx context.Context, records []review.Record, groups map[listing][]int) ([]review.Record, map[listing][]int) {
+	lost := map[listing][]int{}
 	for i, rec := range records {
 		if rec.Mode == review.ModeBackground && rec.State == review.StateReviewing && rec.BGID == "" {
-			lost[rec.Engine] = append(lost[rec.Engine], i)
+			key := listingOf(rec)
+			lost[key] = append(lost[key], i)
 		}
 	}
 
-	for name, indexes := range lost {
-		bg, ok := engine.Background(name)
+	for key, indexes := range lost {
+		bg, ok := engine.Background(key.engine)
 		if !ok {
 			continue
 		}
-		res, err := s.Runner.Run(ctx, bg.StatusSpec(s.enginePaths()))
+		res, err := s.Runner.Run(ctx, bg.StatusSpec(s.enginePaths(key.claudeConfig)))
 		if err != nil {
 			continue
 		}
@@ -217,14 +230,16 @@ func (s *Service) recoverLost(ctx context.Context, records []review.Record, byEn
 				rec.Err = err.Error()
 			}
 			records[i] = rec
-			byEngine[name] = append(byEngine[name], i)
+			groups[key] = append(groups[key], i)
 		}
 	}
-	return records, byEngine
+	return records, groups
 }
 
-func (s *Service) statuses(ctx context.Context, bg engine.BackgroundEngine) (map[string]engine.BGStatus, error) {
-	res, err := s.Runner.Run(ctx, bg.StatusSpec(s.enginePaths()))
+// statuses lists the sessions the agent holds under the claude account paths
+// names. The agent lists a session only under the account it started under.
+func (s *Service) statuses(ctx context.Context, bg engine.BackgroundEngine, paths engine.Paths) (map[string]engine.BGStatus, error) {
+	res, err := s.Runner.Run(ctx, bg.StatusSpec(paths))
 	if err != nil {
 		return nil, err
 	}
@@ -357,11 +372,12 @@ func (s *Service) OpenBackgroundSpec(ctx context.Context, rec review.Record) (ex
 
 	// Which verb opens the session depends on whether the agent still holds it,
 	// so the status is read now rather than taken from the last poll.
-	found, err := s.statuses(ctx, bg)
+	paths := s.enginePaths(rec.ClaudeConfigDir)
+	found, err := s.statuses(ctx, bg, paths)
 	if err != nil {
 		return exec.CommandSpec{}, err
 	}
-	spec, ok := bg.OpenSpec(rec, found[rec.BGID], s.enginePaths())
+	spec, ok := bg.OpenSpec(rec, found[rec.BGID], paths)
 	if !ok {
 		return exec.CommandSpec{}, fmt.Errorf("%s has no session left to open", rec.Ref)
 	}
@@ -378,7 +394,7 @@ func (s *Service) afterBackgroundExit(ctx context.Context, rec review.Record) (r
 	if !ok || rec.BGID == "" {
 		return s.detect(ctx, rec)
 	}
-	found, err := s.statuses(ctx, bg)
+	found, err := s.statuses(ctx, bg, s.enginePaths(rec.ClaudeConfigDir))
 	if err != nil {
 		// Nothing says the session is over, so the record keeps running and the
 		// next poll asks again.
@@ -420,7 +436,7 @@ func (s *Service) stopBackground(ctx context.Context, rec review.Record) (review
 	if !ok || !rec.HasBackgroundSession() {
 		return rec, true
 	}
-	if _, err := s.Runner.Run(ctx, bg.StopSpec(rec, s.enginePaths())); err != nil {
+	if _, err := s.Runner.Run(ctx, bg.StopSpec(rec, s.enginePaths(rec.ClaudeConfigDir))); err != nil {
 		rec.Err = fmt.Sprintf("stop the background session: %v", err)
 		return rec, false
 	}
@@ -439,13 +455,14 @@ func (s *Service) stopFinished(ctx context.Context, rec review.Record) (review.R
 	if !ok || !rec.HasBackgroundSession() {
 		return rec, true
 	}
-	found, err := s.statuses(ctx, bg)
+	paths := s.enginePaths(rec.ClaudeConfigDir)
+	found, err := s.statuses(ctx, bg, paths)
 	if err != nil {
 		rec.Err = fmt.Sprintf("read the background session's status: %v", err)
 		return rec, false
 	}
 	status, over := readStatus(rec, found)
-	status.Progress = bg.Progress(rec.BGID, s.enginePaths())
+	status.Progress = bg.Progress(rec.BGID, paths)
 	if !over && !status.Waiting() {
 		rec.Err = "the background session was still working, so docket left it running"
 		return rec, false

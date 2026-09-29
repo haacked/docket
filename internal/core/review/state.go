@@ -262,4 +262,8 @@ type Record struct {
 	AskStartedAt time.Time `json:"ask_started_at"`
 	// PRState is the pull request's state when docket last read GitHub.
 	PRState PRState `json:"pr_state"`
+	// ClaudeConfigDir is the CLAUDE_CONFIG_DIR the record's claude sessions run
+	// under, or "" for claude's default. claude keeps a session under that
+	// directory. Every command about the session therefore names the same one.
+	ClaudeConfigDir string `json:"claude_config_dir"`
 }

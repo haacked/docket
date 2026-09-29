@@ -31,7 +31,7 @@ func TestUntrustedIgnoresOtherFailures(t *testing.T) {
 // claude shows its trust prompt before a session starts. /exit ends the session
 // as soon as the user answers the prompt.
 func TestTrustRunsClaudeInTheDirectoryAndExits(t *testing.T) {
-	spec := Claude{}.TrustSpec("/tmp/clone")
+	spec := Claude{}.TrustSpec("/tmp/clone", Paths{})
 
 	if spec.Path != "claude" || spec.Dir != "/tmp/clone" {
 		t.Errorf("spec = %s, want claude in the directory", spec)

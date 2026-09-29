@@ -19,8 +19,11 @@ type Paths struct {
 	Grant []string
 	// CodexSessions is where codex records a session.
 	CodexSessions string
+	// ClaudeConfig is the CLAUDE_CONFIG_DIR claude runs under, or "" for
+	// claude's default.
+	ClaudeConfig string
 	// ClaudeJobs is where claude's background service keeps a status file for
-	// each background session.
+	// each background session run under ClaudeConfig.
 	ClaudeJobs string
 }
 

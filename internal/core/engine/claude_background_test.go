@@ -155,7 +155,7 @@ func TestOpenAttachesWhileClaudeStillHoldsTheSession(t *testing.T) {
 	if !ok {
 		t.Fatal("OpenSpec refused a live background session")
 	}
-	if want := "[/tmp/clone] claude attach 6d681a76"; spec.String() != want {
+	if want := "[/tmp/clone] env -u CLAUDE_CONFIG_DIR claude attach 6d681a76"; spec.String() != want {
 		t.Errorf("got  %s\nwant %s", spec, want)
 	}
 }
@@ -180,7 +180,7 @@ func TestStopEndsTheSessionWithoutDeletingIt(t *testing.T) {
 	rec.BGID = "6d681a76"
 
 	// rm is the command that deletes the conversation. docket never runs it.
-	if line := (Claude{}).StopSpec(rec, Paths{}).String(); line != "claude stop 6d681a76" {
+	if line := (Claude{}).StopSpec(rec, Paths{}).String(); line != "env -u CLAUDE_CONFIG_DIR claude stop 6d681a76" {
 		t.Errorf("command = %s", line)
 	}
 }
