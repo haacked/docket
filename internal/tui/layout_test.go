@@ -114,7 +114,7 @@ func TestANarrowTerminalWrapsTheFooterBetweenHints(t *testing.T) {
 	a := sizedTo(app(), width, 24)
 	view := ansi.Strip(a.View().Content)
 
-	for _, e := range helpFor(msg.Dashboard, false, false) {
+	for _, e := range helpFor(msg.Dashboard, false, false, false) {
 		if hint := e.Key + " " + e.Short; !strings.Contains(view, hint) {
 			t.Errorf("the footer is missing %q or splits it:\n%s", hint, view)
 		}
@@ -158,5 +158,23 @@ func TestAWrappedFooterAndStatusStillFitTheTerminal(t *testing.T) {
 				t.Errorf("the footer is not at the bottom of the page, which ends:\n%s", strings.Join(got[len(got)-4:], "\n"))
 			}
 		})
+	}
+}
+
+// The root cuts the header line at the terminal's width. At 80 columns the
+// section headings and the footer still say that drafts are hidden and which
+// key shows them.
+func TestAnEightyColumnTerminalSaysDraftsAreHidden(t *testing.T) {
+	ready := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}, Title: "ready"}
+	draft := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}, Title: "draft", IsDraft: true}
+	loaded, _ := liveApp(draftedRecord()).Update(requestsLoadedMsg{fetched: requests.Fetched{Mine: []requests.PR{ready, draft}}})
+
+	next, _ := sizedTo(loaded.(App), 80, 24).Update(msg.OpenRequests{})
+	view := ansi.Strip(next.(App).View().Content)
+
+	for _, want := range []string{"Requested of me (1) · 1 draft hidden", "d show drafts"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the view does not show %q:\n%s", want, view)
+		}
 	}
 }

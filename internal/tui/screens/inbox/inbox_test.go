@@ -9,6 +9,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/requests"
@@ -32,11 +34,17 @@ func row(number int, state review.State) requests.Row {
 	return r
 }
 
+// section is a section whose rows are all in one group of unassigned pull
+// requests.
+func section(team string, rows ...requests.Row) requests.Section {
+	return requests.Section{Team: team, Groups: []requests.AssigneeGroup{{Rows: rows}}}
+}
+
 // newModel draws "me" with #1 and #2, then a team with #3. #2 has an open record.
 func newModel() Model {
 	return New(Styles{}, "claude").SetSections([]requests.Section{
-		{Rows: []requests.Row{row(1, ""), row(2, review.StateReviewing)}},
-		{Team: "o/team", Rows: []requests.Row{row(3, "")}},
+		section("", row(1, ""), row(2, review.StateReviewing)),
+		section("o/team", row(3, "")),
 	})
 }
 
@@ -116,11 +124,151 @@ func TestTheCursorFollowsItsPullRequestWhenTheRowsAreReplaced(t *testing.T) {
 	m, _ := newModel().Update(key("G"))
 
 	m = m.SetSections([]requests.Section{
-		{Rows: []requests.Row{row(3, ""), row(1, "")}},
+		section("", row(3, ""), row(1, "")),
 	})
 
 	if selected, ok := m.Selected(); !ok || selected.Ref.Number != 3 {
 		t.Errorf("selected = %v (ok=%v), want #3", selected.Ref, ok)
+	}
+}
+
+// grouped draws one team whose #1 is assigned to me, #2 to nobody, and #3 to
+// alice.
+func grouped() Model {
+	return New(Styles{}, "claude").SetSections([]requests.Section{{
+		Team: "o/team",
+		Groups: []requests.AssigneeGroup{
+			{Mine: true, Rows: []requests.Row{row(1, "")}},
+			{Rows: []requests.Row{row(2, "")}},
+			{Assignee: "alice", Rows: []requests.Row{row(3, "")}},
+		},
+	}})
+}
+
+func TestTheViewHeadsEachGroupWithItsAssignee(t *testing.T) {
+	view := grouped().View()
+
+	want := []string{"o/team (3)", "Assigned to me (1)", "o/r#1", "Unassigned (1)", "o/r#2", "Assigned to alice (1)", "o/r#3"}
+	at := 0
+	for _, w := range want {
+		i := strings.Index(view[at:], w)
+		if i < 0 {
+			t.Fatalf("the view does not show %q after the text before it:\n%s", w, view)
+		}
+		at += i + len(w)
+	}
+}
+
+// A reload can move a row to another group. Its mark goes with it.
+func TestAMarkFollowsItsPullRequestWhenTheRowsAreReplaced(t *testing.T) {
+	m, _ := grouped().Update(key("j"))
+	m, _ = m.Update(space)
+
+	m = m.SetSections([]requests.Section{{
+		Team:   "o/team",
+		Groups: []requests.AssigneeGroup{{Mine: true, Rows: []requests.Row{row(1, ""), row(2, "")}}},
+	}})
+
+	if !m.Marked[row(2, "").Ref.URL()] {
+		t.Errorf("marked = %v, want #2 kept", m.Marked)
+	}
+	if selected, ok := m.Selected(); !ok || selected.Ref.Number != 2 {
+		t.Errorf("selected = %v (ok=%v), want #2", selected.Ref, ok)
+	}
+}
+
+// withDraft draws "me" with the draft #1 and the ready #2. It then draws a team
+// whose only row is the draft #3, assigned to alice.
+func withDraft() Model {
+	draft := func(number int) requests.Row {
+		r := row(number, "")
+		r.IsDraft = true
+		return r
+	}
+	return New(Styles{Dim: lipgloss.NewStyle().Faint(true)}, "claude").SetSections([]requests.Section{
+		section("", draft(1), row(2, "")),
+		{Team: "o/team", Groups: []requests.AssigneeGroup{{Assignee: "alice", Rows: []requests.Row{draft(3)}}}},
+	})
+}
+
+// The list leaves out a draft until the user presses d, because a draft is not
+// ready for review.
+func TestDraftsAreHiddenUntilD(t *testing.T) {
+	m := withDraft()
+
+	view := ansi.Strip(m.View())
+	for _, hidden := range []string{"o/r#1", "o/r#3", "alice"} {
+		if strings.Contains(view, hidden) {
+			t.Errorf("the view shows %q while drafts are hidden:\n%s", hidden, view)
+		}
+	}
+	for _, heading := range []string{"Requested of me (1) · 1 draft hidden", "o/team (0) · 1 draft hidden"} {
+		if !strings.Contains(view, heading) {
+			t.Errorf("the view does not head a section %q:\n%s", heading, view)
+		}
+	}
+	if strings.Contains(view, "none") {
+		t.Errorf("the view says a section with a hidden draft has none:\n%s", view)
+	}
+	if selected, ok := m.Selected(); !ok || selected.Ref.Number != 2 {
+		t.Errorf("selected = %v (ok=%v), want #2", selected.Ref, ok)
+	}
+
+	m, _ = m.Update(key("d"))
+
+	view = ansi.Strip(m.View())
+	for _, shown := range []string{"o/r#1", "o/r#3", "Assigned to alice (1)"} {
+		if !strings.Contains(view, shown) {
+			t.Errorf("the view does not show %q after d:\n%s", shown, view)
+		}
+	}
+	if strings.Contains(view, "hidden") {
+		t.Errorf("the view still says drafts are hidden:\n%s", view)
+	}
+}
+
+// The screen draws a shown draft faint, so it reads as not ready.
+func TestAShownDraftIsDrawnFaint(t *testing.T) {
+	m, _ := withDraft().Update(key("d"))
+	m, _ = m.Update(key("G"))
+
+	for _, line := range strings.Split(m.View(), "\n") {
+		faint := strings.HasPrefix(line, "\x1b[2m")
+		switch {
+		case strings.Contains(line, "o/r#1") && !faint:
+			t.Errorf("the draft #1 is not faint: %q", line)
+		case strings.Contains(line, "o/r#2") && faint:
+			t.Errorf("the ready #2 is faint: %q", line)
+		}
+	}
+}
+
+// The user can still mark a shown draft. Hiding it again drops its mark, because
+// a batch would otherwise start a row the user cannot see.
+func TestADraftCanBeMarkedWhileShownAndHidingItDropsTheMark(t *testing.T) {
+	m, _ := withDraft().Update(key("d"))
+	m, _ = m.Update(key("g"))
+	m, _ = m.Update(space)
+	if !m.Marked[row(1, "").Ref.URL()] {
+		t.Fatalf("marked = %v, want the draft #1", m.Marked)
+	}
+
+	m, _ = m.Update(key("d"))
+
+	if len(m.Marked) != 0 {
+		t.Errorf("marked = %v, want the hidden draft's mark dropped", m.Marked)
+	}
+}
+
+// The root replaces the rows after every reload. The choice to show drafts
+// outlasts the reload.
+func TestShownDraftsStayShownWhenTheRowsAreReplaced(t *testing.T) {
+	m, _ := withDraft().Update(key("d"))
+
+	m = m.SetSections(withDraft().all)
+
+	if !strings.Contains(m.View(), "o/r#1") {
+		t.Errorf("the draft is hidden again after a reload:\n%s", m.View())
 	}
 }
 
@@ -130,7 +278,7 @@ func TestReplacingTheRowsDropsMarksThatCanNoLongerStart(t *testing.T) {
 	m, _ = m.Update(space)
 
 	m = m.SetSections([]requests.Section{
-		{Rows: []requests.Row{row(1, review.StateReviewing), row(2, review.StateReviewing)}},
+		section("", row(1, review.StateReviewing), row(2, review.StateReviewing)),
 	})
 
 	if len(m.Marked) != 0 {
@@ -266,10 +414,9 @@ func TestTheViewMarksRowsAndCountsTheMarks(t *testing.T) {
 // A team whose rows docket could not check shows them under the reason, so the
 // user knows the list may hold pull requests they already reviewed.
 func TestTheViewShowsATeamsRowsUnderItsError(t *testing.T) {
-	m := New(Styles{}, "claude").SetSections([]requests.Section{
-		{},
-		{Team: "o/team", Rows: []requests.Row{row(1, "")}, Err: errors.New("could not tell which of these you already reviewed")},
-	})
+	team := section("o/team", row(1, ""))
+	team.Err = errors.New("could not tell which of these you already reviewed")
+	m := New(Styles{}, "claude").SetSections([]requests.Section{{}, team})
 
 	view := m.View()
 
@@ -283,7 +430,7 @@ func TestTheViewShowsATeamsRowsUnderItsError(t *testing.T) {
 // entry in the config to fix.
 func TestTheViewShowsATeamsSearchError(t *testing.T) {
 	m := New(Styles{}, "claude").SetSections([]requests.Section{
-		{Rows: []requests.Row{row(1, "")}},
+		section("", row(1, "")),
 		{Team: "o/typo", Err: errors.New("search team-review-requested:o/typo: HTTP 422")},
 	})
 
@@ -332,7 +479,7 @@ func TestAOneLinePaneStillShowsOnlyTheCursorsRow(t *testing.T) {
 
 func TestARowWithNoReviewPostedSaysSo(t *testing.T) {
 	m := New(Styles{}, "claude").SetSections([]requests.Section{
-		{Rows: []requests.Row{row(1, review.StateUnreviewed)}},
+		section("", row(1, review.StateUnreviewed)),
 	})
 
 	view := m.View()

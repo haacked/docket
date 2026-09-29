@@ -131,6 +131,9 @@ type searchItem struct {
 	User    struct {
 		Login string `json:"login"`
 	} `json:"user"`
+	Assignees []struct {
+		Login string `json:"login"`
+	} `json:"assignees"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -167,10 +170,15 @@ func (c *CLI) ReviewRequests(ctx context.Context, query string) ([]requests.PR, 
 			if err != nil {
 				return nil, fmt.Errorf("search %s returned %q: %w", query, item.HTMLURL, err)
 			}
+			var assignees []string
+			for _, a := range item.Assignees {
+				assignees = append(assignees, a.Login)
+			}
 			prs = append(prs, requests.PR{
 				Ref:       ref,
 				Title:     item.Title,
 				Author:    item.User.Login,
+				Assignees: assignees,
 				IsDraft:   item.Draft,
 				UpdatedAt: item.UpdatedAt,
 			})

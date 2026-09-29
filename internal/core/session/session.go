@@ -175,7 +175,7 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 	if err != nil {
 		return requests.Fetched{}, err
 	}
-	f := requests.Fetched{Mine: mine}
+	f := requests.Fetched{Login: me, Mine: mine}
 	check := caughtUpCheck{s: s, me: me, skip: refsOf(mine)}
 	for _, team := range s.Config().Teams {
 		query := "team-review-requested:" + team + " -author:" + me
