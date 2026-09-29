@@ -157,7 +157,8 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 // search answers 422 to @me under some gh credentials. A team whose search fails
 // carries the error and the other searches still run. GitHub answers 422 to a
 // team it cannot resolve, so one misspelled slug would otherwise hide every
-// request.
+// request. A team search leaves out the user's own pull requests, because
+// CODEOWNERS asks the author's team to review them.
 func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 	me, err := s.peekLogin(ctx)
 	if err != nil {
@@ -168,11 +169,103 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 		return requests.Fetched{}, err
 	}
 	f := requests.Fetched{Mine: mine}
+	check := caughtUpCheck{s: s, me: me, skip: refsOf(mine)}
 	for _, team := range s.Config().Teams {
-		prs, err := s.GH.ReviewRequests(ctx, "team-review-requested:"+team)
+		query := "team-review-requested:" + team + " -author:" + me
+		prs, err := s.GH.ReviewRequests(ctx, query)
+		if err == nil {
+			if prs, err = check.drop(ctx, prs); err != nil {
+				err = fmt.Errorf("could not tell which of these you already reviewed: %w", err)
+			}
+		}
 		f.Teams = append(f.Teams, requests.Team{Slug: team, PRs: prs, Err: err})
 	}
 	return f, nil
+}
+
+// caughtUpCheck leaves out of each team's search the pull requests the user has
+// reviewed at their current head. A team's request can outlast the user's
+// review or arrive after it, so the team search alone lists pull requests with
+// nothing new to review. requests.Group lists a pull request only under the
+// first section that has it. So a pull request in the user's own section is
+// never checked, and one in two teams' searches is checked once.
+//
+// GitHub allows 30 searches a minute, so one reviewed-by search serves every
+// team. It runs when the first team has rows, and a failure of it stands for
+// every later team without searching again.
+type caughtUpCheck struct {
+	s         *Service
+	me        string
+	searched  bool
+	reviewed  []pr.Ref
+	searchErr error
+	skip      []pr.Ref
+	caught    []pr.Ref
+}
+
+// drop checks only the pull requests that are both in prs and in the reviewed-by
+// search, because each check costs up to two calls. A check that fails ends the
+// checks of this team's rows. The team then keeps every row that no check found
+// caught up.
+func (c *caughtUpCheck) drop(ctx context.Context, prs []requests.PR) ([]requests.PR, error) {
+	if len(prs) == 0 {
+		return prs, nil
+	}
+	if !c.searched {
+		c.searched = true
+		var reviewed []requests.PR
+		reviewed, c.searchErr = c.s.GH.ReviewRequests(ctx, "reviewed-by:"+c.me+" -author:"+c.me)
+		c.reviewed = refsOf(reviewed)
+	}
+	if c.searchErr != nil {
+		return prs, c.searchErr
+	}
+	for _, p := range prs {
+		if slices.ContainsFunc(c.skip, p.Ref.Equal) || !slices.ContainsFunc(c.reviewed, p.Ref.Equal) {
+			continue
+		}
+		c.skip = append(c.skip, p.Ref)
+		caught, err := c.caughtUp(ctx, p.Ref)
+		if err != nil {
+			return c.withoutCaught(prs), err
+		}
+		if caught {
+			c.caught = append(c.caught, p.Ref)
+		}
+	}
+	return c.withoutCaught(prs), nil
+}
+
+func (c *caughtUpCheck) withoutCaught(prs []requests.PR) []requests.PR {
+	return slices.DeleteFunc(slices.Clone(prs), func(p requests.PR) bool {
+		return slices.ContainsFunc(c.caught, p.Ref.Equal)
+	})
+}
+
+// caughtUp reads the reviews first, because a pull request with none of the
+// user's reviews to count needs no read of its head.
+func (c *caughtUpCheck) caughtUp(ctx context.Context, ref pr.Ref) (bool, error) {
+	reviews, err := c.s.GH.Reviews(ctx, ref)
+	if err != nil {
+		return false, err
+	}
+	commits := review.ReviewedCommits(reviews, c.me)
+	if len(commits) == 0 {
+		return false, nil
+	}
+	info, err := c.s.GH.PR(ctx, ref)
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(commits, info.HeadRefOid), nil
+}
+
+func refsOf(prs []requests.PR) []pr.Ref {
+	refs := make([]pr.Ref, 0, len(prs))
+	for _, p := range prs {
+		refs = append(refs, p.Ref)
+	}
+	return refs
 }
 
 // Teams lists the teams the user belongs to on GitHub, as "org/team" slugs. It

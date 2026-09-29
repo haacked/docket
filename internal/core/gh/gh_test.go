@@ -53,12 +53,18 @@ func TestPRReadsTheFieldsTheCloneNeeds(t *testing.T) {
 	if info.State != review.PRMerged {
 		t.Errorf("state = %q, want %q", info.State, review.PRMerged)
 	}
+	if info.HeadRefOid != "abc123" {
+		t.Errorf("head commit = %q, want abc123", info.HeadRefOid)
+	}
 	line := fake.Lines()[0]
 	if !strings.Contains(line, "--repo haacked/docket") {
 		t.Errorf("command = %s", line)
 	}
 	if !strings.Contains(line, ",state") {
 		t.Errorf("command = %s, want it to ask for the state", line)
+	}
+	if !strings.Contains(line, "headRefOid") {
+		t.Errorf("command = %s, want it to ask for the head commit", line)
 	}
 }
 
@@ -74,7 +80,7 @@ func TestPRRejectsAResponseWithNoHeadBranch(t *testing.T) {
 // the result is pages to flatten rather than one list.
 func TestReviewsFlattensThePages(t *testing.T) {
 	body := `[[{"id":1,"user":{"login":"haacked"},"state":"PENDING","submitted_at":null}],` +
-		`[{"id":2,"user":{"login":"someone"},"state":"APPROVED","submitted_at":"2026-09-10T12:00:00Z"}]]`
+		`[{"id":2,"user":{"login":"someone"},"state":"APPROVED","submitted_at":"2026-09-10T12:00:00Z","commit_id":"abc123"}]]`
 	fake := &exec.Fake{Results: map[string]exec.Result{"pulls/7/reviews": {Stdout: body}}}
 
 	reviews, err := New(fake).Reviews(context.Background(), ref)
@@ -93,6 +99,9 @@ func TestReviewsFlattensThePages(t *testing.T) {
 	}
 	if reviews[1].SubmittedAt == nil {
 		t.Fatal("a submitted review should carry submitted_at")
+	}
+	if reviews[1].CommitID != "abc123" {
+		t.Errorf("commit = %q, want abc123", reviews[1].CommitID)
 	}
 	if line := fake.Lines()[0]; !strings.Contains(line, "--paginate") || !strings.Contains(line, "--slurp") {
 		t.Errorf("command = %s, want every page in one call", line)
@@ -217,7 +226,7 @@ func TestReviewRequestsWithNothingWaiting(t *testing.T) {
 	}
 }
 
-func TestReviewRequestsErrorNamesTheQualifier(t *testing.T) {
+func TestReviewRequestsErrorNamesTheQuery(t *testing.T) {
 	fake := &exec.Fake{Errs: map[string]error{"search/issues": errors.New("gh: rate limited")}}
 
 	_, err := New(fake).ReviewRequests(context.Background(), "team-review-requested:PostHog/team-feature-flags")
@@ -231,7 +240,7 @@ func TestReviewRequestsFailsOnOutputThatIsNotJSON(t *testing.T) {
 
 	_, err := New(fake).ReviewRequests(context.Background(), "team-review-requested:PostHog/team-feature-flags")
 	if err == nil || !strings.Contains(err.Error(), "PostHog/team-feature-flags") {
-		t.Errorf("error = %v, want a parse error that names the qualifier", err)
+		t.Errorf("error = %v, want a parse error that names the query", err)
 	}
 }
 

@@ -13,6 +13,7 @@ type GHReview struct {
 	State       string     `json:"state"`
 	SubmittedAt *time.Time `json:"submitted_at"`
 	Body        string     `json:"body"`
+	CommitID    string     `json:"commit_id"`
 }
 
 type GHUser struct {
@@ -22,6 +23,9 @@ type GHUser struct {
 // StatePending is the state GitHub reports for a review that was created
 // without an event, which is what review-code's draft does.
 const StatePending = "PENDING"
+
+// StateCommented is the state of a review submitted with the comment event.
+const StateCommented = "COMMENTED"
 
 // SubmitTolerance absorbs clock skew between this machine and GitHub when
 // comparing submitted_at against the session's start.
@@ -88,6 +92,22 @@ func PendingReviewID(reviews []GHReview, me string) int64 {
 		}
 	}
 	return id
+}
+
+// ReviewedCommits lists the commits my submitted reviews of the pull request
+// were made on. A pending review does not count, because it is a draft nobody
+// else has seen. A comment review with no body does not count either. GitHub
+// records a reply in a review thread that way, on whatever the head was when the
+// reply went up, so it says nothing about whether I read that commit's changes.
+func ReviewedCommits(reviews []GHReview, me string) []string {
+	var commits []string
+	for _, r := range reviews {
+		bare := strings.EqualFold(r.State, StateCommented) && strings.TrimSpace(r.Body) == ""
+		if strings.EqualFold(r.User.Login, me) && !r.pending() && !bare && r.CommitID != "" {
+			commits = append(commits, r.CommitID)
+		}
+	}
+	return commits
 }
 
 func (r GHReview) pending() bool { return strings.EqualFold(r.State, StatePending) }

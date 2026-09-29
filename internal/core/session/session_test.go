@@ -41,13 +41,17 @@ type fakeGH struct {
 	// GitHub has to count calls: the canned answer below is never written by
 	// one, so comparing against it would pass however many were made.
 	reads int
-	// requested and requestErrs are the canned search answers, keyed by qualifier.
+	// requested and requestErrs are the canned search answers, keyed by query.
 	requested   map[string][]requests.PR
 	requestErrs map[string]error
 	searches    []string
 	// teams and teamsErr are the canned answer to Teams.
 	teams    []string
 	teamsErr error
+	// reviewsFor answers Reviews for one pull request, ahead of reviews.
+	reviewsFor map[pr.Ref][]review.GHReview
+	// reviewErrs fails Reviews for one pull request, ahead of reviewsFor.
+	reviewErrs map[pr.Ref]error
 }
 
 // submitCall is one POST to the reviews events endpoint.
@@ -73,16 +77,22 @@ func (f *fakeGH) Login(context.Context) (string, error) {
 
 func (f *fakeGH) PR(context.Context, pr.Ref) (gh.PRInfo, error) { return f.info, f.infoErr }
 
-func (f *fakeGH) Reviews(context.Context, pr.Ref) ([]review.GHReview, error) {
+func (f *fakeGH) Reviews(_ context.Context, ref pr.Ref) ([]review.GHReview, error) {
 	f.reads++
+	if err, ok := f.reviewErrs[ref]; ok {
+		return nil, err
+	}
+	if reviews, ok := f.reviewsFor[ref]; ok {
+		return reviews, f.reviewErr
+	}
 	return f.reviews, f.reviewErr
 }
 
 func (f *fakeGH) Teams(context.Context) ([]string, error) { return f.teams, f.teamsErr }
 
-func (f *fakeGH) ReviewRequests(_ context.Context, qualifier string) ([]requests.PR, error) {
-	f.searches = append(f.searches, qualifier)
-	return f.requested[qualifier], f.requestErrs[qualifier]
+func (f *fakeGH) ReviewRequests(_ context.Context, query string) ([]requests.PR, error) {
+	f.searches = append(f.searches, query)
+	return f.requested[query], f.requestErrs[query]
 }
 
 // SubmitReview records the call and, on success, leaves the review the way
@@ -975,6 +985,24 @@ func TestResumeSpecRefusesWhenTheReviewSnapshotCannotRefresh(t *testing.T) {
 	}
 }
 
+// teamQuery is the search for a team's review requests, which leaves out the
+// user's own pull requests.
+func teamQuery(team string) string {
+	return "team-review-requested:" + team + " -author:haacked"
+}
+
+// reviewedQuery is the one search for the pull requests the user has reviewed,
+// which every team's results are checked against.
+const reviewedQuery = "reviewed-by:haacked -author:haacked"
+
+// approvedAt is a review of mine that approved commit.
+func approvedAt(commit string) review.GHReview {
+	return review.GHReview{User: review.GHUser{Login: "haacked"}, State: "APPROVED", CommitID: commit}
+}
+
+// CODEOWNERS asks the author's own team to review the author's pull request.
+// GitHub never asks the author directly, so only the team searches leave out the
+// user's own pull requests.
 func TestRequestsSearchesForTheUserAndThenEachTeamInOrder(t *testing.T) {
 	fake := &fakeGH{login: "haacked"}
 	svc, _ := newService(t, fake, newFakeGit())
@@ -982,8 +1010,8 @@ func TestRequestsSearchesForTheUserAndThenEachTeamInOrder(t *testing.T) {
 	mine := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}
 	teamB := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}
 	fake.requested = map[string][]requests.PR{
-		"user-review-requested:haacked":        {mine},
-		"team-review-requested:PostHog/team-b": {teamB},
+		"user-review-requested:haacked": {mine},
+		teamQuery("PostHog/team-b"):     {teamB},
 	}
 
 	f, err := svc.Requests(context.Background())
@@ -991,7 +1019,12 @@ func TestRequestsSearchesForTheUserAndThenEachTeamInOrder(t *testing.T) {
 		t.Fatalf("Requests: %v", err)
 	}
 
-	want := []string{"user-review-requested:haacked", "team-review-requested:PostHog/team-a", "team-review-requested:PostHog/team-b"}
+	want := []string{
+		"user-review-requested:haacked",
+		teamQuery("PostHog/team-a"),
+		teamQuery("PostHog/team-b"),
+		reviewedQuery,
+	}
 	if !slices.Equal(fake.searches, want) {
 		t.Errorf("searches = %v, want %v", fake.searches, want)
 	}
@@ -1000,6 +1033,255 @@ func TestRequestsSearchesForTheUserAndThenEachTeamInOrder(t *testing.T) {
 	}
 	if len(f.Teams) != 2 || f.Teams[0].Slug != "PostHog/team-a" || len(f.Teams[1].PRs) != 1 {
 		t.Errorf("teams = %+v", f.Teams)
+	}
+}
+
+func TestTeamSearchesLeaveOutThePullRequestsTheUserIsCaughtUpOn(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a"}
+	caughtUp := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}
+	pushedSince := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}
+	unreviewed := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 3}}
+	fake.requested = map[string][]requests.PR{
+		teamQuery("PostHog/team-a"): {caughtUp, pushedSince, unreviewed},
+		reviewedQuery:               {caughtUp, pushedSince},
+	}
+	fake.info = gh.PRInfo{HeadRefOid: "head"}
+	fake.reviewsFor = map[pr.Ref][]review.GHReview{
+		caughtUp.Ref:    {approvedAt("head")},
+		pushedSince.Ref: {approvedAt("older")},
+	}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if len(f.Teams) != 1 || f.Teams[0].Err != nil {
+		t.Fatalf("teams = %+v, want one with no error", f.Teams)
+	}
+	var got []int
+	for _, p := range f.Teams[0].PRs {
+		got = append(got, p.Ref.Number)
+	}
+	if !slices.Equal(got, []int{2, 3}) {
+		t.Errorf("team rows = %v, want #2 and #3", got)
+	}
+	if fake.reads != 2 {
+		t.Errorf("read reviews %d times, want one for each pull request the user reviewed", fake.reads)
+	}
+}
+
+// GitHub allows 30 searches a minute, so the reviewed-by search runs once for
+// all the teams and only when a team has something to check.
+func TestRequestsSearchesForReviewedPullRequestsOnceForAllTeams(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a", "PostHog/team-b", "PostHog/team-c"}
+	fake.requested = map[string][]requests.PR{
+		teamQuery("PostHog/team-a"): {{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}},
+		teamQuery("PostHog/team-b"): {{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}},
+	}
+
+	if _, err := svc.Requests(context.Background()); err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	n := 0
+	for _, q := range fake.searches {
+		if q == reviewedQuery {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("reviewed-by searches = %d, want 1 in %v", n, fake.searches)
+	}
+
+	fake.searches = nil
+	svc.Cfg.Teams = []string{"PostHog/team-c"}
+	if _, err := svc.Requests(context.Background()); err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+	if slices.Contains(fake.searches, reviewedQuery) {
+		t.Errorf("searched for reviewed pull requests with no team rows to check: %v", fake.searches)
+	}
+}
+
+// requests.Group lists a pull request only under the first section that has
+// it, so a check of one in the user's own section or in an earlier team's search
+// would cost calls and change nothing on the screen.
+func TestRequestsChecksAPullRequestOnceAndNeverOneAskedOfTheUser(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a", "PostHog/team-b"}
+	askedOfMe := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}
+	caughtUp := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}
+	fake.requested = map[string][]requests.PR{
+		"user-review-requested:haacked": {askedOfMe},
+		teamQuery("PostHog/team-a"):     {askedOfMe, caughtUp},
+		teamQuery("PostHog/team-b"):     {askedOfMe, caughtUp},
+		reviewedQuery:                   {askedOfMe, caughtUp},
+	}
+	fake.info = gh.PRInfo{HeadRefOid: "head"}
+	fake.reviews = []review.GHReview{approvedAt("head")}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if fake.reads != 1 {
+		t.Errorf("read reviews %d times, want one, for #2", fake.reads)
+	}
+	for _, team := range f.Teams {
+		if slices.ContainsFunc(team.PRs, func(p requests.PR) bool { return p.Ref.Equal(caughtUp.Ref) }) {
+			t.Errorf("%s lists #2, which the user is caught up on", team.Slug)
+		}
+	}
+}
+
+// A row must not vanish because docket could not tell whether the user has seen
+// it. The team keeps every row and says why the list may hold ones already
+// reviewed.
+func TestATeamWhoseCheckFailsKeepsItsRowsAndSaysWhy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail func(*fakeGH, error)
+	}{
+		{"the reviewed-by search", func(f *fakeGH, err error) {
+			f.requestErrs = map[string]error{reviewedQuery: err}
+		}},
+		{"the pull request's head", func(f *fakeGH, err error) { f.infoErr = err }},
+		{"the pull request's reviews", func(f *fakeGH, err error) { f.reviewErr = err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeGH{login: "haacked"}
+			svc, _ := newService(t, fake, newFakeGit())
+			svc.Cfg.Teams = []string{"PostHog/team-a"}
+			reviewed := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}
+			fake.requested = map[string][]requests.PR{
+				teamQuery("PostHog/team-a"): {reviewed},
+				reviewedQuery:               {reviewed},
+			}
+			fake.info = gh.PRInfo{HeadRefOid: "head"}
+			fake.reviews = []review.GHReview{approvedAt("head")}
+			failure := errors.New("rate limited")
+			tc.fail(fake, failure)
+
+			f, err := svc.Requests(context.Background())
+			if err != nil {
+				t.Fatalf("Requests: %v", err)
+			}
+
+			if len(f.Teams) != 1 || len(f.Teams[0].PRs) != 1 {
+				t.Fatalf("teams = %+v, want the row kept", f.Teams)
+			}
+			if !errors.Is(f.Teams[0].Err, failure) {
+				t.Errorf("err = %v, want the check's failure", f.Teams[0].Err)
+			}
+		})
+	}
+}
+
+// A check that fails keeps the rows docket could not check. A row an earlier
+// check found the user caught up on stays out, because docket did tell.
+func TestAFailedCheckStillLeavesOutThePullRequestsFoundCaughtUp(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a"}
+	caughtUp := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}
+	failing := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}
+	fake.requested = map[string][]requests.PR{
+		teamQuery("PostHog/team-a"): {caughtUp, failing},
+		reviewedQuery:               {caughtUp, failing},
+	}
+	fake.info = gh.PRInfo{HeadRefOid: "head"}
+	fake.reviews = []review.GHReview{approvedAt("head")}
+	failure := errors.New("rate limited")
+	fake.reviewErrs = map[pr.Ref]error{failing.Ref: failure}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if len(f.Teams) != 1 || !errors.Is(f.Teams[0].Err, failure) {
+		t.Fatalf("teams = %+v, want one with the check's failure", f.Teams)
+	}
+	if rows := f.Teams[0].PRs; len(rows) != 1 || !rows[0].Ref.Equal(failing.Ref) {
+		t.Errorf("rows = %+v, want only #2, which docket could not check", rows)
+	}
+}
+
+// requests.Group lists a pull request under the first team that has it, so a
+// later team does not check again a pull request whose check failed. A second
+// failure would end the later team's other checks.
+func TestAPullRequestWhoseCheckFailedIsNotCheckedAgain(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a", "PostHog/team-b"}
+	failing := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}
+	caughtUp := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}
+	fake.requested = map[string][]requests.PR{
+		teamQuery("PostHog/team-a"): {failing},
+		teamQuery("PostHog/team-b"): {failing, caughtUp},
+		reviewedQuery:               {failing, caughtUp},
+	}
+	fake.info = gh.PRInfo{HeadRefOid: "head"}
+	fake.reviews = []review.GHReview{approvedAt("head")}
+	fake.reviewErrs = map[pr.Ref]error{failing.Ref: errors.New("rate limited")}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if fake.reads != 2 {
+		t.Errorf("read reviews %d times, want one for each pull request", fake.reads)
+	}
+	if len(f.Teams) != 2 {
+		t.Fatalf("teams = %+v, want two", f.Teams)
+	}
+	if b := f.Teams[1]; b.Err != nil || len(b.PRs) != 1 || !b.PRs[0].Ref.Equal(failing.Ref) {
+		t.Errorf("team-b = %+v, want #1 kept, #2 left out, and no error", b)
+	}
+}
+
+// GitHub allows 30 searches a minute, so a failed reviewed-by search stands for
+// every later team rather than running again for each.
+func TestAFailedReviewedSearchStandsForEveryTeam(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a", "PostHog/team-b"}
+	fake.requested = map[string][]requests.PR{
+		teamQuery("PostHog/team-a"): {{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}},
+		teamQuery("PostHog/team-b"): {{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}},
+	}
+	failure := errors.New("rate limited")
+	fake.requestErrs = map[string]error{reviewedQuery: failure}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if len(f.Teams) != 2 {
+		t.Fatalf("teams = %+v, want two", f.Teams)
+	}
+	for _, team := range f.Teams {
+		if len(team.PRs) != 1 || !errors.Is(team.Err, failure) {
+			t.Errorf("%s = %+v, want its row and the search's failure", team.Slug, team)
+		}
+	}
+	n := 0
+	for _, q := range fake.searches {
+		if q == reviewedQuery {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("reviewed-by searches = %d, want 1 in %v", n, fake.searches)
 	}
 }
 
@@ -1045,11 +1327,11 @@ func TestATeamSearchThatFailsKeepsEverySearchThatSucceeded(t *testing.T) {
 	mine := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}
 	teamB := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}
 	fake.requested = map[string][]requests.PR{
-		"user-review-requested:haacked":        {mine},
-		"team-review-requested:PostHog/team-b": {teamB},
+		"user-review-requested:haacked": {mine},
+		teamQuery("PostHog/team-b"):     {teamB},
 	}
 	failure := errors.New("422")
-	fake.requestErrs = map[string]error{"team-review-requested:PostHog/typo": failure}
+	fake.requestErrs = map[string]error{teamQuery("PostHog/typo"): failure}
 
 	f, err := svc.Requests(context.Background())
 	if err != nil {
