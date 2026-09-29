@@ -327,10 +327,11 @@ func (s *server) submit(ctx context.Context, _ *sdk.CallToolRequest, in submitIn
 	if !ok {
 		return nil, Review{}, fmt.Errorf("docket has no open review of %s; start_review starts one", ref)
 	}
-	// Only a poll moves a finished background session to drafted. Without one, a
-	// review whose draft is already on GitHub still reads as reviewing and Submit
-	// refuses it.
-	if rec.InBackgroundSession() {
+	// Only a poll reads the draft a background session posted. Until then the
+	// record holds no review id, and Submit refuses it although the draft is on
+	// GitHub. A reviewing record that already holds one is submittable, and Submit
+	// checks GitHub for it itself.
+	if !rec.Submittable() && rec.InBackgroundSession() {
 		if rec, err = s.poll(ctx, rec); err != nil {
 			return nil, Review{}, err
 		}
