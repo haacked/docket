@@ -18,12 +18,12 @@ func (Claude) Binary() string { return "claude" }
 
 func (Claude) NewSessionID() string { return uuid.NewString() }
 
-func (Claude) Start(rec review.Record, _ Paths) exec.CommandSpec {
-	return claudeSpec(rec.Dir, rec.SessionID, "/review-code "+reviewArgs(rec))
+func (Claude) Start(rec review.Record, paths Paths) exec.CommandSpec {
+	return claudeSpec(paths, rec.Dir, rec.SessionID, "/review-code "+reviewArgs(rec))
 }
 
-func (Claude) Ask(rec review.Record, _ Paths) exec.CommandSpec {
-	return claudeSpec(rec.Dir, rec.AskSessionID, askPrompt(rec))
+func (Claude) Ask(rec review.Record, paths Paths) exec.CommandSpec {
+	return claudeSpec(paths, rec.Dir, rec.AskSessionID, askPrompt(rec))
 }
 
 // userSettings keeps a session from loading the settings in its working
@@ -31,24 +31,35 @@ func (Claude) Ask(rec review.Record, _ Paths) exec.CommandSpec {
 // pull request's own repository, so its author controls those settings.
 var userSettings = []string{"--setting-sources", "user"}
 
-func claudeSpec(dir, sessionID, prompt string) exec.CommandSpec {
+func claudeSpec(paths Paths, dir, sessionID, prompt string) exec.CommandSpec {
 	args := slices.Clone(userSettings)
 	if sessionID != "" {
 		args = append(args, "--session-id", sessionID)
 	}
-	args = append(args, prompt)
-	return exec.CommandSpec{Path: "claude", Args: args, Dir: dir}
+	return claudeCommand(paths, dir, append(args, prompt)...)
 }
 
-func (Claude) Resume(rec review.Record, _ Paths) (exec.CommandSpec, bool) {
+func (Claude) Resume(rec review.Record, paths Paths) (exec.CommandSpec, bool) {
 	if rec.SessionID == "" {
 		return exec.CommandSpec{}, false
 	}
-	return exec.CommandSpec{
-		Path: "claude",
-		Args: append([]string{"--resume", rec.SessionID}, userSettings...),
-		Dir:  rec.Dir,
-	}, true
+	return claudeCommand(paths, rec.Dir, append([]string{"--resume", rec.SessionID}, userSettings...)...), true
+}
+
+// claudeConfigDir is the variable that picks claude's account.
+const claudeConfigDir = "CLAUDE_CONFIG_DIR"
+
+// claudeCommand runs claude under the account paths names. For the default
+// account the spec unsets the variable rather than inheriting it, because docket
+// itself may run with another account's CLAUDE_CONFIG_DIR exported.
+func claudeCommand(paths Paths, dir string, args ...string) exec.CommandSpec {
+	spec := exec.CommandSpec{Path: "claude", Args: args, Dir: dir}
+	if paths.ClaudeConfig == "" {
+		spec.Unset = []string{claudeConfigDir}
+	} else {
+		spec.Set = []string{claudeConfigDir + "=" + paths.ClaudeConfig}
+	}
+	return spec
 }
 
 // CaptureSessionID has nothing to find. NewSessionID already minted the id and

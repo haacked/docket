@@ -3,8 +3,6 @@ package session
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -70,18 +68,10 @@ func TestPollKeepsABlockedSessionWithNothingPostedRunning(t *testing.T) {
 func TestPollReadsGitHubOnceForEachStretchASessionIsBlocked(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
-	jobs := t.TempDir()
-	svc.Cfg.ClaudeJobsDir = jobs
+	jobs := defaultJobs(t, svc)
 	writeState := func(updated string) {
 		t.Helper()
-		dir := filepath.Join(jobs, "6d681a76")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		body := `{"tempo": "blocked", "needs": "permission to run gh", "updatedAt": "` + updated + `"}`
-		if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeJobState(t, jobs, "6d681a76", `{"tempo": "blocked", "needs": "permission to run gh", "updatedAt": "`+updated+`"}`)
 	}
 	writeState("2026-09-24T17:00:00Z")
 	startedBackground(t, svc, bgRunner(bgListing("6d681a76", bgSession, "blocked", true)))

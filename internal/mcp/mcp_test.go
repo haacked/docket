@@ -105,10 +105,10 @@ func newFixture(t *testing.T) *fixture {
 	github := &fakeGitHub{}
 	svc := &session.Service{
 		Cfg: config.Config{
-			ReviewCodeDir: t.TempDir(),
-			ClaudeJobsDir: t.TempDir(),
-			DefaultEngine: "claude",
-			GitHubUser:    me,
+			ReviewCodeDir:    t.TempDir(),
+			ClaudeDefaultDir: t.TempDir(),
+			DefaultEngine:    "claude",
+			GitHubUser:       me,
 		},
 		Paths:  paths,
 		Store:  index.New(paths.Index, paths.Lock),
@@ -205,7 +205,7 @@ func (f *fixture) agents(state, status string) {
 // jobState writes claude's status file for the review's session.
 func (f *fixture) jobState(t *testing.T, state string) {
 	t.Helper()
-	dir := filepath.Join(f.svc.Cfg.ClaudeJobsDir, bgID)
+	dir := filepath.Join(f.svc.Cfg.ClaudeJobsDir(""), bgID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

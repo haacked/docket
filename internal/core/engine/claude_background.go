@@ -19,12 +19,8 @@ import (
 // The session gets none of docket's own tools. It reads what the pull request's
 // author wrote. Nobody is there to confirm a tool call. --disallowedTools takes
 // every argument after it, so it follows the prompt.
-func (Claude) StartBackground(rec review.Record, _ Paths) exec.CommandSpec {
-	return exec.CommandSpec{
-		Path: "claude",
-		Args: slices.Concat([]string{"--bg", "/review-code " + reviewArgs(rec) + unattended}, userSettings, []string{"--disallowedTools", docketTools}),
-		Dir:  rec.Dir,
-	}
+func (Claude) StartBackground(rec review.Record, paths Paths) exec.CommandSpec {
+	return claudeCommand(paths, rec.Dir, slices.Concat([]string{"--bg", "/review-code " + reviewArgs(rec) + unattended}, userSettings, []string{"--disallowedTools", docketTools})...)
 }
 
 // docketTools is the permission rule that matches every tool of an MCP server
@@ -69,10 +65,11 @@ func firstLine(res exec.Result) string {
 	return "it printed nothing"
 }
 
-// StatusSpec lists every session claude is holding. --all includes the finished
-// ones, which are the sessions docket is waiting for.
-func (Claude) StatusSpec(_ Paths) exec.CommandSpec {
-	return exec.CommandSpec{Path: "claude", Args: []string{"agents", "--json", "--all"}}
+// StatusSpec lists every session claude is holding under the account paths
+// names. --all includes the finished ones, which are the sessions docket is
+// waiting for.
+func (Claude) StatusSpec(paths Paths) exec.CommandSpec {
+	return claudeCommand(paths, "", "agents", "--json", "--all")
 }
 
 // bgStateDone is the state claude reports once a background session has
@@ -177,16 +174,12 @@ func (Claude) OpenSpec(rec review.Record, status BGStatus, paths Paths) (exec.Co
 	if rec.BGID == "" || !status.Live {
 		return Claude{}.Resume(rec, paths)
 	}
-	return exec.CommandSpec{
-		Path: "claude",
-		Args: []string{"attach", rec.BGID},
-		Dir:  rec.Dir,
-	}, true
+	return claudeCommand(paths, rec.Dir, "attach", rec.BGID), true
 }
 
 // StopSpec ends the session. The conversation survives, which is what makes this
 // safe to run before abandoning a record: `claude rm` is the one that deletes it,
 // and docket never runs it.
-func (Claude) StopSpec(rec review.Record, _ Paths) exec.CommandSpec {
-	return exec.CommandSpec{Path: "claude", Args: []string{"stop", rec.BGID}}
+func (Claude) StopSpec(rec review.Record, paths Paths) exec.CommandSpec {
+	return claudeCommand(paths, "", "stop", rec.BGID)
 }

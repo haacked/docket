@@ -39,6 +39,16 @@ Reviewing your own pull request works. review-code leaves the draft review out o
 
 Only `claude` runs background reviews. `codex` 0.150.1 has no background mode, so a `codex` review runs in this terminal whatever the default says, and the new review screen says so.
 
+## Claude account
+
+docket runs `claude` under the account that `CLAUDE_CONFIG_DIR` names in the shell you start it from, or under claude's default login when that is unset. To review under another account, sign that account in to a config directory of its own (run `CLAUDE_CONFIG_DIR=~/.claude-work claude` and then `/login`), and link `review-code` into that directory's `skills` folder, because a new config directory has none of your skills. Then name the directory in `config.toml`:
+
+```toml
+claude_config_dir = "~/.claude-work"
+```
+
+Each review keeps the account it started under, so a change to this setting applies only to new reviews. docket still resumes, attaches to, and stops the open ones under their own account. Each account keeps its own list of trusted directories, so the first background review under a new account shows the trust prompt again.
+
 ## Review requests
 
 `i` on the dashboard lists the open pull requests waiting on your review. The first section holds the ones that name you, and each team you choose gets a section of its own. `t` on that screen lists the teams GitHub says you belong to: `space` checks a team, `enter` saves the checked ones and searches again, and `esc` goes back without saving. Listing your teams needs the `read:org` scope, which `gh auth refresh -s read:org` grants. The choice is saved to `config.toml`, which you can also edit by hand, for instance to add a team you do not belong to:

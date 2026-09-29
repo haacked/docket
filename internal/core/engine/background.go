@@ -89,7 +89,9 @@ type BackgroundEngine interface {
 	Untrusted(res exec.Result) bool
 	// TrustSpec puts the agent's trust prompt for dir on the terminal and ends
 	// once the user answers it. It exits zero only when the user trusted dir.
-	TrustSpec(dir string) exec.CommandSpec
+	// The agent keeps the answer per account. paths names the account that
+	// trusts dir.
+	TrustSpec(dir string, paths Paths) exec.CommandSpec
 }
 
 // Background returns the engine's background support, or false when it has

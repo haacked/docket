@@ -105,11 +105,14 @@ func (s *Service) newID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
-func (s *Service) enginePaths() engine.Paths {
+// enginePaths are the paths for a record whose claude sessions run under
+// claudeConfig, which is the record's ClaudeConfigDir.
+func (s *Service) enginePaths(claudeConfig string) engine.Paths {
 	return engine.Paths{
 		Grant:         s.Cfg.AgentDirs(),
 		CodexSessions: s.Cfg.CodexSessionsDir,
-		ClaudeJobs:    s.Cfg.ClaudeJobsDir,
+		ClaudeConfig:  claudeConfig,
+		ClaudeJobs:    s.Cfg.ClaudeJobsDir(claudeConfig),
 	}
 }
 
@@ -483,7 +486,8 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		// GitHub for nothing it can avoid. Prepare settles it properly below. A
 		// dry run on an install that has never cached a login therefore leaves
 		// --self off the command it prints.
-		OwnPR: ownPR(info.Author.Login, s.Config().GitHubUser),
+		OwnPR:           ownPR(info.Author.Login, s.Config().GitHubUser),
+		ClaudeConfigDir: s.Cfg.ClaudeConfigDir,
 	}
 	return rec, plan, info, eng, nil
 }
@@ -498,7 +502,7 @@ func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string, mo
 	}
 	if intent == review.IntentAsk {
 		rec.AskSessionID = eng.NewSessionID()
-		return plan, eng.Ask(rec, s.enginePaths()), nil
+		return plan, eng.Ask(rec, s.enginePaths(rec.ClaudeConfigDir)), nil
 	}
 	spec, err := s.startSpec(eng, rec)
 	return plan, spec, err
@@ -507,13 +511,13 @@ func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string, mo
 // startSpec is the command that starts a fresh review of rec in its mode.
 func (s *Service) startSpec(eng engine.Engine, rec review.Record) (exec.CommandSpec, error) {
 	if rec.Mode != review.ModeBackground {
-		return eng.Start(rec, s.enginePaths()), nil
+		return eng.Start(rec, s.enginePaths(rec.ClaudeConfigDir)), nil
 	}
 	bg, ok := eng.(engine.BackgroundEngine)
 	if !ok {
 		return exec.CommandSpec{}, fmt.Errorf("%s cannot run a review in the background", eng.Name())
 	}
-	return bg.StartBackground(rec, s.enginePaths()), nil
+	return bg.StartBackground(rec, s.enginePaths(rec.ClaudeConfigDir)), nil
 }
 
 // ensureScratch keeps the tier-1 launch directory a git repository with no
@@ -559,7 +563,7 @@ func (s *Service) specFor(rec review.Record, resume bool) (review.Record, exec.C
 	}
 
 	if resume {
-		if spec, ok := eng.Resume(rec, s.enginePaths()); ok {
+		if spec, ok := eng.Resume(rec, s.enginePaths(rec.ClaudeConfigDir)); ok {
 			return rec, spec, nil
 		}
 	}
@@ -572,7 +576,7 @@ func (s *Service) specFor(rec review.Record, resume bool) (review.Record, exec.C
 	if rec.SessionID == "" {
 		rec.SessionID = eng.NewSessionID()
 	}
-	return rec, eng.Start(rec, s.enginePaths()), nil
+	return rec, eng.Start(rec, s.enginePaths(rec.ClaudeConfigDir)), nil
 }
 
 func (s *Service) launch(ctx context.Context, rec review.Record, resume bool) (review.Record, exec.CommandSpec, error) {
@@ -650,7 +654,7 @@ func (s *Service) capture(rec review.Record) (string, error) {
 	if err != nil {
 		return "", nil
 	}
-	return eng.CaptureSessionID(rec, s.enginePaths())
+	return eng.CaptureSessionID(rec, s.enginePaths(rec.ClaudeConfigDir))
 }
 
 // AskSpec returns the command that opens a question-and-answer session about the
@@ -691,12 +695,12 @@ func (s *Service) askSpecFor(rec review.Record) (review.Record, exec.CommandSpec
 	}
 
 	if rec.AskSessionID != "" {
-		if spec, ok := eng.Resume(asAsk(rec), s.enginePaths()); ok {
+		if spec, ok := eng.Resume(asAsk(rec), s.enginePaths(rec.ClaudeConfigDir)); ok {
 			return rec, spec, nil
 		}
 	}
 	rec.AskSessionID = eng.NewSessionID()
-	return rec, eng.Ask(rec, s.enginePaths()), nil
+	return rec, eng.Ask(rec, s.enginePaths(rec.ClaudeConfigDir)), nil
 }
 
 // AfterAsk records the session a question-and-answer launch left behind, then

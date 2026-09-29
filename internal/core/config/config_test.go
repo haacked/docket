@@ -212,8 +212,7 @@ func TestNewPathsExpandsALeadingTilde(t *testing.T) {
 
 // Each of these directories belongs to an agent, not to docket, so each is
 // configuration with a default rather than a path docket knows. docket reads the
-// codex sessions directory to recover the id of a session it just ran, and
-// claude's jobs directory to show what a background review is doing.
+// codex sessions directory to recover the id of a session it just ran.
 func TestAgentDirectoriesAreConfiguration(t *testing.T) {
 	for _, tc := range []struct {
 		key    string
@@ -221,7 +220,6 @@ func TestAgentDirectoriesAreConfiguration(t *testing.T) {
 		suffix string
 	}{
 		{key: "codex_sessions_dir", field: func(c Config) string { return c.CodexSessionsDir }, suffix: filepath.Join(".codex", "sessions")},
-		{key: "claude_jobs_dir", field: func(c Config) string { return c.ClaudeJobsDir }, suffix: filepath.Join(".claude", "jobs")},
 	} {
 		t.Run(tc.key+" defaults to the agent's installed path", func(t *testing.T) {
 			cfg, err := Load(filepath.Join(t.TempDir(), "config.toml"))
@@ -253,6 +251,99 @@ func TestAgentDirectoriesAreConfiguration(t *testing.T) {
 				t.Errorf("%s = %q, want the configured path", tc.key, got)
 			}
 		})
+	}
+}
+
+// docket may start from a shell that already picked the account. An empty value
+// is the only one that leaves claude on its default account, because claude
+// names its keychain entry differently whenever CLAUDE_CONFIG_DIR is set.
+func TestLoadReadsTheClaudeConfigDir(t *testing.T) {
+	const automation, personal = "/Users/me/.claude-automation", "/Users/me/.claude-personal"
+	for _, tc := range []struct {
+		name, body, env, want string
+	}{
+		{name: "nothing names one", want: ""},
+		{name: "the file", body: `claude_config_dir = "` + automation + `"`, want: automation},
+		{name: "a tilde in the file", body: `claude_config_dir = "~/.claude-automation"`, want: "~/.claude-automation"},
+		{name: "the environment", env: automation, want: automation},
+		{name: "the environment under a file without it", body: `github_user = "haacked"`, env: automation, want: automation},
+		{name: "the environment under a file that empties it", body: `claude_config_dir = ""`, env: automation, want: automation},
+		{name: "a tilde in the environment", env: "~/.claude-automation", want: "~/.claude-automation"},
+		{name: "the file over the environment", body: `claude_config_dir = "` + automation + `"`, env: personal, want: automation},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", tc.env)
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if tc.body != "" {
+				if err := os.WriteFile(path, []byte(tc.body+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+
+			want := tc.want
+			if rest, ok := strings.CutPrefix(want, "~/"); ok {
+				want = filepath.Join(home, rest)
+			}
+			if cfg.ClaudeConfigDir != want {
+				t.Errorf("claude_config_dir = %q, want %q", cfg.ClaudeConfigDir, want)
+			}
+		})
+	}
+}
+
+// docket runs some claude commands in the review's directory and others in its
+// own. A relative directory would name a different account for each.
+func TestLoadRefusesARelativeClaudeConfigDir(t *testing.T) {
+	for name, tc := range map[string]struct{ body, env string }{
+		"in the file":        {body: `claude_config_dir = ".claude-work"`},
+		"in the environment": {env: ".claude-work"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", tc.env)
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if tc.body != "" {
+				if err := os.WriteFile(path, []byte(tc.body+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if _, err := Load(path); err == nil {
+				t.Error("Load accepted a relative claude config dir")
+			}
+		})
+	}
+}
+
+func TestClaudeJobsDirIsUnderTheAccountsConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg, err := Load(filepath.Join(t.TempDir(), "config.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	for account, want := range map[string]string{
+		"/Users/me/.claude-automation": "/Users/me/.claude-automation/jobs",
+		"":                             filepath.Join(home, ".claude", "jobs"),
+	} {
+		if got := cfg.ClaudeJobsDir(account); got != want {
+			t.Errorf("jobs for %q = %q, want %q", account, got, want)
+		}
+	}
+}
+
+// A test that builds its own Config reads no status file from the real home
+// directory.
+func TestAConfigLoadDidNotFillInHasNoJobsDirForTheDefaultAccount(t *testing.T) {
+	if got := (Config{}).ClaudeJobsDir(""); got != "" {
+		t.Errorf("jobs = %q, want none", got)
 	}
 }
 
