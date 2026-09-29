@@ -986,10 +986,9 @@ func teamQuery(team string) string {
 	return "team-review-requested:" + team + " -author:haacked"
 }
 
-// reviewedQuery is the part of a team's search the user has reviewed.
-func reviewedQuery(team string) string {
-	return teamQuery(team) + " reviewed-by:haacked"
-}
+// reviewedQuery is the one search for the pull requests the user has reviewed,
+// which every team's results are checked against.
+const reviewedQuery = "reviewed-by:haacked -author:haacked"
 
 // approvedAt is a review of mine that approved commit.
 func approvedAt(commit string) review.GHReview {
@@ -1019,7 +1018,7 @@ func TestRequestsSearchesForTheUserAndThenEachTeamInOrder(t *testing.T) {
 		"user-review-requested:haacked",
 		"team-review-requested:PostHog/team-a -author:haacked",
 		"team-review-requested:PostHog/team-b -author:haacked",
-		"team-review-requested:PostHog/team-b -author:haacked reviewed-by:haacked",
+		reviewedQuery,
 	}
 	if !slices.Equal(fake.searches, want) {
 		t.Errorf("searches = %v, want %v", fake.searches, want)
@@ -1040,8 +1039,8 @@ func TestTeamSearchesLeaveOutThePullRequestsTheUserIsCaughtUpOn(t *testing.T) {
 	pushedSince := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}
 	unreviewed := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 3}}
 	fake.requested = map[string][]requests.PR{
-		teamQuery("PostHog/team-a"):     {caughtUp, pushedSince, unreviewed},
-		reviewedQuery("PostHog/team-a"): {caughtUp, pushedSince},
+		teamQuery("PostHog/team-a"): {caughtUp, pushedSince, unreviewed},
+		reviewedQuery:               {caughtUp, pushedSince},
 	}
 	fake.info = gh.PRInfo{HeadRefOid: "head"}
 	fake.reviewsFor = map[pr.Ref][]review.GHReview{
@@ -1069,6 +1068,41 @@ func TestTeamSearchesLeaveOutThePullRequestsTheUserIsCaughtUpOn(t *testing.T) {
 	}
 }
 
+// GitHub allows 30 searches a minute, so the reviewed-by search runs once for
+// all the teams and only when a team has something to check.
+func TestRequestsSearchesForReviewedPullRequestsOnceForAllTeams(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a", "PostHog/team-b", "PostHog/team-c"}
+	fake.requested = map[string][]requests.PR{
+		teamQuery("PostHog/team-a"): {{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}},
+		teamQuery("PostHog/team-b"): {{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}},
+	}
+
+	if _, err := svc.Requests(context.Background()); err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	n := 0
+	for _, q := range fake.searches {
+		if q == reviewedQuery {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("reviewed-by searches = %d, want 1 in %v", n, fake.searches)
+	}
+
+	fake.searches = nil
+	svc.Cfg.Teams = []string{"PostHog/team-c"}
+	if _, err := svc.Requests(context.Background()); err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+	if slices.Contains(fake.searches, reviewedQuery) {
+		t.Errorf("searched for reviewed pull requests with no team rows to check: %v", fake.searches)
+	}
+}
+
 // requests.Group lists a pull request only under the first section that has
 // it, so a check of one in the user's own section or in an earlier team's search
 // would cost calls and change nothing on the screen.
@@ -1081,9 +1115,8 @@ func TestRequestsChecksAPullRequestOnceAndNeverOneAskedOfTheUser(t *testing.T) {
 	fake.requested = map[string][]requests.PR{
 		"user-review-requested:haacked": {askedOfMe},
 		teamQuery("PostHog/team-a"):     {askedOfMe, caughtUp},
-		reviewedQuery("PostHog/team-a"): {askedOfMe, caughtUp},
 		teamQuery("PostHog/team-b"):     {askedOfMe, caughtUp},
-		reviewedQuery("PostHog/team-b"): {askedOfMe, caughtUp},
+		reviewedQuery:                   {askedOfMe, caughtUp},
 	}
 	fake.info = gh.PRInfo{HeadRefOid: "head"}
 	fake.reviews = []review.GHReview{approvedAt("head")}
@@ -1112,7 +1145,7 @@ func TestATeamWhoseCheckFailsKeepsItsRowsAndSaysWhy(t *testing.T) {
 		fail func(*fakeGH, error)
 	}{
 		{"the reviewed-by search", func(f *fakeGH, err error) {
-			f.requestErrs = map[string]error{reviewedQuery("PostHog/team-a"): err}
+			f.requestErrs = map[string]error{reviewedQuery: err}
 		}},
 		{"the pull request's head", func(f *fakeGH, err error) { f.infoErr = err }},
 		{"the pull request's reviews", func(f *fakeGH, err error) { f.reviewErr = err }},
@@ -1123,8 +1156,8 @@ func TestATeamWhoseCheckFailsKeepsItsRowsAndSaysWhy(t *testing.T) {
 			svc.Cfg.Teams = []string{"PostHog/team-a"}
 			reviewed := requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}
 			fake.requested = map[string][]requests.PR{
-				teamQuery("PostHog/team-a"):     {reviewed},
-				reviewedQuery("PostHog/team-a"): {reviewed},
+				teamQuery("PostHog/team-a"): {reviewed},
+				reviewedQuery:               {reviewed},
 			}
 			fake.info = gh.PRInfo{HeadRefOid: "head"}
 			fake.reviews = []review.GHReview{approvedAt("head")}

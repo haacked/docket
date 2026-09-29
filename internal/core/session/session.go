@@ -177,7 +177,7 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 		query := "team-review-requested:" + team + " -author:" + me
 		prs, err := s.GH.ReviewRequests(ctx, query)
 		if err == nil && len(prs) > 0 {
-			if prs, err = check.drop(ctx, query, prs); err != nil {
+			if prs, err = check.drop(ctx, prs); err != nil {
 				err = fmt.Errorf("could not tell which of these you already reviewed: %w", err)
 			}
 		}
@@ -192,31 +192,42 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 // nothing new to review. requests.Group lists a pull request only under the
 // first section that has it. So a pull request in the user's own section is
 // never checked, and one in two teams' searches is checked once.
+//
+// GitHub allows 30 searches a minute, so one reviewed-by search serves every
+// team. It runs when the first team has rows, and a failure of it stands for
+// every later team without searching again.
 type caughtUpCheck struct {
-	s       *Service
-	me      string
-	checked []pr.Ref
-	caught  []pr.Ref
+	s         *Service
+	me        string
+	searched  bool
+	reviewed  []requests.PR
+	searchErr error
+	checked   []pr.Ref
+	caught    []pr.Ref
 }
 
-// drop checks only the pull requests the reviewed-by search returns, because
-// each check costs up to two calls. A check that fails keeps every row.
-func (c *caughtUpCheck) drop(ctx context.Context, query string, prs []requests.PR) ([]requests.PR, error) {
-	reviewed, err := c.s.GH.ReviewRequests(ctx, query+" reviewed-by:"+c.me)
-	if err != nil {
-		return prs, err
+// drop checks only the pull requests that are both in prs and in the reviewed-by
+// search, because each check costs up to two calls. A check that fails keeps
+// every row.
+func (c *caughtUpCheck) drop(ctx context.Context, prs []requests.PR) ([]requests.PR, error) {
+	if !c.searched {
+		c.searched = true
+		c.reviewed, c.searchErr = c.s.GH.ReviewRequests(ctx, "reviewed-by:"+c.me+" -author:"+c.me)
 	}
-	for _, r := range reviewed {
-		if slices.ContainsFunc(c.checked, r.Ref.Equal) {
+	if c.searchErr != nil {
+		return prs, c.searchErr
+	}
+	for _, p := range prs {
+		if slices.ContainsFunc(c.checked, p.Ref.Equal) || !slices.ContainsFunc(c.reviewed, func(r requests.PR) bool { return r.Ref.Equal(p.Ref) }) {
 			continue
 		}
-		caught, err := c.caughtUp(ctx, r.Ref)
+		caught, err := c.caughtUp(ctx, p.Ref)
 		if err != nil {
 			return prs, err
 		}
-		c.checked = append(c.checked, r.Ref)
+		c.checked = append(c.checked, p.Ref)
 		if caught {
-			c.caught = append(c.caught, r.Ref)
+			c.caught = append(c.caught, p.Ref)
 		}
 	}
 	return slices.DeleteFunc(slices.Clone(prs), func(p requests.PR) bool {
