@@ -3,7 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -168,31 +168,6 @@ func TestAnEmptyDefaultRunRunsInTheBackground(t *testing.T) {
 	}
 }
 
-func TestSaveThenLoadRoundTrips(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	want := Config{
-		ReviewCodeDir:    "/opt/review-code",
-		CodexSessionsDir: "/opt/codex/sessions",
-		ClaudeJobsDir:    "/opt/claude/jobs",
-		DefaultEngine:    "codex",
-		DefaultRun:       RunTerminal,
-		GitHubUser:       "haacked",
-		DefaultRepo:      "haacked/docket",
-		Teams:            []string{"PostHog/team-feature-flags"},
-	}
-
-	if err := Save(path, want); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	got, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("got %+v, want %+v", got, want)
-	}
-}
-
 func TestReviewCodePaths(t *testing.T) {
 	cfg := Config{ReviewCodeDir: "/opt/review-code"}
 
@@ -278,5 +253,56 @@ func TestAgentDirectoriesAreConfiguration(t *testing.T) {
 				t.Errorf("%s = %q, want the configured path", tc.key, got)
 			}
 		})
+	}
+}
+
+func TestSaveKeyKeepsTheOtherKeysAsTheFileHasThem(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("review_code_dir = \"~/skills/review-code\"\ngithub_user = \"haacked\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveKey(path, "teams", []string{"PostHog/team-feature-flags"}); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`review_code_dir = "~/skills/review-code"`, `github_user = "haacked"`, `teams = ["PostHog/team-feature-flags"]`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("config.toml is missing %s:\n%s", want, data)
+		}
+	}
+	if strings.Contains(string(data), "default_run") {
+		t.Errorf("config.toml gained a default the file left out:\n%s", data)
+	}
+}
+
+func TestSaveKeyCreatesAMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+
+	if err := SaveKey(path, "teams", []string{"o/a"}); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.Teams, []string{"o/a"}) {
+		t.Errorf("teams = %v, want [o/a]", cfg.Teams)
+	}
+}
+
+func TestSaveKeyRefusesAFileItCannotParse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("teams = ["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveKey(path, "teams", []string{"o/a"}); err == nil {
+		t.Error("SaveKey rewrote a config.toml it could not parse")
 	}
 }

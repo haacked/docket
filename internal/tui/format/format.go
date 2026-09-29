@@ -91,6 +91,35 @@ func Duration(d time.Duration) string {
 	}
 }
 
+// Pane draws header above lines in height rows and keeps the cursor's line in
+// view. A zero height draws every line. A pane one line tall has no room for
+// the header. It draws only the cursor's line, which is the line the user acts
+// on.
+func Pane(header string, lines []string, cursor, height int) string {
+	if height == 1 && len(lines) > 0 {
+		return lines[cursor]
+	}
+	if height > 1 {
+		lines = window(lines, cursor, height-1)
+	}
+	return header + "\n" + strings.TrimRight(strings.Join(lines, "\n"), "\n")
+}
+
+// window keeps at most height lines, placed so the cursor's line is visible.
+func window(lines []string, cursor, height int) []string {
+	if len(lines) <= height {
+		return lines
+	}
+	start := min(max(0, cursor-height/2), len(lines)-height)
+	return lines[start : start+height]
+}
+
+// OneLine is err's text on a single line. gh's errors carry its stderr, which
+// can run over several lines.
+func OneLine(err error) string {
+	return strings.Join(strings.Fields(err.Error()), " ")
+}
+
 // Plural is noun as it reads after the count n.
 func Plural(n int, noun string) string {
 	if n == 1 {

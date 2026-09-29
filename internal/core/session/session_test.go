@@ -45,6 +45,9 @@ type fakeGH struct {
 	requested   map[string][]requests.PR
 	requestErrs map[string]error
 	searches    []string
+	// teams and teamsErr are the canned answer to Teams.
+	teams    []string
+	teamsErr error
 }
 
 // submitCall is one POST to the reviews events endpoint.
@@ -74,6 +77,8 @@ func (f *fakeGH) Reviews(context.Context, pr.Ref) ([]review.GHReview, error) {
 	f.reads++
 	return f.reviews, f.reviewErr
 }
+
+func (f *fakeGH) Teams(context.Context) ([]string, error) { return f.teams, f.teamsErr }
 
 func (f *fakeGH) ReviewRequests(_ context.Context, qualifier string) ([]requests.PR, error) {
 	f.searches = append(f.searches, qualifier)

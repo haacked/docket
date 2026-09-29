@@ -3,6 +3,7 @@ package gh
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -249,5 +250,70 @@ func TestReviewRequestsFailsOnAResultThatIsNotAPullRequest(t *testing.T) {
 	}
 	if prs != nil {
 		t.Errorf("prs = %v, want none from a failed search", prs)
+	}
+}
+
+// gh wraps each page of teams in an outer array. Teams gathers the teams of
+// every page.
+func TestTeamsReadsEveryPageAsOrgSlashTeam(t *testing.T) {
+	body := `[[{"slug":"team-feature-flags","organization":{"login":"PostHog"}}],` +
+		`[{"slug":"founders","organization":{"login":"aseriousbiz"}}]]`
+	fake := &exec.Fake{Results: map[string]exec.Result{"user/teams": {Stdout: body}}}
+
+	teams, err := New(fake).Teams(context.Background())
+	if err != nil {
+		t.Fatalf("Teams: %v", err)
+	}
+
+	if !slices.Contains(teams, "PostHog/team-feature-flags") || !slices.Contains(teams, "aseriousbiz/founders") || len(teams) != 2 {
+		t.Errorf("teams = %v, want one org/team slug from each page", teams)
+	}
+}
+
+func TestTeamsAsksForEveryPageOfTheUsersTeams(t *testing.T) {
+	fake := &exec.Fake{Results: map[string]exec.Result{"user/teams": {Stdout: `[[]]`}}}
+
+	if _, err := New(fake).Teams(context.Background()); err != nil {
+		t.Fatalf("Teams: %v", err)
+	}
+
+	if len(fake.Calls) != 1 {
+		t.Fatalf("calls = %v, want one", fake.Lines())
+	}
+	line := fake.Calls[0].String()
+	for _, want := range []string{"api", "GET", "user/teams", "--paginate", "--slurp", "per_page=100"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("command %s is missing %q", line, want)
+		}
+	}
+}
+
+func TestTeamsWithNoOutputListsNone(t *testing.T) {
+	fake := &exec.Fake{Results: map[string]exec.Result{"user/teams": {Stdout: " \n"}}}
+
+	teams, err := New(fake).Teams(context.Background())
+	if err != nil {
+		t.Fatalf("Teams: %v", err)
+	}
+	if teams != nil {
+		t.Errorf("teams = %v, want none", teams)
+	}
+}
+
+func TestTeamsPassesOnTheRunnersFailure(t *testing.T) {
+	failure := errors.New("gh: HTTP 403")
+	fake := &exec.Fake{Errs: map[string]error{"user/teams": failure}}
+
+	_, err := New(fake).Teams(context.Background())
+	if !errors.Is(err, failure) {
+		t.Errorf("error = %v, want it to wrap %v", err, failure)
+	}
+}
+
+func TestTeamsFailsOnOutputThatIsNotJSON(t *testing.T) {
+	fake := &exec.Fake{Results: map[string]exec.Result{"user/teams": {Stdout: "<html>502 Bad Gateway</html>"}}}
+
+	if _, err := New(fake).Teams(context.Background()); err == nil {
+		t.Error("Teams succeeded on output that is not JSON")
 	}
 }

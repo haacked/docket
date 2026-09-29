@@ -31,7 +31,8 @@ type Entry struct {
 	Long  string
 }
 
-// Dashboard, NewReview, Submit, Notes, and Requests are the per-screen key tables.
+// Dashboard, NewReview, Submit, Notes, Requests, and Teams are the per-screen key
+// tables.
 // NewReview and Submit have no entry for ?. Each holds a free-text field, so
 // neither binds it.
 var (
@@ -77,10 +78,19 @@ var (
 		{Key: "enter", Short: "start", Long: "start the marked pull requests as background reviews, or open the selected pull request, or its review when one is already open"},
 		{Key: "a/o/s", Long: "when marked pull requests already have a review of yours: append, overwrite, or skip them"},
 		{Key: "r", Short: "refresh", Long: "search GitHub again"},
+		{Key: "t", Short: "teams", Long: "choose the teams whose review requests this screen lists"},
 		{Key: "j/k ↓/↑", Long: "move the selection"},
 		{Key: "g/G", Long: "jump to the top or bottom"},
 		{Key: "?", Short: "help", Long: "toggle this help"},
 		{Key: "esc", Short: "back", Long: "back to the dashboard"},
+	}
+	Teams = []Entry{
+		{Key: "space", Short: "check", Long: "check or uncheck the selected team"},
+		{Key: "enter", Short: "save", Long: "save the checked teams and search GitHub again"},
+		{Key: "j/k ↓/↑", Long: "move the selection"},
+		{Key: "g/G", Long: "jump to the top or bottom"},
+		{Key: "?", Short: "help", Long: "toggle this help"},
+		{Key: "esc", Short: "back", Long: "back to the review requests without saving"},
 	}
 	everywhere = []Entry{Quit}
 )
@@ -179,6 +189,7 @@ func content(styles Styles) string {
 	section("Submit", Submit)
 	section("Notes", Notes)
 	section("Review requests", Requests)
+	section("Teams", Teams)
 	section("Everywhere", everywhere)
 
 	return strings.TrimRight(b.String(), "\n")

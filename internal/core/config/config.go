@@ -44,7 +44,7 @@ type Config struct {
 	GitHubUser       string `toml:"github_user"`
 	DefaultRepo      string `toml:"default_repo"`
 	// Teams are the "org/team" slugs whose review requests the requests screen
-	// lists alongside the ones that name the user.
+	// lists alongside the ones that name the user. The teams screen writes it.
 	Teams []string `toml:"teams"`
 }
 
@@ -141,8 +141,27 @@ func expand(cfg Config) Config {
 	return cfg
 }
 
-// Save writes config.toml. docket calls it to cache the GitHub login.
-func Save(path string, cfg Config) error {
+// SaveKey sets one key in config.toml and keeps every other key as the file has
+// it. A default the file leaves out stays out of it. An edit to another key made
+// while docket runs survives. The rewrite drops the file's comments.
+func SaveKey(path, key string, value any) error {
+	values := map[string]any{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := toml.Unmarshal(data, &values); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+	case !os.IsNotExist(err):
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	values[key] = value
+	return write(path, values)
+}
+
+// write replaces config.toml through a temporary file and a rename. A reader
+// never sees half a file.
+func write(path string, v map[string]any) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".config.toml.*")
 	if err != nil {
 		return fmt.Errorf("create temp config: %w", err)
@@ -150,7 +169,7 @@ func Save(path string, cfg Config) error {
 	tmp := f.Name()
 	defer os.Remove(tmp)
 
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
+	if err := toml.NewEncoder(f).Encode(v); err != nil {
 		f.Close()
 		return fmt.Errorf("encode config: %w", err)
 	}

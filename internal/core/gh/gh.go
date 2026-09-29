@@ -37,6 +37,7 @@ type GitHub interface {
 	Reviews(ctx context.Context, ref pr.Ref) ([]review.GHReview, error)
 	SubmitReview(ctx context.Context, ref pr.Ref, reviewID int64, event, body string) error
 	ReviewRequests(ctx context.Context, qualifier string) ([]requests.PR, error)
+	Teams(ctx context.Context) ([]string, error)
 }
 
 // CLI talks to GitHub through the gh command.
@@ -173,4 +174,35 @@ func (c *CLI) ReviewRequests(ctx context.Context, qualifier string) ([]requests.
 		}
 	}
 	return prs, nil
+}
+
+// Teams lists the "org/team" slugs of every team the user belongs to. GitHub
+// answers only with the teams of organizations that the token's read:org scope
+// reaches.
+func (c *CLI) Teams(ctx context.Context) ([]string, error) {
+	res, err := c.run(ctx, "api", "-X", "GET", "--paginate", "--slurp", "user/teams", "-f", "per_page=100")
+	if err != nil {
+		return nil, fmt.Errorf("gh api user/teams: %w", err)
+	}
+	out := strings.TrimSpace(res.Stdout)
+	if out == "" {
+		return nil, nil
+	}
+
+	var pages [][]struct {
+		Slug         string `json:"slug"`
+		Organization struct {
+			Login string `json:"login"`
+		} `json:"organization"`
+	}
+	if err := json.Unmarshal([]byte(out), &pages); err != nil {
+		return nil, fmt.Errorf("parse gh api user/teams output: %w", err)
+	}
+	var teams []string
+	for _, page := range pages {
+		for _, team := range page {
+			teams = append(teams, team.Organization.Login+"/"+team.Slug)
+		}
+	}
+	return teams, nil
 }

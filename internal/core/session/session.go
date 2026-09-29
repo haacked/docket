@@ -49,6 +49,21 @@ type Service struct {
 	// stretch instead of on every tick.
 	idleMu   sync.Mutex
 	idleSeen map[string]time.Time
+
+	// cfgMu guards config.toml and the fields of Cfg that change after startup:
+	// the login and the teams. The poll can cache the login while the teams
+	// screen saves the teams. Without the lock, the rename that lands last drops
+	// the other write's key, and a search can read the teams mid-save. The lock
+	// covers this process only. Two docket instances that write config.toml at
+	// the same moment can still drop each other's key.
+	cfgMu sync.Mutex
+}
+
+// Config is a copy of Cfg taken under the lock that its writers hold.
+func (s *Service) Config() config.Config {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.Cfg
 }
 
 // Plan is what Prepare worked out, for the UI to show before launching.
@@ -115,15 +130,19 @@ func (s *Service) Records() ([]review.Record, error) {
 // Login is the GitHub login docket compares review authors against. docket caches
 // it in config.toml, because every detection needs it.
 func (s *Service) Login(ctx context.Context) (string, error) {
-	if s.Cfg.GitHubUser != "" {
-		return s.Cfg.GitHubUser, nil
-	}
 	login, err := s.peekLogin(ctx)
 	if err != nil {
 		return "", err
 	}
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	// Two first detections can both ask gh. The second one to get here finds
+	// the login cached and writes nothing.
+	if s.Cfg.GitHubUser != "" {
+		return s.Cfg.GitHubUser, nil
+	}
 	s.Cfg.GitHubUser = login
-	if err := config.Save(s.Paths.Config, s.Cfg); err != nil {
+	if err := config.SaveKey(s.Paths.Config, "github_user", login); err != nil {
 		return login, fmt.Errorf("cache github login: %w", err)
 	}
 	return login, nil
@@ -131,7 +150,7 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 
 // Requests searches GitHub for the open pull requests that ask for the user's
 // review or for a configured team's review. It writes nothing, so a dry run may
-// call it. It asks GitHub for the login rather than calling Login, because Login
+// call it. It reads the login through peekLogin rather than Login, because Login
 // caches the login in config.toml. The searches run one after another because
 // GitHub's secondary rate limits ask that one user's requests not run
 // concurrently. The query names the login rather than @me, because the REST
@@ -140,29 +159,44 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 // team it cannot resolve, so one misspelled slug would otherwise hide every
 // request.
 func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
-	me := s.Cfg.GitHubUser
-	if me == "" {
-		var err error
-		if me, err = s.GH.Login(ctx); err != nil {
-			return requests.Fetched{}, err
-		}
+	me, err := s.peekLogin(ctx)
+	if err != nil {
+		return requests.Fetched{}, err
 	}
 	mine, err := s.GH.ReviewRequests(ctx, "user-review-requested:"+me)
 	if err != nil {
 		return requests.Fetched{}, err
 	}
 	f := requests.Fetched{Mine: mine}
-	for _, team := range s.Cfg.Teams {
+	for _, team := range s.Config().Teams {
 		prs, err := s.GH.ReviewRequests(ctx, "team-review-requested:"+team)
 		f.Teams = append(f.Teams, requests.Team{Slug: team, PRs: prs, Err: err})
 	}
 	return f, nil
 }
 
+// Teams lists the teams the user belongs to on GitHub, as "org/team" slugs. It
+// writes nothing, so a dry run may call it.
+func (s *Service) Teams(ctx context.Context) ([]string, error) {
+	return s.GH.Teams(ctx)
+}
+
+// SaveTeams makes teams the ones whose review requests Requests searches for,
+// and writes them to config.toml.
+func (s *Service) SaveTeams(teams []string) error {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	if err := config.SaveKey(s.Paths.Config, "teams", teams); err != nil {
+		return fmt.Errorf("save teams: %w", err)
+	}
+	s.Cfg.Teams = teams
+	return nil
+}
+
 // peekLogin is Login without caching the answer, for the paths a dry run takes.
 func (s *Service) peekLogin(ctx context.Context) (string, error) {
-	if s.Cfg.GitHubUser != "" {
-		return s.Cfg.GitHubUser, nil
+	if login := s.Config().GitHubUser; login != "" {
+		return login, nil
 	}
 	return s.GH.Login(ctx)
 }
@@ -354,7 +388,7 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		// GitHub for nothing it can avoid. Prepare settles it properly below. A
 		// dry run on an install that has never cached a login therefore leaves
 		// --self off the command it prints.
-		OwnPR: ownPR(info.Author.Login, s.Cfg.GitHubUser),
+		OwnPR: ownPR(info.Author.Login, s.Config().GitHubUser),
 	}
 	return rec, plan, info, eng, nil
 }

@@ -26,6 +26,8 @@ func helpFor(screen msg.Screen, showArchived, choosing bool) []help.Entry {
 		return append(help.Footer(help.Notes), help.Quit)
 	case msg.Requests:
 		return append(help.Footer(help.Requests), help.Quit)
+	case msg.Teams:
+		return append(help.Footer(help.Teams), help.Quit)
 	case msg.Help:
 		return []help.Entry{{Key: "↑/↓", Short: "scroll"}, {Key: "esc/?", Short: "back"}, help.Quit}
 	default:

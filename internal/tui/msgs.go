@@ -141,6 +141,23 @@ type indexChangedMsg struct{ stamp index.StatMark }
 // requestsLoadedMsg carries what one search of GitHub for review requests found.
 type requestsLoadedMsg struct{ fetched requests.Fetched }
 
+// teamsLoadedMsg carries the teams GitHub lists for the user, or why it listed
+// none. It carries its own failure because the teams screen keeps the
+// configured teams on show when the read fails.
+type teamsLoadedMsg struct {
+	teams []string
+	err   error
+}
+
+// teamsSavedMsg means config.toml now names teams as the ones the requests
+// screen searches for, or carries why the save failed. The save answers with
+// this message even when it fails, which is what lets resetBusy leave the
+// teams screen's Busy alone.
+type teamsSavedMsg struct {
+	teams []string
+	err   error
+}
+
 // batchCheckedMsg reports what review each pull request in a batch already has,
 // in the order the rows are drawn. failed holds one line per pull request the
 // check could not read, which the batch leaves out. err is a failure that stops

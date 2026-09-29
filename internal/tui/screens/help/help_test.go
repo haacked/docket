@@ -14,7 +14,7 @@ func key(s string) tea.KeyPressMsg { return tea.KeyPressMsg{Code: rune(s[0]), Te
 // sized is the screen with room to show every line without the viewport
 // clipping any of it, for tests that check what the full text contains
 // rather than how the viewport scrolls.
-func sized() Model { return New(Styles{}).SetSize(100, 50) }
+func sized() Model { return New(Styles{}).SetSize(100, 100) }
 
 func TestForSetsWhereEscAndQuestionMarkReturnTo(t *testing.T) {
 	m := New(Styles{}).For(msg.Submit)
@@ -132,5 +132,57 @@ func TestGrowingThePaneDoesNotScrollPastTheEnd(t *testing.T) {
 
 	if m.Viewport.PastBottom() {
 		t.Error("the pane is scrolled past its last line after it grew")
+	}
+}
+
+// section is the trimmed lines under a section's title, up to the blank line
+// that ends it.
+func section(t *testing.T, view, title string) []string {
+	t.Helper()
+	var out []string
+	in := false
+	for _, line := range strings.Split(view, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case !in && line == title:
+			in = true
+		case in && line == "":
+			return out
+		case in:
+			out = append(out, line)
+		}
+	}
+	if !in {
+		t.Fatalf("the view has no %q section:\n%s", title, view)
+	}
+	return out
+}
+
+// hasKey reports whether a section lists key. keyLine pads each key and ends it
+// with a space, so a prefix of key and a space names the key alone.
+func hasKey(lines []string, key string) bool {
+	for _, line := range lines {
+		if strings.HasPrefix(line, key+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestViewListsTheTeamsScreensKeys(t *testing.T) {
+	lines := section(t, sized().View(), "Teams")
+
+	for _, want := range []string{"space", "enter", "esc"} {
+		if !hasKey(lines, want) {
+			t.Errorf("the Teams section does not list %q:\n%s", want, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+func TestViewListsTUnderReviewRequests(t *testing.T) {
+	lines := section(t, sized().View(), "Review requests")
+
+	if !hasKey(lines, "t") {
+		t.Errorf("the Review requests section does not list t:\n%s", strings.Join(lines, "\n"))
 	}
 }
