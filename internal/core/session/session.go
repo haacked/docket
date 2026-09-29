@@ -1172,11 +1172,13 @@ func shellSpec(line, arg string) exec.CommandSpec {
 func (s *Service) Archive(ctx context.Context, rec review.Record) (review.Record, error) {
 	if s.callerInClone(rec) {
 		rec.Err = fmt.Sprintf("docket kept the clone at %s because a session is running in it. The review archives when that session ends in docket, or when you press r on its row afterwards", rec.Dir)
+		rec.CloneInUse = true
 		return rec, s.append(rec)
 	}
 	// The status line prints an archived row's Err, and the row is hidden once it
 	// archives. A failure from an earlier step would read as this archive's.
 	rec.Err = ""
+	rec.CloneInUse = false
 	rec, stopped := s.stopFinished(ctx, rec)
 	if !stopped {
 		at := s.now()
@@ -1240,8 +1242,14 @@ func (s *Service) Reconcile(ctx context.Context) ([]review.Record, error) {
 
 // RefreshAll re-reads GitHub for every record whose session is over, which is
 // what the dashboard's refresh-everything key asks for.
+//
+// It skips a record whose clone is in use. The dashboard runs outside that
+// clone, so the archive a refresh finishes would delete the directory the
+// session works in. r on the row finishes it once the session ends.
 func (s *Service) RefreshAll(ctx context.Context) ([]review.Record, error) {
-	return s.detectWhere(ctx, func(rec review.Record) bool { return refuseRefresh(rec) == nil })
+	return s.detectWhere(ctx, func(rec review.Record) bool {
+		return refuseRefresh(rec) == nil && !rec.CloneInUse
+	})
 }
 
 // detectWhere re-reads GitHub for the records that match. A record whose

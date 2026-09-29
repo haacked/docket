@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,6 +76,10 @@ func (Claude) Untrusted(res exec.Result) bool {
 // directory and stops at its git root (read from 2.1.281's code). Every tier-2
 // clone is its own git root, so a trusted parent does not cover it. Each clone
 // needs this prompt once.
+//
+// The session that runs /exit would otherwise run the project's SessionStart
+// hooks as soon as the user accepts. userSettings keeps them out, and claude
+// still shows the prompt and records the answer (verified on 2.1.284).
 func (Claude) TrustSpec(dir string) exec.CommandSpec {
-	return exec.CommandSpec{Path: "claude", Args: []string{"/exit"}, Dir: dir}
+	return exec.CommandSpec{Path: "claude", Args: append(slices.Clone(userSettings), "/exit"), Dir: dir}
 }

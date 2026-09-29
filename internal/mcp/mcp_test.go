@@ -685,6 +685,31 @@ func TestSubmitReviewFromInsideTheCloneKeepsItForTheSession(t *testing.T) {
 	omits(t, res, "start_review")
 }
 
+// A user can open a drafted row's session and leave it working, which puts the
+// row back to reviewing with the draft's id. The session may then replace that
+// draft. submit_review refuses rather than submit a draft nobody has seen.
+func TestSubmitReviewRefusesADraftTheSessionReplaced(t *testing.T) {
+	f := newFixture(t)
+	f.drafted(t)
+	f.listedOne(t)
+	f.agents("working", "busy")
+	if _, err := f.svc.AfterExit(t.Context(), f.records(t)[0], nil); err != nil {
+		t.Fatalf("AfterExit: %v", err)
+	}
+	if got := f.records(t)[0]; got.State != review.StateReviewing || got.ReviewID != 55 {
+		t.Fatalf("record is %q with review %d, want reviewing with review 55", got.State, got.ReviewID)
+	}
+	f.gh.reviews = nil
+	f.gh.post(review.GHReview{ID: 56, State: review.StatePending})
+	f.agents("working", "idle")
+
+	refused(t, f.submit(t, map[string]any{"event": review.EventComment}), "no longer pending")
+
+	if len(f.gh.submits) != 0 {
+		t.Errorf("submits = %v, want none", f.gh.submits)
+	}
+}
+
 // The session can submit the review itself before anything polls. The poll then
 // archives the record, and the agent must not be sent to start_review.
 func TestSubmitReviewSaysWhenTheReviewClosedWhileItRead(t *testing.T) {

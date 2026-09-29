@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"slices"
+
 	"github.com/google/uuid"
 
 	"github.com/haacked/docket/internal/core/exec"
@@ -24,8 +26,13 @@ func (Claude) Ask(rec review.Record, _ Paths) exec.CommandSpec {
 	return claudeSpec(rec.Dir, rec.AskSessionID, askPrompt(rec))
 }
 
+// userSettings keeps a session from loading the settings in its working
+// directory, which include the hooks the session runs. A tier-2 clone is the
+// pull request's own repository, so its author controls those settings.
+var userSettings = []string{"--setting-sources", "user"}
+
 func claudeSpec(dir, sessionID, prompt string) exec.CommandSpec {
-	args := []string{}
+	args := slices.Clone(userSettings)
 	if sessionID != "" {
 		args = append(args, "--session-id", sessionID)
 	}
@@ -39,7 +46,7 @@ func (Claude) Resume(rec review.Record, _ Paths) (exec.CommandSpec, bool) {
 	}
 	return exec.CommandSpec{
 		Path: "claude",
-		Args: []string{"--resume", rec.SessionID},
+		Args: append([]string{"--resume", rec.SessionID}, userSettings...),
 		Dir:  rec.Dir,
 	}, true
 }

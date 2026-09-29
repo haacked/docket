@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/haacked/docket/internal/core/exec"
@@ -21,7 +22,7 @@ import (
 func (Claude) StartBackground(rec review.Record, _ Paths) exec.CommandSpec {
 	return exec.CommandSpec{
 		Path: "claude",
-		Args: []string{"--bg", "/review-code " + reviewArgs(rec) + unattended, "--disallowedTools", docketTools},
+		Args: slices.Concat([]string{"--bg", "/review-code " + reviewArgs(rec) + unattended}, userSettings, []string{"--disallowedTools", docketTools}),
 		Dir:  rec.Dir,
 	}
 }

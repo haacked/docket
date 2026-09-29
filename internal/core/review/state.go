@@ -251,6 +251,10 @@ type Record struct {
 	PriorPendingID int64  `json:"prior_pending_id"`
 	Err            string `json:"err"`
 	Intent         Intent `json:"intent"`
+	// CloneInUse records that Archive found the session that asked for it
+	// running inside the clone. Archive then left the record open and the clone
+	// in place.
+	CloneInUse bool `json:"clone_in_use"`
 	// AskSessionID names the question-and-answer session about the notes. docket
 	// keeps it apart from SessionID, so asking about a review never replaces the
 	// review session that enter resumes.

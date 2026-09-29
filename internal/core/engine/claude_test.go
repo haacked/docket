@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
 )
@@ -60,8 +61,28 @@ func TestResumeReopensTheStoredSession(t *testing.T) {
 	if !ok {
 		t.Fatal("Resume refused a record with a session id")
 	}
-	if want := "[/tmp/clone] claude --resume 1ce5f0ad-0000-4000-8000-000000000001"; spec.String() != want {
+	if want := "[/tmp/clone] claude --resume 1ce5f0ad-0000-4000-8000-000000000001 --setting-sources user"; spec.String() != want {
 		t.Errorf("got  %s\nwant %s", spec, want)
+	}
+}
+
+// A tier-2 clone is the pull request's own repository. Its settings would run
+// the hooks its author committed. attach joins a session that already loaded
+// its settings, so it carries no flag.
+func TestEverySessionLoadsOnlyTheUsersSettings(t *testing.T) {
+	rec := record()
+	resume, _ := Claude{}.Resume(rec, Paths{})
+	for name, spec := range map[string]exec.CommandSpec{
+		"start":      Claude{}.Start(rec, Paths{}),
+		"ask":        Claude{}.Ask(rec, Paths{}),
+		"resume":     resume,
+		"background": Claude{}.StartBackground(rec, Paths{}),
+		"trust":      Claude{}.TrustSpec(rec.Dir),
+	} {
+		i := slices.Index(spec.Args, "--setting-sources")
+		if i < 0 || i+1 >= len(spec.Args) || spec.Args[i+1] != "user" {
+			t.Errorf("%s command %s loads the working directory's settings", name, spec)
+		}
 	}
 }
 

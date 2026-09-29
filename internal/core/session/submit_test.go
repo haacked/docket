@@ -336,6 +336,41 @@ func TestSubmitFromInsideTheCloneWaitsForTheSessionToEnd(t *testing.T) {
 	}
 }
 
+// R on the dashboard refreshes every row, and the dashboard runs outside the
+// clone. Finishing the archive there would delete the directory the session
+// that submitted the review still works in. r on the row finishes it.
+func TestRefreshAllLeavesAnArchiveThatWaitsForASession(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	rec := drafted(t, svc, ghc, unlisted)
+	svc.CallerDir = rec.Dir
+	if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	svc.CallerDir = ""
+
+	if _, err := svc.RefreshAll(context.Background()); err != nil {
+		t.Fatalf("RefreshAll: %v", err)
+	}
+	if got := storedByID(t, svc, rec.ID); got.State != review.StateSubmitted || !got.CloneInUse {
+		t.Errorf("stored record is %q with clone in use %v, want it left submitted", got.State, got.CloneInUse)
+	}
+	if _, err := os.Stat(rec.Dir); err != nil {
+		t.Errorf("R removed the clone under the session running in it: %v", err)
+	}
+
+	done, err := svc.Refresh(context.Background(), storedByID(t, svc, rec.ID))
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if done.State != review.StateArchived || done.CloneInUse {
+		t.Errorf("record is %q with clone in use %v, want archived", done.State, done.CloneInUse)
+	}
+	if _, err := os.Stat(rec.Dir); !os.IsNotExist(err) {
+		t.Errorf("the clone at %s survived r on its row", rec.Dir)
+	}
+}
+
 func TestCallerInCloneMatchesOnlyTheRecordsOwnClone(t *testing.T) {
 	clone := filepath.Join(t.TempDir(), "clones", "haacked", "docket", "pr-7")
 	if err := os.MkdirAll(filepath.Join(clone, "internal"), 0o755); err != nil {
