@@ -47,32 +47,33 @@ const (
 	IntentAsk Intent = "ask"
 )
 
+// HasPendingDraft reports whether ReviewID names a pending review of mine.
+//
+// A drafted record always holds one. A reviewing record holds one after the
+// user reopens a drafted row's session. The draft stays pending on GitHub until
+// that session replaces it. The id can therefore be stale. A review that has
+// not posted a draft carries no id. Rereview clears the id before it starts.
+func (r Record) HasPendingDraft() bool {
+	return r.ReviewID != 0 && (r.State == StateDrafted || r.State == StateReviewing)
+}
+
 // Submittable reports whether the record has a pending review to submit. The
 // dashboard gates the submit key on it and the service refuses anything else, so
 // the rule is stated once.
-//
-// A reviewing background record can hold one too. A user who opens a drafted
-// row's session and leaves it working puts the row back to reviewing, and the
-// draft stays pending on GitHub until the session replaces it. A review that has
-// not posted a draft carries no id, and Rereview clears the id before it starts.
 //
 // A reviewing interactive record is refused. Its session is open in a terminal,
 // possibly in another docket instance, and the archive that follows a submit
 // would delete the clone under it. Archive leaves only a background session
 // running.
 func (r Record) Submittable() bool {
-	if r.ReviewID == 0 {
-		return false
-	}
-	return r.State == StateDrafted || (r.State == StateReviewing && r.Mode == ModeBackground)
+	return r.HasPendingDraft() && (r.State == StateDrafted || r.Mode == ModeBackground)
 }
 
-// WebURL is the page that shows the record's review on GitHub. A draft opens on
-// the Conversation tab at the pending review. GitHub shows a pending review to
-// its author only. A reviewing record that holds a review id is a draft its
-// session may replace, and it opens the same way.
+// WebURL is the page that shows the record's review on GitHub. A pending draft
+// opens on the Conversation tab at the review. GitHub shows a pending review to
+// its author only.
 func (r Record) WebURL() string {
-	if r.ReviewID != 0 && (r.State == StateDrafted || r.State == StateReviewing) {
+	if r.HasPendingDraft() {
 		return r.Ref.URL() + "#pullrequestreview-" + strconv.FormatInt(r.ReviewID, 10)
 	}
 	return r.Ref.URL()

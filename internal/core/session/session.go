@@ -853,13 +853,13 @@ func RefuseClosed(ref pr.Ref, state review.PRState) error {
 }
 
 // RefuseSubmit refuses a record that has no pending review docket may submit.
-// Submittable accepts a reviewing background record. A reviewing record that
-// still holds a draft id here therefore has its session open in a terminal.
+// Submittable refuses a pending draft only when its interactive session is open
+// in a terminal.
 func RefuseSubmit(rec review.Record) error {
 	switch {
 	case rec.Submittable():
 		return nil
-	case rec.State == review.StateReviewing && rec.ReviewID != 0:
+	case rec.HasPendingDraft():
 		return fmt.Errorf("%s has a pending review, but its interactive session may still be using the clone; close it first", rec.Ref)
 	default:
 		return fmt.Errorf("%s is %s with no pending review to submit", rec.Ref, rec.State)
