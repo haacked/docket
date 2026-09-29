@@ -20,7 +20,9 @@ type PR struct {
 	UpdatedAt time.Time
 }
 
-// Team is what one team's search returned. Err is set when the search failed.
+// Team is what one team's search returned. Err is set when the search failed,
+// and PRs is then empty. Err is also set when docket could not tell which pull
+// requests the user already reviewed, and PRs then keeps them.
 type Team struct {
 	Slug string
 	PRs  []PR
@@ -44,7 +46,7 @@ type Row struct {
 }
 
 // Section is one heading on the screen. Team is empty for the requests that name
-// the user. Err is the reason the team's search failed.
+// the user. Err is the team's Err.
 type Section struct {
 	Team string
 	Rows []Row

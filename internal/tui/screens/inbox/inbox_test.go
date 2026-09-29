@@ -235,6 +235,22 @@ func TestTheViewMarksRowsAndCountsTheMarks(t *testing.T) {
 	}
 }
 
+// A team whose rows docket could not check shows them under the reason, so the
+// user knows the list may hold pull requests they already reviewed.
+func TestTheViewShowsATeamsRowsUnderItsError(t *testing.T) {
+	m := New(Styles{}, "claude").SetSections([]requests.Section{
+		{},
+		{Team: "o/team", Rows: []requests.Row{row(1, "")}, Err: errors.New("could not tell which of these you already reviewed")},
+	})
+
+	view := m.View()
+
+	reason, pr := strings.Index(view, "already reviewed"), strings.Index(view, "o/r#1")
+	if reason < 0 || pr < reason {
+		t.Errorf("want the reason and then the row:\n%s", view)
+	}
+}
+
 // A team GitHub cannot resolve keeps its heading, so the user can see which
 // entry in the config to fix.
 func TestTheViewShowsATeamsSearchError(t *testing.T) {

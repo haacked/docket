@@ -18,12 +18,14 @@ import (
 	"github.com/haacked/docket/internal/core/review"
 )
 
-// PRInfo is the pull request metadata docket needs to clone, to label a row, and
-// to tell whether the pull request is still open.
+// PRInfo is the pull request metadata docket needs to clone, to label a row, to
+// tell whether the pull request is still open, and to tell whether the user has
+// reviewed its head.
 type PRInfo struct {
 	Number      int            `json:"number"`
 	Title       string         `json:"title"`
 	HeadRefName string         `json:"headRefName"`
+	HeadRefOid  string         `json:"headRefOid"`
 	State       review.PRState `json:"state"`
 	Author      struct {
 		Login string `json:"login"`
@@ -68,7 +70,7 @@ func (c *CLI) PR(ctx context.Context, ref pr.Ref) (PRInfo, error) {
 	res, err := c.run(ctx,
 		"pr", "view", strconv.Itoa(ref.Number),
 		"--repo", ref.Slug(),
-		"--json", "number,title,author,headRefName,state",
+		"--json", "number,title,author,headRefName,headRefOid,state",
 	)
 	if err != nil {
 		return PRInfo{}, fmt.Errorf("gh pr view %s: %w", ref, err)
@@ -133,8 +135,9 @@ type searchItem struct {
 }
 
 // ReviewRequests lists the open pull requests matching one review-request
-// qualifier, such as "user-review-requested:haacked" or
-// "team-review-requested:org/team". It uses the REST search endpoint because
+// qualifier and any further search terms, such as
+// "user-review-requested:haacked" or
+// "team-review-requested:org/team -author:haacked". It uses the REST search endpoint because
 // gh search prs goes through GraphQL, which refused with a rate-limit error while
 // the REST search still answered.
 func (c *CLI) ReviewRequests(ctx context.Context, qualifier string) ([]requests.PR, error) {
