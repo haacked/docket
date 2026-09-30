@@ -20,6 +20,7 @@ func runningRecord() review.Record {
 		ID:        "rec-1",
 		Ref:       pr.Ref{Org: "PostHog", Repo: "posthog", Number: 105890},
 		Title:     "feat(flags): evaluate supported v2 flags and cache them beside v1",
+		Author:    "haacked",
 		Engine:    "claude",
 		Tier:      tier.Tier1,
 		Mode:      review.ModeBackground,
@@ -160,7 +161,7 @@ func TestABusyRowLeadsItsMetadataWithTheNote(t *testing.T) {
 	m.Busy["rec-1"] = "stopping"
 	m.Spinner.Frame = "⠙"
 
-	if line := lineOf(t, m.View(), "PostHog/posthog#105890"); !strings.Contains(line, "· ⠙ stopping… · claude") {
+	if line := lineOf(t, m.View(), "PostHog/posthog#105890"); !strings.Contains(line, "· ⠙ stopping… · haacked · claude") {
 		t.Errorf("the note does not lead the metadata:\n%s", line)
 	}
 }
