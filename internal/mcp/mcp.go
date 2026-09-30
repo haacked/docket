@@ -201,15 +201,10 @@ func (s *server) list(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (
 	if err != nil {
 		out.PollError = err.Error()
 	}
-	for i, rec := range records {
-		// The poll reads only running sessions. The user may push the fixes from
-		// the checkout outside any session docket opened. A failed read puts its
-		// error on the record.
-		if rec.State == review.StateFixed {
-			records[i], _ = s.svc.Refresh(ctx, rec)
-		}
-	}
 	for _, rec := range records {
+		// The poll reads only running sessions. A failed read puts its error on
+		// the record.
+		rec, _ = s.svc.RefreshFixed(ctx, rec)
 		if rec.State.Open() {
 			out.Reviews = append(out.Reviews, view(rec, statuses))
 		}
@@ -395,15 +390,12 @@ func (s *server) submit(ctx context.Context, _ *sdk.CallToolRequest, in submitIn
 	// GitHub. A reviewing record that already holds one is submittable, and Submit
 	// checks GitHub for it itself.
 	if !rec.Submittable() && rec.InBackgroundSession() {
-		if rec, err = s.poll(ctx, rec); err != nil {
-			return nil, Review{}, err
-		}
+		rec, err = s.poll(ctx, rec)
+	} else {
+		rec, err = s.svc.RefreshFixed(ctx, rec)
 	}
-	// The user may have pushed the fixes outside any session docket opened.
-	if rec.State == review.StateFixed {
-		if rec, err = s.svc.Refresh(ctx, rec); err != nil {
-			return nil, Review{}, err
-		}
+	if err != nil {
+		return nil, Review{}, err
 	}
 	rec, err = s.svc.Submit(ctx, rec, in.Event, in.Body)
 	if err != nil {

@@ -73,8 +73,8 @@ func (c Checkout) Local() bool {
 
 // State is where a fix review stands, judged from its checkout. base is the
 // commit the checkout started from. A clean checkout still on base with no
-// notes written this session did not finish, because review-code writes its
-// notes after the fix pass.
+// notes written since docket recorded base did not finish, because review-code
+// writes its notes after the fix pass.
 func (c Checkout) State(base string, notesWritten bool) State {
 	switch {
 	case c.Local():

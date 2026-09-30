@@ -1140,18 +1140,18 @@ func (s *Service) reviewFixes(ctx context.Context, rec review.Record, me, event,
 	// user may have reviewed on GitHub, or an earlier submit may have posted and
 	// then failed to read GitHub back. Reading GitHub again archives the row when
 	// that review came after the launch.
-	if slices.Contains(review.ReviewedCommits(reviews, me), rec.FixHead) {
-		done, err := s.detect(ctx, rec)
-		if err == nil && done.State == review.StatePushed {
-			return done, fmt.Errorf("you already reviewed %s at %s; press x to close the row", rec.Ref, rec.FixHead)
-		}
-		return done, err
-	}
+	reviewed := slices.Contains(review.ReviewedCommits(reviews, me), rec.FixHead)
 	rec.Err = ""
-	if err := s.GH.CreateReview(ctx, rec.Ref, rec.FixHead, event, body); err != nil {
-		return s.recordErr(rec, err)
+	if !reviewed {
+		if err := s.GH.CreateReview(ctx, rec.Ref, rec.FixHead, event, body); err != nil {
+			return s.recordErr(rec, err)
+		}
 	}
-	return s.detect(ctx, rec)
+	done, err := s.detect(ctx, rec)
+	if reviewed && err == nil && done.State == review.StatePushed {
+		return done, fmt.Errorf("you already reviewed %s at %s; press x to close the row", rec.Ref, rec.FixHead)
+	}
+	return done, err
 }
 
 // DraftBody reads the body of the record's pending review, which is the summary
@@ -1168,6 +1168,21 @@ func (s *Service) DraftBody(ctx context.Context, rec review.Record) (string, err
 		}
 	}
 	return "", nil
+}
+
+// RefreshFixed re-reads a fixed record. The user may push its fixes from outside
+// any session docket opened. Only this read notices that push. A dirty checkout
+// still holds local work, so such a record comes back as it is, with nothing
+// read from GitHub and nothing written. Any record that is not fixed comes back
+// unchanged.
+func (s *Service) RefreshFixed(ctx context.Context, rec review.Record) (review.Record, error) {
+	if rec.State != review.StateFixed {
+		return rec, nil
+	}
+	if dirty, err := s.Git.Dirty(ctx, rec.Dir); err == nil && dirty {
+		return rec, nil
+	}
+	return s.Refresh(ctx, rec)
 }
 
 // Refresh re-reads GitHub for a record whose session is over.
@@ -1302,9 +1317,10 @@ func fixNotesWritten(rec review.Record) bool {
 // readCheckout reads a fix review's working tree. remoteHead is the head GitHub
 // reports for the pull request, or empty when the caller has not read it.
 //
-// It fetches the branch only to count the commits the remote lacks. A dirty
-// checkout holds local work whatever the remote has. A clean checkout on
-// remoteHead has nothing local. A clean checkout still on FixBase has nothing
+// It fetches the branch unless the checkout is dirty or on remoteHead.
+// refreshCheckout resets to the ref that fetch updates. A dirty checkout holds
+// local work whatever the remote has. A clean checkout on remoteHead has nothing
+// local. A clean checkout still on FixBase has nothing
 // local either, because every commit up to FixBase came from GitHub. A
 // force-push can move the branch off FixBase, and counting against the
 // rewritten branch would then read those commits as local.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1460,5 +1461,41 @@ func TestLeavingAnIdleFixSessionAfterPushingReadsTheCheckout(t *testing.T) {
 
 	if done.State != review.StatePushed || done.FixHead != "pushed-sha" {
 		t.Errorf("state %q at %q, want pushed at pushed-sha", done.State, done.FixHead)
+	}
+}
+
+// An agent calls list_reviews often. A dirty checkout still holds local work, so
+// a refresh of its fixed row reads nothing from GitHub and writes nothing.
+func TestRefreshFixedLeavesADirtyCheckoutAlone(t *testing.T) {
+	svc, ghc, gitc := fixService(t)
+	rec := fixReviewLaunched(t, svc, unlisted)
+	gitc.dirty[rec.Dir] = true
+	fixed, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil || fixed.State != review.StateFixed {
+		t.Fatalf("AfterExit = %q, %v, want fixed", fixed.State, err)
+	}
+	reads := ghc.reads
+	before, err := svc.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.RefreshFixed(context.Background(), fixed)
+	if err != nil {
+		t.Fatalf("RefreshFixed: %v", err)
+	}
+
+	if got.State != review.StateFixed {
+		t.Errorf("state = %q, want fixed", got.State)
+	}
+	if ghc.reads != reads {
+		t.Errorf("GitHub reads = %d, want %d", ghc.reads, reads)
+	}
+	after, err := svc.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Error("RefreshFixed wrote to the index")
 	}
 }

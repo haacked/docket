@@ -27,6 +27,7 @@ import (
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
+	"github.com/haacked/docket/internal/core/tier"
 	"github.com/haacked/docket/internal/tui/format"
 	"github.com/haacked/docket/internal/tui/msg"
 	"github.com/haacked/docket/internal/tui/screens/dashboard"
@@ -1517,7 +1518,7 @@ func wouldAbandon(rec review.Record) string {
 	// real abandon keeps such a checkout.
 	case rec.State == review.StateFixed:
 		return fmt.Sprintf("Would keep %s open, because %s holds fixes that are not on GitHub", rec.Ref, rec.Dir)
-	case rec.HasCheckout() && rec.WorktreeOf != "":
+	case rec.HasCheckout() && rec.Tier == tier.Tier3:
 		return fmt.Sprintf("Would abandon %s, delete %s, and delete the branch %s in %s", rec.Ref, rec.Dir, rec.Branch, rec.WorktreeOf)
 	case rec.HasCheckout():
 		return fmt.Sprintf("Would abandon %s and delete %s", rec.Ref, rec.Dir)

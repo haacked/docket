@@ -146,22 +146,15 @@ func (a *Adder) Remove(ctx context.Context, localClone string, ref pr.Ref, dir, 
 // even when the worktree removal fails, because a failed add can leave the
 // branch with no worktree on it.
 func (a *Adder) remove(ctx context.Context, localClone, dir, branch string) error {
-	var errs []error
+	var rmErr error
 	if _, err := os.Stat(dir); err == nil {
-		if err := a.Git.WorktreeRemove(ctx, localClone, dir); err != nil {
-			errs = append(errs, err)
-		}
+		rmErr = a.Git.WorktreeRemove(ctx, localClone, dir)
 	}
 	exists, err := a.Git.BranchExists(ctx, localClone, branch)
-	if err != nil {
-		return errors.Join(append(errs, err)...)
+	if err == nil && exists {
+		err = a.Git.BranchDelete(ctx, localClone, branch)
 	}
-	if exists {
-		if err := a.Git.BranchDelete(ctx, localClone, branch); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	return errors.Join(rmErr, err)
 }
 
 func (a *Adder) wait() time.Duration {
