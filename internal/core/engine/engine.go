@@ -84,12 +84,13 @@ func Names() []string { return []string{Claude{}.Name(), Codex{}.Name()} }
 // already exists. docket asks the user that question before it launches, so the
 // session never stops there, in the terminal or in the background.
 func reviewArgs(rec review.Record) string {
-	args := rec.URL + " --draft"
+	mode := " --draft"
 	if rec.Fix {
-		args = rec.URL + " --fix"
+		mode = " --fix"
 	} else if rec.OwnPR {
-		args += " --self"
+		mode += " --self"
 	}
+	args := rec.URL + mode
 	switch rec.Intent {
 	case review.IntentAppend:
 		args += " --append"

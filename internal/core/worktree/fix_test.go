@@ -35,6 +35,9 @@ type lockingGit struct {
 	landOn string
 	// detached makes WorktreeAdd leave the worktree on no branch.
 	detached bool
+	// addsBeforeFailing makes a failing WorktreeAdd create the worktree and the
+	// branch first, as git does when a post-checkout hook fails.
+	addsBeforeFailing bool
 }
 
 func newLockingGit(lock string) *lockingGit {
@@ -161,8 +164,9 @@ func (f *lockingGit) BranchExists(_ context.Context, dir, branch string) (bool, 
 }
 
 func (f *lockingGit) WorktreeAdd(_ context.Context, base, dir, branch, start string) error {
-	if err := f.record("worktree-add " + base + " " + dir + " " + branch + " " + start); err != nil {
-		return err
+	failed := f.record("worktree-add " + base + " " + dir + " " + branch + " " + start)
+	if failed != nil && !f.addsBeforeFailing {
+		return failed
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -178,7 +182,7 @@ func (f *lockingGit) WorktreeAdd(_ context.Context, base, dir, branch, start str
 		f.current[dir] = branch
 	}
 	f.branches[base+" "+branch] = true
-	return nil
+	return failed
 }
 
 func (f *lockingGit) WorktreeRemove(_ context.Context, base, dir string) error {
@@ -283,7 +287,7 @@ func TestEnsureStartsATrackingBranchAtTheFetchedRemoteBranch(t *testing.T) {
 	if remote != "origin" {
 		t.Errorf("remote = %q, want origin", remote)
 	}
-	if want := []string{"remotes", "fetch-branch", "worktree-add"}; !slices.Equal(f.git.names()[:3], want) {
+	if want := []string{"branch-exists", "remotes", "fetch-branch", "worktree-add"}; !slices.Equal(f.git.names()[:4], want) {
 		t.Errorf("calls = %v, want %v first", f.git.calls, want)
 	}
 	if got, want := f.git.callsNamed("fetch-branch"), []string{"fetch-branch " + f.clone + " origin " + branch}; !slices.Equal(got, want) {
@@ -477,6 +481,81 @@ func TestAWorktreeThatFailsVerificationIsRemoved(t *testing.T) {
 	}
 }
 
+// git creates the branch before it adds the worktree, and a failing
+// post-checkout hook leaves the worktree too. A later fix review of the pull
+// request would find the branch taken and fall back to a clone.
+func TestAFailedAddRemovesTheWorktreeAndTheBranch(t *testing.T) {
+	f := newFixture(t)
+	f.git.failAt = "worktree-add"
+	f.git.addsBeforeFailing = true
+
+	if _, _, err := f.adder.Ensure(context.Background(), f.clone, ref, branch); err == nil {
+		t.Fatal("Ensure succeeded, want the failed add")
+	}
+
+	if _, err := os.Stat(f.adder.Dir(ref)); !os.IsNotExist(err) {
+		t.Errorf("%s is still there after a failed add", f.adder.Dir(ref))
+	}
+	if f.git.branches[f.clone+" "+branch] {
+		t.Errorf("branch %s is still in %s after a failed add", branch, f.clone)
+	}
+	if _, err := os.Stat(f.lock); !os.IsNotExist(err) {
+		t.Errorf("%s is still there after a failed add", f.lock)
+	}
+}
+
+// The rollback of a failed add deletes the branch, so Ensure adds only a
+// branch that does not exist yet.
+func TestEnsureRefusesABranchTheCloneAlreadyHas(t *testing.T) {
+	f := newFixture(t)
+	f.git.branches[f.clone+" "+branch] = true
+
+	if _, _, err := f.adder.Ensure(context.Background(), f.clone, ref, branch); err == nil {
+		t.Fatal("Ensure succeeded over an existing branch")
+	}
+
+	if got := f.git.callsNamed("worktree-add"); len(got) != 0 {
+		t.Errorf("Ensure ran %v over an existing branch", got)
+	}
+	if !f.git.branches[f.clone+" "+branch] {
+		t.Errorf("Ensure deleted the branch %s it did not create", branch)
+	}
+}
+
+// git resolves origin/main in refs/heads before refs/remotes. A branch of that
+// name in the user's clone would point their origin/main at the pull request.
+func TestEnsureRefusesAHeadBranchThatWouldHideARemoteTrackingRef(t *testing.T) {
+	f := newFixture(t)
+
+	if _, _, err := f.adder.Ensure(context.Background(), f.clone, ref, "origin/main"); err == nil {
+		t.Fatal("Ensure accepted a head branch named origin/main")
+	}
+
+	if got := f.git.callsNamed("worktree-add"); len(got) != 0 {
+		t.Errorf("Ensure ran %v for a branch that hides origin/main", got)
+	}
+}
+
+// A directory at the worktree's path predates this call, so a rollback must not
+// remove it.
+func TestEnsureRefusesADirectoryThatAlreadyExists(t *testing.T) {
+	f := newFixture(t)
+	if err := os.MkdirAll(f.adder.Dir(ref), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := f.adder.Ensure(context.Background(), f.clone, ref, branch); err == nil {
+		t.Fatal("Ensure succeeded over an existing directory")
+	}
+
+	if got := f.git.callsNamed("worktree-add"); len(got) != 0 {
+		t.Errorf("Ensure ran %v over an existing directory", got)
+	}
+	if _, err := os.Stat(f.adder.Dir(ref)); err != nil {
+		t.Errorf("Ensure removed %s, which it did not create: %v", f.adder.Dir(ref), err)
+	}
+}
+
 // The branch name reaches git on the command line.
 func TestEnsureRejectsADangerousHeadBranch(t *testing.T) {
 	for _, bad := range []string{"", "-rf", "a/../b", "has space"} {
@@ -560,7 +639,7 @@ func TestRemoveRefusesADirectoryOutsideTheWorktreesDirectory(t *testing.T) {
 	}
 }
 
-// localWork fetches the head branch into the clone's shared refs before it
+// readCheckout fetches the head branch into the clone's shared refs before it
 // reads the checkout, and that write needs the same lock.
 func TestFetchHoldsReviewCodesLock(t *testing.T) {
 	f := newFixture(t)

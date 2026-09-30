@@ -40,7 +40,7 @@ var (
 		{Key: "n", Short: "new", Long: "start a new review"},
 		{Key: "i", Short: "requests", Long: "list the pull requests waiting on your review"},
 		{Key: "enter", Short: "resume", Long: "resume or open the selected record"},
-		{Key: "s", Short: "submit", Long: "submit your pending review"},
+		{Key: "s", Short: "submit", Long: "submit your pending review, or review pushed fixes"},
 		{Key: "v", Short: "notes", Long: "view the review notes"},
 		{Key: "o", Short: "github", Long: "open the pull request on GitHub, at your review when it is a draft"},
 		{Key: "c", Short: "ask", Long: "ask questions about the review notes"},

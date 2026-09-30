@@ -18,7 +18,8 @@ const (
 	Tier2 Tier = 2
 	// Tier3 means review-code knows a local clone, and docket adds a worktree of
 	// that clone on the pull request's head branch. A fix review edits the files.
-	// review-code tears its own worktree down when its session ends.
+	// docket removes the worktree when the record is archived or abandoned,
+	// unless it holds fixes that are not on GitHub.
 	Tier3 Tier = 3
 )
 

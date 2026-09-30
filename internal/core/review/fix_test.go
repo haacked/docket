@@ -250,8 +250,8 @@ func TestHasCheckoutCoversTheClonesAndWorktreesDocketMade(t *testing.T) {
 	}
 }
 
-// localWork compares the checkout against <remote>/<branch>, the ref the fetch
-// updates.
+// readCheckout compares the checkout against <remote>/<branch>, the ref the
+// fetch updates.
 func TestUpstreamIsTheRemoteTrackingRefOfTheHeadBranch(t *testing.T) {
 	rec := review.Record{Remote: "upstream", Branch: "posthog/fix-thing"}
 

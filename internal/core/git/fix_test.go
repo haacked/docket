@@ -227,7 +227,7 @@ func TestSetUpstreamPointsTheBranchAtTheRemoteTrackingRef(t *testing.T) {
 	}
 
 	line := fake.Lines()[0]
-	for _, want := range []string{"-C /tmp/clone", "origin/topic", "topic"} {
+	for _, want := range []string{"-C /tmp/clone", "--set-upstream-to=origin/topic topic"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("command %s is missing %q", line, want)
 		}

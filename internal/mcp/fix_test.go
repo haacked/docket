@@ -112,7 +112,30 @@ func TestListReviewsReportsAFixReviewAndItsStates(t *testing.T) {
 			if got.Submittable != tt.submittable {
 				t.Errorf("submittable = %v, want %v", got.Submittable, tt.submittable)
 			}
+			if dir := f.records(t)[0].Dir; dir == "" || got.Checkout != dir {
+				t.Errorf("checkout = %q, want the fix review's directory %q", got.Checkout, dir)
+			}
 		})
+	}
+}
+
+// The checkout field tells an agent where to push, and docket never pushes. A
+// push made there moves the review to pushed on the next list_reviews.
+func TestListReviewsReadsAFixedCheckoutAgain(t *testing.T) {
+	f := newFixture(t)
+	f.fixable()
+	decode[startOutput](t, f.start(t, map[string]any{"fix": true}))
+	f.runner.Results["status --porcelain"] = exec.Result{Stdout: " M src/retry.go\n"}
+	if got := f.listedOne(t); got.State != string(review.StateFixed) {
+		t.Fatalf("state = %q, want fixed", got.State)
+	}
+	f.runner.Results["status --porcelain"] = exec.Result{Stdout: ""}
+	f.runner.Results["rev-parse HEAD"] = exec.Result{Stdout: "pushed-sha\n"}
+
+	got := f.listedOne(t)
+
+	if got.State != string(review.StatePushed) || !got.Submittable {
+		t.Errorf("state = %q with submittable %v, want pushed and submittable", got.State, got.Submittable)
 	}
 }
 
@@ -120,8 +143,13 @@ func TestListReviewsSaysADraftReviewIsNotAFixReview(t *testing.T) {
 	f := newFixture(t)
 	f.started(t)
 
-	if got := f.listedOne(t); got.Fix {
+	got := f.listedOne(t)
+
+	if got.Fix {
 		t.Errorf("review = %+v, want fix false", got)
+	}
+	if got.Checkout != "" {
+		t.Errorf("checkout = %q, want none for a draft review", got.Checkout)
 	}
 }
 
@@ -157,7 +185,7 @@ func TestAStartOverAnOpenFixReviewNamesTheNextStep(t *testing.T) {
 		wants []string
 	}{
 		{name: "fixed", state: review.StateFixed, wants: []string{"fixed", "enter", "/tmp/clones/haacked/docket/pr-7"}},
-		{name: "pushed", state: review.StatePushed, wants: []string{"pushed", "submit_review"}},
+		{name: "pushed", state: review.StatePushed, wants: []string{"pushed", "submit_review", "commit"}},
 	}
 
 	for _, tt := range tests {

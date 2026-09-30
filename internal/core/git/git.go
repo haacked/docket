@@ -256,6 +256,19 @@ func RemoteFor(remotes []Remote, org, repo string) (string, bool) {
 	return "", false
 }
 
+// ShadowsRemote reports whether a local branch named branch would hide a
+// remote-tracking ref. git resolves a short name in refs/heads before
+// refs/remotes, so a branch named origin/main in a clone with an origin remote
+// takes over origin/main there.
+func ShadowsRemote(remotes []Remote, branch string) bool {
+	for _, r := range remotes {
+		if branch == r.Name || strings.HasPrefix(branch, r.Name+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func githubPath(url string) (string, bool) {
 	for _, prefix := range []string{"https://github.com/", "http://github.com/", "ssh://git@github.com/", "git@github.com:"} {
 		if rest, ok := strings.CutPrefix(url, prefix); ok {

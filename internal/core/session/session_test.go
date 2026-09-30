@@ -151,6 +151,9 @@ type fakeGit struct {
 	heads map[string]string
 	dirty map[string]bool
 	ahead map[string]int
+	// refs holds the commit a remote-tracking ref points at. A reset to one
+	// moves the checkout's head there.
+	refs map[string]string
 	// localBranches holds "<repo dir> <branch>" for each local branch a
 	// repository has.
 	localBranches map[string]bool
@@ -165,6 +168,7 @@ func newFakeGit() *fakeGit {
 		heads:         map[string]string{},
 		dirty:         map[string]bool{},
 		ahead:         map[string]int{},
+		refs:          map[string]string{},
 		localBranches: map[string]bool{},
 		remotes:       []git.Remote{{Name: "origin", URL: "https://github.com/PostHog/posthog.git"}},
 	}
@@ -213,7 +217,15 @@ func (f *fakeGit) Checkout(_ context.Context, dir, branch string) error {
 	return nil
 }
 
-func (f *fakeGit) ResetHard(_ context.Context, _, _ string) error { return f.record("reset") }
+func (f *fakeGit) ResetHard(_ context.Context, dir, ref string) error {
+	if err := f.record("reset " + dir + " " + ref); err != nil {
+		return err
+	}
+	if sha, ok := f.refs[ref]; ok {
+		f.heads[dir] = sha
+	}
+	return nil
+}
 
 func (f *fakeGit) CurrentBranch(_ context.Context, dir string) (string, error) {
 	return f.branches[dir], nil

@@ -6,6 +6,7 @@ import (
 
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/review"
+	"github.com/haacked/docket/internal/core/tier"
 	"github.com/haacked/docket/internal/tui/msg"
 )
 
@@ -48,6 +49,10 @@ func TestDescribeSaysWhatToDoWithAFixRow(t *testing.T) {
 	pushed := pushedFixRecord()
 	unchanged := pushedFixRecord()
 	unchanged.FixHead = unchanged.FixBase
+	mine := pushedFixRecord()
+	mine.OwnPR = true
+	unfinished := pushedFixRecord()
+	unfinished.State = review.StateUnreviewed
 
 	tests := []struct {
 		name  string
@@ -57,6 +62,9 @@ func TestDescribeSaysWhatToDoWithAFixRow(t *testing.T) {
 		{name: "fixed", rec: fixed, wants: []string{"enter", "push", fixed.Dir}},
 		{name: "pushed", rec: pushed, wants: []string{"s to approve"}},
 		{name: "pushed with no changes", rec: unchanged, wants: []string{"s to approve"}},
+		// GitHub refuses an approval of your own pull request.
+		{name: "pushed on my own pull request", rec: mine, wants: []string{"press x"}},
+		{name: "ended before the notes", rec: unfinished, wants: []string{"before review-code wrote its notes"}},
 	}
 
 	for _, tt := range tests {
@@ -65,6 +73,54 @@ func TestDescribeSaysWhatToDoWithAFixRow(t *testing.T) {
 			for _, want := range tt.wants {
 				if !strings.Contains(got, want) {
 					t.Errorf("describe(%s) = %q, want it to mention %q", tt.name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// A pushed row has no pending review, so the dry run names the commit the new
+// review would go on.
+func TestADryRunSubmitOfAPushedRowNamesTheFixHead(t *testing.T) {
+	rec := pushedFixRecord()
+
+	next, cmd := dryRunApp(rec).Update(msg.SubmitReview{ID: rec.ID, Event: review.EventApprove})
+
+	if cmd != nil {
+		t.Errorf("a dry run ran %#v", cmd())
+	}
+	if got := next.(App).status; !strings.Contains(got, "Would post a review of") || !strings.Contains(got, rec.FixHead) {
+		t.Errorf("status = %q, want it to name a review on %s", got, rec.FixHead)
+	}
+}
+
+// A real abandon keeps a checkout that holds fixes, so the dry run says the row
+// stays open. A tier-3 abandon also deletes a branch in the user's own clone.
+func TestADryRunAbandonOfAFixRowSaysWhatStaysAndWhatGoes(t *testing.T) {
+	fixed := pushedFixRecord()
+	fixed.State = review.StateFixed
+	worktree := pushedFixRecord()
+	worktree.Tier = tier.Tier3
+	worktree.Branch = "posthog/fix-thing"
+	worktree.WorktreeOf = "/src/posthog"
+
+	tests := []struct {
+		name  string
+		rec   review.Record
+		wants []string
+	}{
+		{name: "fixed", rec: fixed, wants: []string{"Would keep", fixed.Dir}},
+		{name: "tier-3 worktree", rec: worktree, wants: []string{worktree.Dir, "posthog/fix-thing", "/src/posthog"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			next, _ := dryRunApp(tt.rec).Update(msg.Abandon{ID: tt.rec.ID})
+
+			got := next.(App).status
+			for _, want := range tt.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("status = %q, want it to mention %q", got, want)
 				}
 			}
 		})

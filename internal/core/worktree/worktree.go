@@ -25,8 +25,9 @@ import (
 const DefaultWait = 30 * time.Second
 
 // fetchWait bounds the wait for the lock before a fetch. review-code holds the
-// lock across a fetch and a checkout, and a caller of Fetch carries on without
-// it, so a long wait would only hold up a refresh.
+// lock across a fetch and a checkout. A caller whose Fetch fails counts against
+// the ref from the last fetch that worked, so a long wait would only hold up a
+// refresh.
 const fetchWait = 2 * time.Second
 
 type Adder struct {
@@ -70,6 +71,20 @@ func (a *Adder) Ensure(ctx context.Context, localClone string, ref pr.Ref, branc
 	}
 	defer unlock()
 
+	// A failed add removes the directory and the branch, so both have to be new.
+	// The branch check also covers a branch made since resolve looked for it.
+	dir := a.Dir(ref)
+	if _, err := os.Stat(dir); err == nil {
+		return "", "", fmt.Errorf("%s already exists; remove it and try again", dir)
+	}
+	exists, err := a.Git.BranchExists(ctx, localClone, branch)
+	if err != nil {
+		return "", "", err
+	}
+	if exists {
+		return "", "", fmt.Errorf("%s already has a branch named %s", localClone, branch)
+	}
+
 	remotes, err := a.Git.Remotes(ctx, localClone)
 	if err != nil {
 		return "", "", err
@@ -78,20 +93,23 @@ func (a *Adder) Ensure(ctx context.Context, localClone string, ref pr.Ref, branc
 	if !ok {
 		return "", "", fmt.Errorf("no remote of %s points at github.com/%s", localClone, ref.Slug())
 	}
+	if git.ShadowsRemote(remotes, branch) {
+		return "", "", fmt.Errorf("a branch named %s in %s would hide the remote-tracking ref of that name", branch, localClone)
+	}
 	if err := a.Git.FetchBranch(ctx, localClone, remote, branch); err != nil {
 		return "", "", err
 	}
 
-	dir := a.Dir(ref)
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return "", "", fmt.Errorf("create the parent of %s: %w", dir, err)
 	}
+	// git creates the branch before it adds the worktree. git also keeps a
+	// worktree whose post-checkout hook failed.
 	if err := a.Git.WorktreeAdd(ctx, localClone, dir, branch, remote+"/"+branch); err != nil {
-		return "", "", err
+		return "", "", errors.Join(err, a.remove(ctx, localClone, dir, branch))
 	}
 	if err := git.VerifyCheckout(ctx, a.Git, dir, branch); err != nil {
-		a.remove(ctx, localClone, dir, branch)
-		return "", "", fmt.Errorf("verify the worktree: %w", err)
+		return "", "", errors.Join(fmt.Errorf("verify the worktree: %w", err), a.remove(ctx, localClone, dir, branch))
 	}
 	return dir, remote, nil
 }
@@ -124,17 +142,26 @@ func (a *Adder) Remove(ctx context.Context, localClone string, ref pr.Ref, dir, 
 	return a.remove(ctx, localClone, dir, branch)
 }
 
+// remove removes the worktree at dir and deletes its branch. It tries the branch
+// even when the worktree removal fails, because a failed add can leave the
+// branch with no worktree on it.
 func (a *Adder) remove(ctx context.Context, localClone, dir, branch string) error {
+	var errs []error
 	if _, err := os.Stat(dir); err == nil {
 		if err := a.Git.WorktreeRemove(ctx, localClone, dir); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 	exists, err := a.Git.BranchExists(ctx, localClone, branch)
-	if err != nil || !exists {
-		return err
+	if err != nil {
+		return errors.Join(append(errs, err)...)
 	}
-	return a.Git.BranchDelete(ctx, localClone, branch)
+	if exists {
+		if err := a.Git.BranchDelete(ctx, localClone, branch); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (a *Adder) wait() time.Duration {

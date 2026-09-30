@@ -303,6 +303,9 @@ type Record struct {
 	// FixBase is the commit the checkout was on when docket provisioned or
 	// refreshed it.
 	FixBase string `json:"fix_base"`
+	// FixBaseAt is when docket recorded FixBase. A resumed session stamps a new
+	// StartedAt, so review-code's notes are measured against this instead.
+	FixBaseAt time.Time `json:"fix_base_at"`
 	// FixHead is the commit the checkout was on when docket last inspected it.
 	FixHead string `json:"fix_head"`
 }

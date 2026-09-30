@@ -326,8 +326,8 @@ func (s *Service) peekLogin(ctx context.Context) (string, error) {
 // provisions a row. On tier 2 that puts the files the notes cite in the working
 // directory. On tier 1 the working directory is the shared scratch repository,
 // so the ask prompt sends the agent to GitHub for the files.
-func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent, fix review.FixChoice) (review.Record, Plan, error) {
-	rec, plan, info, _, err := s.resolve(ctx, ref, engineName, mode, intent, fix)
+func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent, choice review.FixChoice) (review.Record, Plan, error) {
+	rec, plan, info, _, err := s.resolve(ctx, ref, engineName, mode, intent, choice)
 	if err != nil {
 		return review.Record{}, Plan{}, err
 	}
@@ -417,6 +417,7 @@ func (s *Service) stampBase(ctx context.Context, rec review.Record) (review.Reco
 		return rec, err
 	}
 	rec.FixBase, rec.FixHead = head, head
+	rec.FixBaseAt = s.now()
 	return rec, nil
 }
 
@@ -436,9 +437,9 @@ func (s *Service) trackOrigin(ctx context.Context, dir, branch string) error {
 
 // refuseLocalWork refuses a repository at dir that holds uncommitted changes or
 // commits upstream does not have. A directory that is not a repository holds
-// nothing git can lose, and the checkout rebuilds it. A failed count means the
-// repository has no such upstream, which a checkout that no fix review made
-// lacks.
+// nothing git can lose, and provisioning builds a new checkout there. A clone
+// made for a draft review has no remote-tracking ref for the branch, so a
+// failed count reads as nothing ahead.
 func (s *Service) refuseLocalWork(ctx context.Context, dir, upstream string) error {
 	if !s.Git.IsRepo(ctx, dir) {
 		return nil
@@ -625,8 +626,8 @@ func fixes(ref pr.Ref, info gh.PRInfo, intent review.Intent, choice review.FixCh
 // Explain says what a review would do without doing any of it. A dry run must not
 // provision. A check that reads what provisioning would have written then tells
 // the user nothing, so Explain stops before both.
-func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent, fix review.FixChoice) (Plan, exec.CommandSpec, error) {
-	rec, plan, _, eng, err := s.resolve(ctx, ref, engineName, mode, intent, fix)
+func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent, choice review.FixChoice) (Plan, exec.CommandSpec, error) {
+	rec, plan, _, eng, err := s.resolve(ctx, ref, engineName, mode, intent, choice)
 	if err != nil {
 		return Plan{}, exec.CommandSpec{}, err
 	}
@@ -947,7 +948,7 @@ func (s *Service) Rereview(ctx context.Context, rec review.Record, intent review
 // checkout that holds work GitHub does not have, which the reset would lose,
 // and one whose branch it cannot fetch.
 func (s *Service) refreshCheckout(ctx context.Context, rec review.Record) (review.Record, error) {
-	checkout, err := s.checkout(ctx, rec, "")
+	checkout, err := s.readCheckout(ctx, rec, "")
 	if err != nil {
 		return rec, err
 	}
@@ -1135,6 +1136,17 @@ func (s *Service) reviewFixes(ctx context.Context, rec review.Record, me, event,
 	if review.PendingReviewID(reviews, me) != 0 {
 		return rec, fmt.Errorf("you have a pending review on %s; submit or delete it on GitHub first", rec.Ref)
 	}
+	// A review of mine on FixHead means this submit would post a second one. The
+	// user may have reviewed on GitHub, or an earlier submit may have posted and
+	// then failed to read GitHub back. Reading GitHub again archives the row when
+	// that review came after the launch.
+	if slices.Contains(review.ReviewedCommits(reviews, me), rec.FixHead) {
+		done, err := s.detect(ctx, rec)
+		if err == nil && done.State == review.StatePushed {
+			return done, fmt.Errorf("you already reviewed %s at %s; press x to close the row", rec.Ref, rec.FixHead)
+		}
+		return done, err
+	}
 	rec.Err = ""
 	if err := s.GH.CreateReview(ctx, rec.Ref, rec.FixHead, event, body); err != nil {
 		return s.recordErr(rec, err)
@@ -1212,12 +1224,15 @@ func (s *Service) detect(ctx context.Context, rec review.Record) (review.Record,
 	return s.record(ctx, decided, reviews)
 }
 
-// decide reads GitHub and works out where the review stands, writing nothing.
+// decide reads GitHub and works out where the review stands. It writes nothing
+// to the index.
 //
 // It reads the pull request's state as well as its reviews, because record
 // archives a row whose pull request merged or closed. The two reads are
 // independent and run concurrently. A detection then takes about as long as one
-// read.
+// read. A fix review's detection also reads the checkout, which may fetch the
+// head branch and wait up to two seconds for review-code's lock on a tier-3
+// worktree.
 func (s *Service) decide(ctx context.Context, rec review.Record) (review.Record, []review.GHReview, error) {
 	me, err := s.Login(ctx)
 	if err != nil {
@@ -1254,7 +1269,7 @@ func (s *Service) decide(ctx context.Context, rec review.Record) (review.Record,
 	// the user submitted a review. Anything else, including a pending review
 	// left from before the launch, is read off the checkout.
 	if rec.Fix && state != review.StateSubmitted {
-		checkout, err := s.checkout(ctx, rec, read.info.HeadRefOid)
+		checkout, err := s.readCheckout(ctx, rec, read.info.HeadRefOid)
 		if err != nil {
 			return rec, nil, err
 		}
@@ -1271,31 +1286,34 @@ func (s *Service) decide(ctx context.Context, rec review.Record) (review.Record,
 	return rec, reviews, nil
 }
 
-// fixNotesWritten reports whether review-code wrote a fix review's notes during
-// this session. It composes the notes after the fix pass and puts a Fix Summary
-// in them. The append and overwrite paths do not write the notes file before
-// that step.
+// fixNotesWritten reports whether review-code wrote a fix review's notes since
+// docket stamped the checkout's base. It composes the notes after the fix pass
+// and puts a Fix Summary in them. The append and overwrite paths do not write
+// the notes file before that step.
 func fixNotesWritten(rec review.Record) bool {
 	info, err := os.Stat(rec.NotesPath)
-	if err != nil || !info.ModTime().After(rec.StartedAt) {
+	if err != nil || !info.ModTime().After(rec.FixBaseAt) {
 		return false
 	}
 	notes, err := os.ReadFile(rec.NotesPath)
 	return err == nil && strings.Contains(string(notes), "## Fix Summary")
 }
 
-// checkout reads a fix review's working tree. remoteHead is the head GitHub
+// readCheckout reads a fix review's working tree. remoteHead is the head GitHub
 // reports for the pull request, or empty when the caller has not read it.
 //
 // It fetches the branch only to count the commits the remote lacks. A dirty
 // checkout holds local work whatever the remote has. A clean checkout on
-// remoteHead has nothing local.
+// remoteHead has nothing local. A clean checkout still on FixBase has nothing
+// local either, because every commit up to FixBase came from GitHub. A
+// force-push can move the branch off FixBase, and counting against the
+// rewritten branch would then read those commits as local.
 //
 // A failed fetch is not an error. The head branch is deleted when its pull
 // request merges, and every fetch fails from then on. Counting against the
 // remote-tracking ref from the last fetch that worked can only count a commit
 // pushed since then as local, so a checkout that reads as clean is clean.
-func (s *Service) checkout(ctx context.Context, rec review.Record, remoteHead string) (review.Checkout, error) {
+func (s *Service) readCheckout(ctx context.Context, rec review.Record, remoteHead string) (review.Checkout, error) {
 	var c review.Checkout
 	var err error
 	if c.Head, err = s.Git.Head(ctx, rec.Dir); err != nil {
@@ -1311,6 +1329,9 @@ func (s *Service) checkout(ctx context.Context, rec review.Record, remoteHead st
 		c.FetchErr = s.Worktrees.Fetch(ctx, rec.Ref, rec.Dir, rec.Remote, rec.Branch)
 	} else {
 		c.FetchErr = s.Git.FetchBranch(ctx, rec.Dir, rec.Remote, rec.Branch)
+	}
+	if c.Head == rec.FixBase {
+		return c, nil
 	}
 	if c.Ahead, err = s.Git.Ahead(ctx, rec.Dir, rec.Upstream()); err != nil {
 		return c, err
@@ -1487,8 +1508,19 @@ func (s *Service) cleanup(ctx context.Context, rec review.Record) error {
 	if _, err := os.Stat(rec.Dir); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	if rec.Fix {
-		checkout, err := s.checkout(ctx, rec, "")
+	// provision records the remote last. A launch needs provision to finish. A fix
+	// record with no remote therefore ran no session in its checkout. It also has
+	// no remote-tracking ref to count against.
+	if rec.Fix && rec.Remote != "" {
+		// A pushed row's FixHead was on GitHub when docket last read it, so a
+		// clean checkout still there needs no count. The count would fail once the
+		// user's clone prunes the tracking ref of a merged pull request's branch.
+		// On any other row FixHead may be a local commit.
+		remoteHead := ""
+		if rec.State == review.StatePushed {
+			remoteHead = rec.FixHead
+		}
+		checkout, err := s.readCheckout(ctx, rec, remoteHead)
 		if err != nil {
 			return fmt.Errorf("docket kept %s because it could not check it for fixes that are not on GitHub: %w", rec.Dir, err)
 		}

@@ -1512,7 +1512,14 @@ func (a App) explainResume(rec review.Record) tea.Cmd {
 }
 
 func wouldAbandon(rec review.Record) string {
-	if rec.HasCheckout() {
+	switch {
+	// A fixed row's checkout held local work when docket last read it, and a
+	// real abandon keeps such a checkout.
+	case rec.State == review.StateFixed:
+		return fmt.Sprintf("Would keep %s open, because %s holds fixes that are not on GitHub", rec.Ref, rec.Dir)
+	case rec.HasCheckout() && rec.WorktreeOf != "":
+		return fmt.Sprintf("Would abandon %s, delete %s, and delete the branch %s in %s", rec.Ref, rec.Dir, rec.Branch, rec.WorktreeOf)
+	case rec.HasCheckout():
 		return fmt.Sprintf("Would abandon %s and delete %s", rec.Ref, rec.Dir)
 	}
 	return fmt.Sprintf("Would abandon %s; docket created nothing to delete", rec.Ref)
@@ -1550,6 +1557,9 @@ func describe(rec review.Record) string {
 	case review.StateFixed:
 		return fmt.Sprintf("%s: the fixes are in %s and not on GitHub yet. Press enter to open the session and push them", rec.Ref, rec.Dir)
 	case review.StatePushed:
+		if rec.OwnPR {
+			return fmt.Sprintf("%s: the fixes are pushed. GitHub refuses an approval of your own pull request, so press x to close the row and remove the checkout", rec.Ref)
+		}
 		if rec.NoChanges() {
 			return fmt.Sprintf("%s: the review changed nothing. Press s to approve it or u to review it again", rec.Ref)
 		}

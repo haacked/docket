@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/haacked/docket/internal/core/exec"
+	"github.com/haacked/docket/internal/core/git"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/tier"
@@ -449,8 +450,37 @@ func TestAFixSessionWithCommitsTheRemoteDoesNotHaveIsFixed(t *testing.T) {
 	}
 }
 
-// The user pushed from the session. The pull request's head is the commit the
-// checkout is on, and the row is ready to approve.
+// A clone whose origin is the user's fork reaches the pull request's
+// repository through another remote. Tier 2 always names origin, so only a
+// tier-3 review shows that the remote Ensure found reaches the count.
+func TestATier3FixReviewCountsAgainstTheRemoteForThePullRequestsRepository(t *testing.T) {
+	svc, _, gitc := fixService(t)
+	gitc.remotes = []git.Remote{
+		{Name: "origin", URL: "git@github.com:haacked/posthog.git"},
+		{Name: "upstream", URL: "git@github.com:PostHog/posthog.git"},
+	}
+	rec := fixReviewLaunched(t, svc, listed)
+	if rec.Remote != "upstream" {
+		t.Fatalf("remote = %q, want upstream", rec.Remote)
+	}
+	gitc.heads[rec.Dir] = "fix-sha"
+	gitc.ahead[rec.Dir] = 1
+
+	done, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil {
+		t.Fatalf("AfterExit: %v", err)
+	}
+
+	if done.State != review.StateFixed {
+		t.Errorf("state = %q, want fixed", done.State)
+	}
+	if got := called(gitc, "ahead "+rec.Dir+" upstream/"+botHead); len(got) == 0 {
+		t.Errorf("git calls = %v, want the count against upstream/%s", gitc.calls, botHead)
+	}
+}
+
+// The user pushed from the session, but GitHub still reports the old head, so
+// docket fetches and finds nothing the remote lacks. The row is ready to approve.
 func TestAFixSessionWhoseCommitsArePushedIsReadyToApprove(t *testing.T) {
 	svc, _, gitc := fixService(t)
 	rec := fixReviewLaunched(t, svc, unlisted)
@@ -526,6 +556,112 @@ func TestAFixSessionThatMovedTheHeadIsReadWithoutItsNotes(t *testing.T) {
 
 	if done.State != review.StatePushed || done.FixHead != "fixed-sha" {
 		t.Errorf("state %q at %q, want pushed at fixed-sha", done.State, done.FixHead)
+	}
+}
+
+// enter on a finished row resumes its session, and the resume stamps a new
+// StartedAt. The notes review-code wrote are older than that, and they still
+// say the fix pass finished.
+func TestResumingAFinishedFixRowAndLeavingKeepsItReadyToApprove(t *testing.T) {
+	svc, _, _ := fixService(t)
+	rec := fixReviewPushed(t, svc, unlisted)
+	svc.Now = func() time.Time { return start.Add(2 * time.Hour) }
+
+	resumed, _, err := svc.ResumeSpec(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("ResumeSpec: %v", err)
+	}
+	done, err := svc.AfterExit(context.Background(), resumed, nil)
+	if err != nil {
+		t.Fatalf("AfterExit: %v", err)
+	}
+
+	if done.State != review.StatePushed {
+		t.Errorf("state = %q, want pushed", done.State)
+	}
+}
+
+// A bot that rebases the head branch moves the remote-tracking ref off the
+// commits the checkout started from. Those commits came from GitHub, so a
+// checkout nobody touched still holds nothing local.
+func TestAForcePushDoesNotMakeAnUntouchedCheckoutReadAsFixed(t *testing.T) {
+	svc, ghc, gitc := fixService(t)
+	rec := fixReviewLaunched(t, svc, unlisted)
+	writeFixSummary(t, rec)
+	ghc.info.HeadRefOid = "rebased-sha"
+	gitc.ahead[rec.Dir] = 1
+
+	done, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil {
+		t.Fatalf("AfterExit: %v", err)
+	}
+
+	if done.State != review.StatePushed {
+		t.Errorf("state = %q, want pushed with no changes", done.State)
+	}
+	if _, err := svc.Abandon(context.Background(), done); err != nil {
+		t.Errorf("Abandon refused the untouched checkout: %v", err)
+	}
+}
+
+// Worktrees share the user's clone's refs, and pruning there after a merge
+// removes the tracking ref of the deleted branch. A pushed row's checkout is
+// still on a commit docket saw on GitHub, so it needs no count.
+func TestAPushedRowWhoseTrackingRefIsGoneStillArchives(t *testing.T) {
+	svc, ghc, gitc := fixService(t)
+	rec := fixReviewLaunched(t, svc, listed)
+	gitc.heads[rec.Dir] = "pushed-sha"
+	ghc.info.HeadRefOid = "pushed-sha"
+	rec, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil || rec.State != review.StatePushed {
+		t.Fatalf("AfterExit = %q, %v, want pushed", rec.State, err)
+	}
+	ghc.info.State = review.PRMerged
+	gitc.failAt = "ahead " + rec.Dir + " " + rec.Upstream()
+
+	done, err := svc.Refresh(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+
+	if done.State != review.StateArchived {
+		t.Errorf("state = %q, want archived", done.State)
+	}
+	if _, err := os.Stat(rec.Dir); !os.IsNotExist(err) {
+		t.Errorf("the worktree at %s survived", rec.Dir)
+	}
+}
+
+// provision records the remote last. A fix review whose provisioning failed
+// after the clone was made has none, and no session ran in the clone.
+func TestAbandonDeletesAFixCloneWhoseProvisioningFailed(t *testing.T) {
+	svc, _, gitc := fixService(t)
+	dir := svc.Cloner.Dir(unlisted)
+	gitc.failAt = "upstream " + dir + " origin/" + botHead
+
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixOn)
+	if err == nil {
+		t.Fatal("Prepare succeeded, want the failed tracking setup")
+	}
+	if rec.Dir != dir || rec.Remote != "" {
+		t.Fatalf("dir %q with remote %q, want %s with none", rec.Dir, rec.Remote, dir)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("the clone at %s was not made: %v", dir, err)
+	}
+	// git cannot count against the upstream of a checkout with no remote.
+	gitc.failAt = "ahead " + dir + " " + rec.Upstream()
+
+	done, err := svc.Abandon(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("Abandon: %v", err)
+	}
+
+	if done.State != review.StateAbandoned {
+		t.Errorf("state = %q, want abandoned", done.State)
+	}
+	if _, err := os.Stat(rec.Dir); !os.IsNotExist(err) {
+		t.Errorf("the clone at %s survived", rec.Dir)
 	}
 }
 
@@ -702,6 +838,34 @@ func TestRefreshMovesAFixedRowToPushedOnceTheFixesArePushed(t *testing.T) {
 	done, err := svc.Refresh(context.Background(), fixed)
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
+	}
+
+	if done.State != review.StatePushed || done.FixHead != "pushed-sha" {
+		t.Errorf("state %q at %q, want pushed at pushed-sha", done.State, done.FixHead)
+	}
+}
+
+// c on a fixed row opens an ask session, and the user may have the agent push
+// from it. Leaving the session reads the checkout again, with no r.
+func TestLeavingAnAskSessionAfterPushingReadsTheCheckout(t *testing.T) {
+	svc, _, gitc := fixService(t)
+	rec := fixReviewLaunched(t, svc, unlisted)
+	writeFixSummary(t, rec)
+	gitc.dirty[rec.Dir] = true
+	fixed, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil || fixed.State != review.StateFixed {
+		t.Fatalf("AfterExit = %q, %v, want fixed", fixed.State, err)
+	}
+	gitc.dirty[rec.Dir] = false
+	gitc.heads[rec.Dir] = "pushed-sha"
+
+	asked, _, err := svc.AskSpec(fixed)
+	if err != nil {
+		t.Fatalf("AskSpec: %v", err)
+	}
+	done, err := svc.AfterAsk(context.Background(), asked, nil)
+	if err != nil {
+		t.Fatalf("AfterAsk: %v", err)
 	}
 
 	if done.State != review.StatePushed || done.FixHead != "pushed-sha" {
@@ -998,12 +1162,27 @@ func TestRereviewOfAFixRowRefusesWhileTheCheckoutHoldsFixes(t *testing.T) {
 	}
 }
 
+// A reset to the tracking ref from the last fetch that worked would start the
+// new review on an out-of-date head.
+func TestRereviewOfAFixRowRefusesABranchItCannotFetch(t *testing.T) {
+	svc, _, gitc := fixService(t)
+	rec := fixReviewPushed(t, svc, unlisted)
+	gitc.fetchErr = errors.New("couldn't find remote ref refs/heads/" + botHead)
+
+	if _, err := svc.Rereview(context.Background(), rec, review.IntentOverwrite, review.ModeInteractive); err == nil {
+		t.Error("Rereview reset a checkout whose branch it could not fetch")
+	}
+	if got := called(gitc, "reset"); len(got) != 0 {
+		t.Errorf("git calls = %v, want no reset", gitc.calls)
+	}
+}
+
 // The pull request may have moved since the fixes were pushed, and the review
 // and its fixes have to see the current head.
 func TestRereviewOfAPushedRowMovesTheCheckoutToTheCurrentHead(t *testing.T) {
 	svc, _, gitc := fixService(t)
 	rec := fixReviewPushed(t, svc, unlisted)
-	gitc.heads[rec.Dir] = "new-head"
+	gitc.refs["origin/"+botHead] = "new-head"
 	gitc.calls = nil
 
 	again, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive)
@@ -1015,7 +1194,7 @@ func TestRereviewOfAPushedRowMovesTheCheckoutToTheCurrentHead(t *testing.T) {
 		t.Error("the re-review dropped the fix flag")
 	}
 	fetched := slices.IndexFunc(gitc.calls, func(c string) bool { return strings.HasPrefix(c, "fetch-branch "+rec.Dir) })
-	reset := slices.Index(gitc.calls, "reset")
+	reset := slices.Index(gitc.calls, "reset "+rec.Dir+" origin/"+botHead)
 	if fetched < 0 || reset < 0 || fetched > reset {
 		t.Errorf("git calls = %v, want a fetch and then a reset", gitc.calls)
 	}
@@ -1165,6 +1344,27 @@ func TestSubmittingAPushedRowRefusesWhileIHaveAPendingReview(t *testing.T) {
 	}
 	if len(ghc.created) != 0 {
 		t.Errorf("created %+v, want none", ghc.created)
+	}
+}
+
+// The user approved on GitHub while the row still read ready to approve. s
+// reads that review rather than posting a second one.
+func TestSubmittingAPushedRowIAlreadyReviewedPostsNothing(t *testing.T) {
+	svc, ghc, _ := fixService(t)
+	rec := fixReviewPushed(t, svc, unlisted)
+	at := start.Add(3 * time.Minute)
+	ghc.reviews = []review.GHReview{{ID: 9, User: review.GHUser{Login: "haacked"}, State: "APPROVED", SubmittedAt: &at, CommitID: rec.FixHead}}
+
+	done, err := svc.Submit(context.Background(), rec, review.EventApprove, "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if len(ghc.created) != 0 {
+		t.Errorf("created %+v, want no second review", ghc.created)
+	}
+	if done.State != review.StateArchived {
+		t.Errorf("state = %q, want archived", done.State)
 	}
 }
 

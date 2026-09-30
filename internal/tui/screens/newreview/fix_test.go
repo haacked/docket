@@ -155,9 +155,9 @@ func TestTheViewSaysWhetherTheReviewFixes(t *testing.T) {
 		presses int
 		want    string
 	}{
-		{presses: 0, want: "fix_authors"},
-		{presses: 1, want: "fix"},
-		{presses: 2, want: "draft"},
+		{presses: 0, want: "fixes pull requests by fix_authors"},
+		{presses: 1, want: "fixes the code for you to push"},
+		{presses: 2, want: "drafts a review"},
 	}
 
 	seen := map[string]bool{}
@@ -169,8 +169,10 @@ func TestTheViewSaysWhetherTheReviewFixes(t *testing.T) {
 
 		line, _ := fixLine(t, m.View())
 
-		if !strings.Contains(line, tt.want) {
-			t.Errorf("after %d ctrl+f the line under the run line is %q, want it to mention %q", tt.presses, line, tt.want)
+		// Every label mentions both fixing and drafting, so only the opening
+		// words tell them apart.
+		if !strings.HasPrefix(fixText(line), tt.want) {
+			t.Errorf("after %d ctrl+f the line under the run line is %q, want it to start with %q", tt.presses, line, tt.want)
 		}
 		seen[line] = true
 	}
@@ -184,7 +186,25 @@ func TestTheChoiceStepSaysWhetherTheReviewFixes(t *testing.T) {
 
 	line, _ := fixLine(t, m.View())
 
-	if !strings.Contains(line, "fix") {
-		t.Errorf("the line under the run line is %q, want it to say the review fixes", line)
+	if want := "fixes the code for you to push"; !strings.HasPrefix(fixText(line), want) {
+		t.Errorf("the line under the run line is %q, want it to start with %q", line, want)
+	}
+}
+
+// fixText is the fix line without its label.
+func fixText(line string) string {
+	return strings.TrimSpace(strings.TrimPrefix(line, "Fix"))
+}
+
+// n opens the screen through Reset. A ctrl+f chosen for one pull request must
+// not carry into the next, which would then edit a checkout and post no draft.
+func TestResetPutsTheFixChoiceBackToAuto(t *testing.T) {
+	m, _ := typed(model(), typedURL).Update(ctrlF)
+	if m.Fix == review.FixAuto {
+		t.Fatal("ctrl+f left the choice on auto")
+	}
+
+	if got := m.Reset().Fix; got != review.FixAuto {
+		t.Errorf("fix after Reset = %q, want auto", got)
 	}
 }
