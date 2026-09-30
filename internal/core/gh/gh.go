@@ -27,7 +27,10 @@ type PRInfo struct {
 	HeadRefName string         `json:"headRefName"`
 	HeadRefOid  string         `json:"headRefOid"`
 	State       review.PRState `json:"state"`
-	Author      struct {
+	// IsCrossRepository reports a head branch in a fork. A fix review pushes to
+	// the head branch by name, which only works on the base repository.
+	IsCrossRepository bool `json:"isCrossRepository"`
+	Author            struct {
 		Login string `json:"login"`
 	} `json:"author"`
 }
@@ -38,6 +41,7 @@ type GitHub interface {
 	PR(ctx context.Context, ref pr.Ref) (PRInfo, error)
 	Reviews(ctx context.Context, ref pr.Ref) ([]review.GHReview, error)
 	SubmitReview(ctx context.Context, ref pr.Ref, reviewID int64, event, body string) error
+	CreateReview(ctx context.Context, ref pr.Ref, commitID, event, body string) error
 	ReviewRequests(ctx context.Context, query string) ([]requests.PR, error)
 	Teams(ctx context.Context) ([]string, error)
 }
@@ -70,7 +74,7 @@ func (c *CLI) PR(ctx context.Context, ref pr.Ref) (PRInfo, error) {
 	res, err := c.run(ctx,
 		"pr", "view", strconv.Itoa(ref.Number),
 		"--repo", ref.Slug(),
-		"--json", "number,title,author,headRefName,headRefOid,state",
+		"--json", "number,title,author,headRefName,headRefOid,state,isCrossRepository",
 	)
 	if err != nil {
 		return PRInfo{}, fmt.Errorf("gh pr view %s: %w", ref, err)
@@ -120,6 +124,24 @@ func (c *CLI) SubmitReview(ctx context.Context, ref pr.Ref, reviewID int64, even
 	}
 	if _, err := c.run(ctx, args...); err != nil {
 		return fmt.Errorf("submit review %d on %s: %w", reviewID, ref, err)
+	}
+	return nil
+}
+
+// CreateReview posts a submitted review on the commit commitID. GitHub reads a
+// review on an older commit as a review of that commit, not of the current head.
+func (c *CLI) CreateReview(ctx context.Context, ref pr.Ref, commitID, event, body string) error {
+	args := []string{
+		"api", "--method", "POST",
+		fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", ref.Org, ref.Repo, ref.Number),
+		"-f", "commit_id=" + commitID,
+		"-f", "event=" + event,
+	}
+	if body != "" {
+		args = append(args, "-f", "body="+body)
+	}
+	if _, err := c.run(ctx, args...); err != nil {
+		return fmt.Errorf("post a review on %s: %w", ref, err)
 	}
 	return nil
 }

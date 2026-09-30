@@ -15,6 +15,7 @@ import (
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/tier"
+	"github.com/haacked/docket/internal/core/worktree"
 )
 
 // TestSmokeAgainstARealPullRequest checks the one thing fakes cannot: that the
@@ -35,14 +36,14 @@ func TestSmokeAgainstARealPullRequest(t *testing.T) {
 	svc := realService(t)
 	ctx := context.Background()
 
-	plan, spec, err := svc.Explain(ctx, ref, "claude", review.ModeInteractive, review.IntentReview)
+	plan, spec, err := svc.Explain(ctx, ref, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Explain: %v", err)
 	}
 	t.Logf("%s is %s: %s", ref, plan.Tier, plan.Description())
 	t.Logf("would run: %s", spec)
 
-	rec, _, err := svc.Prepare(ctx, ref, "claude", review.ModeInteractive, review.IntentReview)
+	rec, _, err := svc.Prepare(ctx, ref, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -138,12 +139,13 @@ func realService(t *testing.T) *Service {
 	runner := exec.Runner(exec.Real{})
 	gitCLI := git.New(runner)
 	return &Service{
-		Cfg:    cfg,
-		Paths:  paths,
-		Store:  index.New(paths.Index, paths.Lock),
-		GH:     gh.New(runner),
-		Git:    gitCLI,
-		Cloner: clone.New(gitCLI, paths),
-		Runner: runner,
+		Cfg:       cfg,
+		Paths:     paths,
+		Store:     index.New(paths.Index, paths.Lock),
+		GH:        gh.New(runner),
+		Git:       gitCLI,
+		Cloner:    clone.New(gitCLI, paths),
+		Worktrees: worktree.New(gitCLI, paths, cfg.WorktreesDir()),
+		Runner:    runner,
 	}
 }

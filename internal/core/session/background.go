@@ -333,8 +333,14 @@ func (s *Service) settle(ctx context.Context, rec review.Record) (review.Record,
 // pending review as a draft, and it counts a submission a little before the
 // launch because of clock skew. A finished session is judged that way too, but
 // a running one may not have posted anything yet.
+//
+// A fix review posts nothing. Its session is done once review-code has written
+// the notes, which it does after the fix pass. Until then the checkout may hold
+// only part of the fixes.
 func ownWork(rec, decided review.Record) bool {
 	switch decided.State {
+	case review.StateFixed, review.StatePushed:
+		return fixNotesWritten(rec)
 	case review.StateDrafted:
 		return decided.ReviewID != rec.PriorPendingID
 	case review.StateSubmitted:

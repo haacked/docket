@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/gh"
@@ -44,7 +43,7 @@ func (c *Cloner) Dir(ref pr.Ref) string {
 // rather than rebuilt.
 func (c *Cloner) Ensure(ctx context.Context, ref pr.Ref, info gh.PRInfo) (string, error) {
 	branch := info.HeadRefName
-	if err := checkBranch(branch); err != nil {
+	if err := git.CheckBranch(branch); err != nil {
 		return "", fmt.Errorf("validate the head branch: %w", err)
 	}
 
@@ -96,30 +95,8 @@ func (c *Cloner) build(ctx context.Context, dir string, ref pr.Ref, branch strin
 	if err := c.Git.Checkout(ctx, dir, branch); err != nil {
 		return fmt.Errorf("check out %s: %w", branch, err)
 	}
-	if err := c.verify(ctx, dir, branch); err != nil {
+	if err := git.VerifyCheckout(ctx, c.Git, dir, branch); err != nil {
 		return fmt.Errorf("verify the checkout: %w", err)
-	}
-	return nil
-}
-
-// verify guards the one thing the whole tier-2 path depends on. review-code
-// compares the current branch against the pull request head branch, so a
-// detached checkout or a differently named branch silently costs full-file
-// context.
-func (c *Cloner) verify(ctx context.Context, dir, branch string) error {
-	current, err := c.Git.CurrentBranch(ctx, dir)
-	if err != nil {
-		return err
-	}
-	if current != branch {
-		return fmt.Errorf("checkout landed on %q, want %q", current, branch)
-	}
-	empty, err := c.Git.WorkTreeEmpty(ctx, dir)
-	if err != nil {
-		return err
-	}
-	if empty {
-		return fmt.Errorf("checkout of %s left an empty working tree", branch)
 	}
 	return nil
 }
@@ -144,7 +121,7 @@ func (c *Cloner) refresh(ctx context.Context, dir string, ref pr.Ref, branch str
 	if err := c.Git.ResetHard(ctx, dir, "FETCH_HEAD"); err != nil {
 		return false, nil
 	}
-	if err := c.verify(ctx, dir, branch); err != nil {
+	if err := git.VerifyCheckout(ctx, c.Git, dir, branch); err != nil {
 		return false, nil
 	}
 	return true, nil
@@ -157,34 +134,12 @@ func (c *Cloner) Remove(dir string) error {
 	if dir == "" {
 		return nil
 	}
-	root, err := filepath.Abs(c.Paths.Clones)
+	target, err := config.Inside(c.Paths.Clones, dir)
 	if err != nil {
-		return fmt.Errorf("resolve clones directory: %w", err)
-	}
-	target, err := filepath.Abs(dir)
-	if err != nil {
-		return fmt.Errorf("resolve %s: %w", dir, err)
-	}
-	rel, err := filepath.Rel(root, target)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("refusing to delete %s: not inside %s", target, root)
+		return fmt.Errorf("refusing to delete: %w", err)
 	}
 	if err := os.RemoveAll(target); err != nil {
 		return fmt.Errorf("delete %s: %w", target, err)
-	}
-	return nil
-}
-
-func checkBranch(branch string) error {
-	switch {
-	case branch == "":
-		return fmt.Errorf("empty head branch")
-	case strings.HasPrefix(branch, "-"):
-		return fmt.Errorf("head branch %q starts with a dash", branch)
-	case strings.Contains(branch, ".."):
-		return fmt.Errorf("head branch %q contains ..", branch)
-	case strings.ContainsAny(branch, " \t\n"):
-		return fmt.Errorf("head branch %q contains whitespace", branch)
 	}
 	return nil
 }

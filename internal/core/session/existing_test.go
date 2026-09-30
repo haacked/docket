@@ -66,7 +66,7 @@ func storedByID(t *testing.T, svc *Service, id string) review.Record {
 
 func prepareWith(t *testing.T, svc *Service, ref pr.Ref, engineName string, intent review.Intent) review.Record {
 	t.Helper()
-	rec, _, err := svc.Prepare(context.Background(), ref, engineName, review.ModeInteractive, intent)
+	rec, _, err := svc.Prepare(context.Background(), ref, engineName, review.ModeInteractive, intent, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare(%s): %v", intent, err)
 	}
@@ -379,7 +379,7 @@ func TestPrepareToAskRefusesAPullRequestAlreadyOpen(t *testing.T) {
 	notesFor(t, svc, unlisted)
 	prepareWith(t, svc, unlisted, "claude", review.IntentReview)
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentAsk); err == nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentAsk, review.FixAuto); err == nil {
 		t.Fatal("Prepare adopted a pull request that already has an open record")
 	}
 }
@@ -877,7 +877,7 @@ func TestExplainWithAnAppendReportsTheFlag(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	_, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentAppend)
+	_, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentAppend, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Explain: %v", err)
 	}
@@ -896,7 +896,7 @@ func TestExplainWithAnAskReportsTheQuestionSession(t *testing.T) {
 	svc, paths := newService(t, ghc, gitc)
 	notes := notesFor(t, svc, unlisted)
 
-	plan, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentAsk)
+	plan, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentAsk, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Explain: %v", err)
 	}

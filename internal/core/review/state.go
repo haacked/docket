@@ -31,6 +31,14 @@ const (
 	// no session ran. Nothing on GitHub can say anything about it. Detection
 	// would read it as unreviewed and drop the reason it never ran.
 	StateNotStarted State = "not_started"
+	// StateFixed is a fix review whose checkout holds changes that are not on
+	// GitHub: uncommitted edits, or commits the remote branch does not have.
+	// Detection never produces it from GitHub, which knows nothing of the
+	// checkout.
+	StateFixed State = "fixed"
+	// StatePushed is a fix review whose checkout matches the remote branch. The
+	// fixes are pushed, or the review made none, and the user can approve.
+	StatePushed State = "pushed"
 )
 
 // Intent is what the user asked for when a pull request already had a review.
@@ -65,7 +73,12 @@ func (r Record) HasPendingDraft() bool {
 // possibly in another docket instance, and the archive that follows a submit
 // would delete the clone under it. Archive leaves only a background session
 // running.
+//
+// A pushed fix review has no pending review. Submitting it posts a new one.
 func (r Record) Submittable() bool {
+	if r.State == StatePushed {
+		return true
+	}
 	return r.HasPendingDraft() && (r.State == StateDrafted || r.Mode == ModeBackground)
 }
 
@@ -117,10 +130,11 @@ func (r Record) InProgress() bool {
 	return r.State == StatePreparing || r.State == StateReviewing
 }
 
-// HasClone reports whether the record has a clone of its own. Every tier-1
-// record shares the scratch directory.
-func (r Record) HasClone() bool {
-	return r.Tier == tier.Tier2 && r.Dir != ""
+// HasCheckout reports whether the record has a working tree of its own: a
+// tier-2 clone or a tier-3 worktree. Every tier-1 record shares the scratch
+// directory.
+func (r Record) HasCheckout() bool {
+	return (r.Tier == tier.Tier2 || r.Tier == tier.Tier3) && r.Dir != ""
 }
 
 // Adopted reports whether the record took over an existing review and has run no
@@ -133,12 +147,14 @@ func (r Record) Adopted() bool {
 // Finished reports whether the record's pull request merged or closed and left
 // the user nothing to do. A pending review is not finished, because GitHub still
 // accepts a review on a merged pull request. Only the user can choose to submit it
-// or drop it. A record in progress is not finished until its session ends.
+// or drop it. A record in progress is not finished until its session ends. A
+// fix review with changes that are not on GitHub is not finished either, because
+// archiving it would delete them.
 func (r Record) Finished() bool {
 	if !r.PRState.Closed() {
 		return false
 	}
-	return r.State == StateUnreviewed || r.State == StateReviewed
+	return r.State == StateUnreviewed || r.State == StateReviewed || r.State == StatePushed
 }
 
 // PRState is the pull request's state as `gh pr view --json state` reports it.
@@ -171,6 +187,10 @@ func (s State) Label() string {
 		return "no review posted"
 	case StateNotStarted:
 		return "did not start"
+	case StateFixed:
+		return "fixes to push"
+	case StatePushed:
+		return "ready to approve"
 	default:
 		return string(s)
 	}
@@ -270,4 +290,30 @@ type Record struct {
 	// under, or "" for claude's default. claude keeps a session under that
 	// directory. Every command about the session therefore names the same one.
 	ClaudeConfigDir string `json:"claude_config_dir"`
+	// Fix reports that the review runs review-code with --fix. The session edits
+	// the checkout and posts nothing to GitHub.
+	Fix bool `json:"fix"`
+	// Branch is the head branch a fix review's checkout is on. review-code
+	// edits files only on a branch named exactly like the head branch.
+	Branch string `json:"branch"`
+	// Remote is the checkout's remote for the pull request's repository.
+	Remote string `json:"remote"`
+	// WorktreeOf is the repos.conf clone that a tier-3 worktree belongs to.
+	WorktreeOf string `json:"worktree_of"`
+	// FixBase is the commit the checkout was on when docket provisioned or
+	// refreshed it.
+	FixBase string `json:"fix_base"`
+	// FixHead is the commit the checkout was on when docket last inspected it.
+	FixHead string `json:"fix_head"`
+}
+
+// Upstream is the remote-tracking ref of a fix review's head branch.
+func (r Record) Upstream() string {
+	return r.Remote + "/" + r.Branch
+}
+
+// NoChanges reports whether a fix review's checkout is still on the commit it
+// started from.
+func (r Record) NoChanges() bool {
+	return r.FixHead == r.FixBase
 }

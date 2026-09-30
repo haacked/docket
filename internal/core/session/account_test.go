@@ -72,7 +72,7 @@ func TestPrepareStampsTheRecordWithTheConfiguredAccount(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	svc.Cfg.ClaudeConfigDir = automation
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestExplainShowsTheAccountTheReviewWouldRunUnder(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	svc.Cfg.ClaudeConfigDir = automation
 
-	_, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
+	_, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Explain: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestStartBackgroundRunsUnderTheRecordsAccount(t *testing.T) {
 	runner := bgRunner(bgListing("6d681a76", bgSession, "working", true))
 	svc.Runner = runner
 	svc.Cfg.ClaudeConfigDir = automation
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

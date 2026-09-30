@@ -144,7 +144,7 @@ func (Claude) ParseStatus(res exec.Result) (map[string]BGStatus, error) {
 // so a match there could belong to another record. Only a directory this record
 // has to itself can answer.
 func (Claude) RecoverBackgroundID(rec review.Record, res exec.Result) (string, bool) {
-	if !rec.HasClone() || rec.StartedAt.IsZero() {
+	if !rec.HasCheckout() || rec.StartedAt.IsZero() {
 		return "", false
 	}
 	var entries []agentEntry

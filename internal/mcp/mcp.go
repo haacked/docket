@@ -38,6 +38,8 @@ type Review struct {
 	NotesPath   string    `json:"notes_path,omitempty" jsonschema:"the notes file review-code writes for this pull request"`
 	Error       string    `json:"error,omitempty" jsonschema:"what failed the last time docket acted on the review"`
 	Progress    *Progress `json:"progress,omitempty" jsonschema:"what the background session is doing, present while it runs"`
+	Fix         bool      `json:"fix" jsonschema:"whether the review fixes the code in a checkout of the head branch rather than drafting a review"`
+	Checkout    string    `json:"checkout,omitempty" jsonschema:"the checkout a fix review edits, where the user commits and pushes the fixes"`
 }
 
 // Progress is what the agent says about a running background session.
@@ -66,6 +68,19 @@ func (t target) ref(defaultRepo string) (pr.Ref, error) {
 type startInput struct {
 	target
 	Existing review.Intent `json:"existing,omitempty" jsonschema:"what to do when the pull request already has review notes or a review of yours: append reviews what changed since, overwrite reviews the whole pull request again"`
+	Fix      *bool         `json:"fix,omitempty" jsonschema:"true fixes the code in a checkout of the head branch instead of drafting a review, and the user pushes the fixes. false drafts a review. Leave it out to fix only pull requests by the authors in docket's fix_authors. true is refused for a pull request from a fork."`
+}
+
+// fixChoice reads the optional fix argument.
+func (in startInput) fixChoice() review.FixChoice {
+	switch {
+	case in.Fix == nil:
+		return review.FixAuto
+	case *in.Fix:
+		return review.FixOn
+	default:
+		return review.FixOff
+	}
 }
 
 type startOutput struct {
@@ -76,18 +91,20 @@ type startOutput struct {
 type submitInput struct {
 	target
 	Event string `json:"event" jsonschema:"COMMENT, APPROVE, or REQUEST_CHANGES"`
-	Body  string `json:"body,omitempty" jsonschema:"the review's summary; leave it out to keep the summary review-code posted with the draft"`
+	Body  string `json:"body,omitempty" jsonschema:"the review's summary. Leave it out to keep the summary review-code posted with the draft. A pushed fix review has no draft, so COMMENT and REQUEST_CHANGES on one need a body."`
 }
 
 const instructions = `docket runs pull request reviews through the review-code skill in background claude sessions and tracks each one until its review is submitted.
 
-start_review starts a review. list_reviews shows every open review and reads the agent and GitHub to move a finished session on, so call it rather than assuming a review is still running. A review is ready to submit once list_reviews reports it submittable, which means review-code posted a pending review on GitHub. submit_review submits it and archives the record.
+start_review starts a review. list_reviews shows every open review and reads the agent and GitHub to move a finished session on, so call it rather than assuming a review is still running. A review is ready to submit once list_reviews reports it submittable, which means review-code posted a pending review on GitHub, or a fix review is pushed. submit_review submits it and archives the record.
+
+A fix review (fix is true) edits the code in a checkout of the head branch instead of posting a draft. While the checkout holds changes that are not on GitHub, list_reviews reports the state fixed. The user commits and pushes those changes from the session, which they open by pressing enter on the review's row in docket. Once the checkout matches GitHub, list_reviews reports the state pushed and submittable is true. submit_review then posts a new review of the commit the fixes are on. A pushed fix review has no draft, so COMMENT and REQUEST_CHANGES need a body.
 
 Submitting publishes the review on GitHub under the user's name. Confirm the event and the body with the user before calling submit_review.`
 
 const listDescription = `Lists the reviews docket has open, newest first, with what each running background session is doing.
 
-It asks claude about every running session and reads GitHub for the ones that have finished, so a session that posted its draft moves to drafted here. The states are: preparing (docket is setting the review up, or setting it up failed when error is set), reviewing (a session is running), drafted (a pending review is on GitHub), unreviewed (the last session posted nothing new), reviewed (an existing review was adopted with nothing pending), submitted (the review is on GitHub and docket could not finish cleaning up; error says why, and r on its row in docket tries again), and not_started (claude refused to start the session; error says why). submittable says whether submit_review can submit a review now. A session whose progress reads waiting has stopped until the user answers it, which they do by opening docket and pressing enter on the row. No tool abandons a review; the user presses x on its row in docket.`
+It asks claude about every running session and reads GitHub for the ones that have finished, so a session that posted its draft moves to drafted here. The states are: preparing (docket is setting the review up, or setting it up failed when error is set), reviewing (a session is running), drafted (a pending review is on GitHub), unreviewed (the last session posted nothing new), reviewed (an existing review was adopted with nothing pending), submitted (the review is on GitHub and docket could not finish cleaning up; error says why, and r on its row in docket tries again), not_started (claude refused to start the session; error says why), fixed (a fix review's checkout holds changes that are not on GitHub yet; checkout names the directory), and pushed (a fix review's checkout matches GitHub, so submit_review can post a review of the commit the fixes are on). submittable says whether submit_review can submit a review now. A session whose progress reads waiting has stopped until the user answers it, which they do by opening docket and pressing enter on the row. No tool abandons a review; the user presses x on its row in docket.`
 
 const startDescription = `Starts a review-code review of a pull request in a background claude session and returns straight away. The review runs for minutes; call list_reviews to follow it.
 
@@ -227,7 +244,7 @@ func (s *server) start(ctx context.Context, _ *sdk.CallToolRequest, in startInpu
 		intent = in.Existing
 	}
 
-	rec, plan, err := s.svc.Prepare(ctx, ref, s.engine, review.ModeBackground, intent)
+	rec, plan, err := s.svc.Prepare(ctx, ref, s.engine, review.ModeBackground, intent, in.fixChoice())
 	// Prepare records the review before it provisions it, so a failure after that
 	// leaves a record open that no tool can clear.
 	if err != nil && rec.ID != "" {
@@ -260,6 +277,10 @@ func alreadyOpen(rec review.Record) error {
 		msg += " after this error: " + rec.Err
 	}
 	switch {
+	case rec.State == review.StateFixed:
+		return fmt.Errorf("%s. The fixes are in %s; the user pushes them from the session by pressing enter on its row in docket", msg, rec.Dir)
+	case rec.State == review.StatePushed:
+		return fmt.Errorf("%s. submit_review posts a review of the commit the fixes are on", msg)
 	case rec.Submittable():
 		return fmt.Errorf("%s. submit_review submits it", msg)
 	case rec.State == review.StateReviewing, rec.State == review.StatePreparing && rec.Err == "":
@@ -394,6 +415,10 @@ func view(rec review.Record, statuses map[string]engine.BGStatus) Review {
 		Submittable: rec.Submittable(),
 		NotesPath:   rec.NotesPath,
 		Error:       rec.Err,
+		Fix:         rec.Fix,
+	}
+	if rec.Fix {
+		out.Checkout = rec.Dir
 	}
 	if status, ok := statuses[rec.ID]; ok {
 		p := status.Progress

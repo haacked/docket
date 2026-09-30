@@ -58,6 +58,7 @@ var (
 		{Key: "enter", Short: "start", Long: "start the review"},
 		{Key: "tab", Short: "engine", Long: "change the engine"},
 		{Key: "ctrl+b", Short: "background", Long: "toggle background vs. this terminal"},
+		{Key: "ctrl+f", Short: "fix", Long: "fix the code rather than draft a review: for fix_authors, always, or never"},
 		{Key: "v/a/o", Long: "when a review exists: view and ask, append, or overwrite"},
 		{Key: "esc", Short: "back", Long: "back to the dashboard"},
 	}

@@ -490,6 +490,11 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.sub = a.sub.For(rec, review.SubmitEventsFor(rec.Author, a.login()))
 		a.screen = msg.Submit
 		a.err = nil
+		// A record with no pending review has no summary to read, such as a pushed
+		// fix review.
+		if !rec.HasPendingDraft() {
+			return a, nil
+		}
 		return a, a.loadDraft(rec)
 
 	case draftLoadedMsg:
@@ -524,6 +529,9 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if a.dryRun {
 			a.sub = a.sub.ClearBusy()
 			a.status = fmt.Sprintf("Would submit review %d on %s as %s", rec.ReviewID, rec.Ref, message.Event)
+			if rec.State == review.StatePushed {
+				a.status = fmt.Sprintf("Would post a review of %s on %s as %s", rec.Ref, rec.FixHead, message.Event)
+			}
 			return a, nil
 		}
 		// The row carries the marker too, because esc leaves the screen while
@@ -1229,7 +1237,7 @@ func (a App) startBatch(checked batchCheckedMsg) tea.Cmd {
 // startOne returns the record it started. When a start fails after Prepare wrote
 // the record, it returns that record too.
 func startOne(ctx context.Context, svc *session.Service, ref pr.Ref, engineName string, intent review.Intent) (review.Record, error) {
-	rec, _, err := svc.Prepare(ctx, ref, engineName, review.ModeBackground, intent)
+	rec, _, err := svc.Prepare(ctx, ref, engineName, review.ModeBackground, intent, review.FixAuto)
 	if err != nil {
 		return rec, fmt.Errorf("%s: %w", ref, err)
 	}
@@ -1323,7 +1331,7 @@ func (a App) explainBatch(checked batchCheckedMsg) tea.Cmd {
 }
 
 func explainOne(svc *session.Service, ref pr.Ref, engineName string, intent review.Intent) string {
-	plan, spec, err := svc.Explain(context.Background(), ref, engineName, review.ModeBackground, intent)
+	plan, spec, err := svc.Explain(context.Background(), ref, engineName, review.ModeBackground, intent, review.FixAuto)
 	if err != nil {
 		return fmt.Sprintf("%s: %v", ref, err)
 	}
@@ -1344,7 +1352,7 @@ func (a App) regroup() App {
 func (a App) startReview(start msg.StartReview) (tea.Model, tea.Cmd) {
 	intent, mode := review.Intent(start.Intent), modeFor(start.Background)
 	if start.RecordID == "" {
-		return a, a.prepare(start.Input, start.Engine, mode, intent)
+		return a, a.prepare(start.Input, start.Engine, mode, intent, review.FixChoice(start.Fix))
 	}
 	rec, ok := a.record(start.RecordID)
 	if !ok {
@@ -1361,7 +1369,7 @@ func (a App) startReview(start msg.StartReview) (tea.Model, tea.Cmd) {
 // it first reads what review is already there. That read writes nothing, so a
 // dry run does it too and shows the same choice. A dry run then stops at the
 // command that would run.
-func (a App) prepare(input, engineName string, mode review.Mode, intent review.Intent) tea.Cmd {
+func (a App) prepare(input, engineName string, mode review.Mode, intent review.Intent, fix review.FixChoice) tea.Cmd {
 	svc, defaultRepo, dryRun := a.svc, a.cfg.DefaultRepo, a.dryRun
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -1381,7 +1389,7 @@ func (a App) prepare(input, engineName string, mode review.Mode, intent review.I
 		}
 
 		if dryRun {
-			plan, spec, err := svc.Explain(ctx, ref, engineName, mode, intent)
+			plan, spec, err := svc.Explain(ctx, ref, engineName, mode, intent, fix)
 			if err != nil {
 				return errMsg{err: err}
 			}
@@ -1394,7 +1402,7 @@ func (a App) prepare(input, engineName string, mode review.Mode, intent review.I
 		if err := checkEngine(engineName); err != nil {
 			return errMsg{err: err}
 		}
-		rec, plan, err := svc.Prepare(ctx, ref, engineName, mode, intent)
+		rec, plan, err := svc.Prepare(ctx, ref, engineName, mode, intent, fix)
 		if err != nil {
 			return errMsg{err: err}
 		}
@@ -1504,7 +1512,7 @@ func (a App) explainResume(rec review.Record) tea.Cmd {
 }
 
 func wouldAbandon(rec review.Record) string {
-	if rec.HasClone() {
+	if rec.HasCheckout() {
 		return fmt.Sprintf("Would abandon %s and delete %s", rec.Ref, rec.Dir)
 	}
 	return fmt.Sprintf("Would abandon %s; docket created nothing to delete", rec.Ref)
@@ -1535,7 +1543,17 @@ func describe(rec review.Record) string {
 	case review.StateReviewed:
 		return fmt.Sprintf("%s has your review notes. Press c to ask about them or u to review it again", rec.Ref)
 	case review.StateUnreviewed:
+		if rec.Fix {
+			return fmt.Sprintf("%s: the session ended before review-code wrote its notes. Press enter to resume it, u to review again, or x to abandon", rec.Ref)
+		}
 		return fmt.Sprintf("%s: the session ended without posting a review. Press enter to resume it, u to review again, or x to abandon", rec.Ref)
+	case review.StateFixed:
+		return fmt.Sprintf("%s: the fixes are in %s and not on GitHub yet. Press enter to open the session and push them", rec.Ref, rec.Dir)
+	case review.StatePushed:
+		if rec.NoChanges() {
+			return fmt.Sprintf("%s: the review changed nothing. Press s to approve it or u to review it again", rec.Ref)
+		}
+		return fmt.Sprintf("%s: the fixes are pushed. Press s to approve it", rec.Ref)
 	case review.StateAbandoned:
 		return fmt.Sprintf("%s abandoned", rec.Ref)
 	default:

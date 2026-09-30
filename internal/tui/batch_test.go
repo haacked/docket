@@ -22,6 +22,7 @@ import (
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
+	"github.com/haacked/docket/internal/core/worktree"
 	"github.com/haacked/docket/internal/tui/msg"
 )
 
@@ -75,13 +76,14 @@ func batchService(t *testing.T) (*session.Service, *exec.Fake) {
 	}}
 	gitc := git.New(runner)
 	return &session.Service{
-		Cfg:    config.Config{ReviewCodeDir: t.TempDir(), DefaultEngine: "claude"},
-		Paths:  paths,
-		Store:  index.New(paths.Index, paths.Lock),
-		GH:     gh.New(runner),
-		Git:    gitc,
-		Cloner: clone.New(gitc, paths),
-		Runner: runner,
+		Cfg:       config.Config{ReviewCodeDir: t.TempDir(), DefaultEngine: "claude"},
+		Paths:     paths,
+		Store:     index.New(paths.Index, paths.Lock),
+		GH:        gh.New(runner),
+		Git:       gitc,
+		Cloner:    clone.New(gitc, paths),
+		Worktrees: worktree.New(gitc, paths, t.TempDir()),
+		Runner:    runner,
 	}, runner
 }
 

@@ -22,7 +22,7 @@ func TestAFailedLaunchThatRecordedReviewingPollsRightAway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseRef: %v", err)
 	}
-	rec, _, err := svc.Prepare(context.Background(), ref, "claude", review.ModeBackground, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), ref, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

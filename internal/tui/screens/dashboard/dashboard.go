@@ -36,6 +36,8 @@ var groups = []struct {
 }{
 	{Title: "Reviewing", States: []review.State{review.StateReviewing, review.StatePreparing}},
 	{Title: "Did not start", States: []review.State{review.StateNotStarted}},
+	{Title: "Fixes to push", States: []review.State{review.StateFixed}},
+	{Title: "Ready to approve", States: []review.State{review.StatePushed}},
 	{Title: "Drafted", States: []review.State{review.StateDrafted}},
 	{Title: "Reviewed", States: []review.State{review.StateReviewed}},
 	// A submitted record is one whose archiving did not finish. Listing it keeps
@@ -262,6 +264,12 @@ func (m Model) meta(rec review.Record) string {
 	}
 	if rec.Mode == review.ModeBackground {
 		parts = append(parts, "background")
+	}
+	if rec.Fix {
+		parts = append(parts, "fix")
+	}
+	if rec.State == review.StatePushed && rec.NoChanges() {
+		parts = append(parts, "no changes")
 	}
 	meta := m.Styles.Dim.Render("· " + strings.Join(parts, " · "))
 	note, busy := m.Busy[rec.ID]

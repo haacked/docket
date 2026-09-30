@@ -53,6 +53,10 @@ type Config struct {
 	// Teams are the "org/team" slugs whose review requests the requests screen
 	// lists alongside the ones that name the user. The teams screen writes it.
 	Teams []string `toml:"teams"`
+	// FixAuthors are the pull request authors a new review fixes rather than
+	// drafting a review for, such as "app/posthog". A GitHub App matches as
+	// "app/<name>" or "<name>[bot]".
+	FixAuthors []string `toml:"fix_authors"`
 }
 
 // Paths are the files and directories under DOCKET_HOME.
@@ -63,6 +67,8 @@ type Paths struct {
 	Clones  string
 	Scratch string
 	Config  string
+	// Worktrees holds the tier-3 worktrees docket adds to repos.conf clones.
+	Worktrees string
 }
 
 // NewPaths resolves DOCKET_HOME, falling back to ~/.docket.
@@ -84,18 +90,19 @@ func NewPaths(home string) (Paths, error) {
 	}
 	home = abs
 	return Paths{
-		Home:    home,
-		Index:   filepath.Join(home, "index.jsonl"),
-		Lock:    filepath.Join(home, "index.lock"),
-		Clones:  filepath.Join(home, "clones"),
-		Scratch: filepath.Join(home, "scratch"),
-		Config:  filepath.Join(home, "config.toml"),
+		Home:      home,
+		Index:     filepath.Join(home, "index.jsonl"),
+		Lock:      filepath.Join(home, "index.lock"),
+		Clones:    filepath.Join(home, "clones"),
+		Scratch:   filepath.Join(home, "scratch"),
+		Config:    filepath.Join(home, "config.toml"),
+		Worktrees: filepath.Join(home, "worktrees"),
 	}, nil
 }
 
 // EnsureDirs creates the directories docket writes to.
 func (p Paths) EnsureDirs() error {
-	for _, dir := range []string{p.Home, p.Clones, p.Scratch} {
+	for _, dir := range []string{p.Home, p.Clones, p.Scratch, p.Worktrees} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
@@ -113,6 +120,31 @@ func (c Config) ClaudeJobsDir(configDir string) string {
 		return ""
 	}
 	return filepath.Join(dir, "jobs")
+}
+
+// Inside returns dir made absolute when it lies inside root, and an error when
+// it is root itself or anywhere outside it. Callers delete what it returns, so
+// root never counts.
+func Inside(root, dir string) (string, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", root, err)
+	}
+	target, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", dir, err)
+	}
+	rel, err := filepath.Rel(absRoot, target)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("%s is not inside %s", target, absRoot)
+	}
+	return target, nil
+}
+
+// FixWorktreeDir is where the tier-3 worktree of one pull request lives.
+// Config.WorktreeDir is review-code's own worktree, which is another directory.
+func (p Paths) FixWorktreeDir(org, repo string, number int) string {
+	return filepath.Join(p.Worktrees, org, repo, fmt.Sprintf("pr-%d", number))
 }
 
 // CloneDir is where a tier-2 clone of one pull request lives.

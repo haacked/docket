@@ -77,12 +77,17 @@ func Names() []string { return []string{Claude{}.Name(), Codex{}.Name()} }
 // it, so docket would find nothing on GitHub and report the review as
 // unreviewed however well the session went.
 //
+// --fix replaces --draft for a fix review. review-code then edits the checkout
+// and posts nothing, so --self has no draft to allow.
+//
 // --append and --overwrite answer review-code's prompt about a notes file that
 // already exists. docket asks the user that question before it launches, so the
 // session never stops there, in the terminal or in the background.
 func reviewArgs(rec review.Record) string {
 	args := rec.URL + " --draft"
-	if rec.OwnPR {
+	if rec.Fix {
+		args = rec.URL + " --fix"
+	} else if rec.OwnPR {
 		args += " --self"
 	}
 	switch rec.Intent {

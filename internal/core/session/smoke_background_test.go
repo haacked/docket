@@ -41,7 +41,7 @@ func TestSmokeBackgroundAgainstARealPullRequest(t *testing.T) {
 	svc := realService(t)
 	ctx := context.Background()
 
-	rec, plan, err := svc.Prepare(ctx, ref, "claude", review.ModeBackground, review.IntentReview)
+	rec, plan, err := svc.Prepare(ctx, ref, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
