@@ -46,10 +46,15 @@ type Config struct {
 	// ClaudeDefaultDir is DefaultClaudeConfigDir with the tilde expanded. Load
 	// fills it in. The file never sets it.
 	ClaudeDefaultDir string `toml:"-"`
-	DefaultEngine    string `toml:"default_engine"`
-	DefaultRun       string `toml:"default_run"`
-	GitHubUser       string `toml:"github_user"`
-	DefaultRepo      string `toml:"default_repo"`
+	// ReviewCodeWorktreeDir is $REVIEW_CODE_WORKTREE_DIR with the tilde expanded,
+	// or empty when it is unset. review-code keeps its worktrees and its
+	// per-repository locks there when it is set. Load fills it in. The file never
+	// sets it.
+	ReviewCodeWorktreeDir string `toml:"-"`
+	DefaultEngine         string `toml:"default_engine"`
+	DefaultRun            string `toml:"default_run"`
+	GitHubUser            string `toml:"github_user"`
+	DefaultRepo           string `toml:"default_repo"`
 	// Teams are the "org/team" slugs whose review requests the requests screen
 	// lists alongside the ones that name the user. The teams screen writes it.
 	Teams []string `toml:"teams"`
@@ -197,6 +202,7 @@ func expand(cfg Config) Config {
 	cfg.CodexSessionsDir = ExpandHome(cmp.Or(cfg.CodexSessionsDir, DefaultCodexSessionsDir))
 	cfg.ClaudeConfigDir = ExpandHome(cmp.Or(cfg.ClaudeConfigDir, os.Getenv("CLAUDE_CONFIG_DIR")))
 	cfg.ClaudeDefaultDir = ExpandHome(DefaultClaudeConfigDir)
+	cfg.ReviewCodeWorktreeDir = ExpandHome(os.Getenv("REVIEW_CODE_WORKTREE_DIR"))
 	cfg.DefaultEngine = cmp.Or(cfg.DefaultEngine, EngineClaude)
 	cfg.DefaultRun = cmp.Or(cfg.DefaultRun, RunBackground)
 	return cfg
@@ -256,9 +262,11 @@ func (c Config) ReposConfPath() string {
 }
 
 // The directories review-code keeps under its installed skill.
-func (c Config) ReviewsDir() string   { return filepath.Join(c.ReviewCodeDir, ".reviews") }
-func (c Config) WorktreesDir() string { return filepath.Join(c.ReviewCodeDir, ".worktrees") }
-func (c Config) SessionsDir() string  { return filepath.Join(c.ReviewCodeDir, ".sessions") }
+func (c Config) ReviewsDir() string { return filepath.Join(c.ReviewCodeDir, ".reviews") }
+func (c Config) WorktreesDir() string {
+	return cmp.Or(c.ReviewCodeWorktreeDir, filepath.Join(c.ReviewCodeDir, ".worktrees"))
+}
+func (c Config) SessionsDir() string { return filepath.Join(c.ReviewCodeDir, ".sessions") }
 
 // AgentDirs are the directories an agent has to be able to write to, beyond the
 // one it runs in. review-code keeps its notes, worktrees, and session state

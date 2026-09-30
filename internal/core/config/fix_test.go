@@ -71,3 +71,27 @@ func TestEnsureDirsCreatesTheWorktreesDirectory(t *testing.T) {
 		t.Errorf("%s is not a directory after EnsureDirs: %v", paths.Worktrees, err)
 	}
 }
+
+// review-code keeps its worktrees, and the per-repository locks docket shares
+// with it, under $REVIEW_CODE_WORKTREE_DIR when that is set.
+func TestTheWorktreesDirFollowsReviewCodesOverride(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "config.toml")
+
+	t.Setenv("REVIEW_CODE_WORKTREE_DIR", "/srv/review-worktrees")
+	cfg, err := Load(missing)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.WorktreesDir(); got != "/srv/review-worktrees" {
+		t.Errorf("WorktreesDir = %q, want the override", got)
+	}
+
+	t.Setenv("REVIEW_CODE_WORKTREE_DIR", "")
+	cfg, err = Load(missing)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := filepath.Join(cfg.ReviewCodeDir, ".worktrees"); cfg.WorktreesDir() != want {
+		t.Errorf("WorktreesDir = %q, want %q", cfg.WorktreesDir(), want)
+	}
+}
