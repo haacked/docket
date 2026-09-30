@@ -20,6 +20,11 @@ const (
 	// that clone on the pull request's head branch. A fix review edits the files.
 	// docket removes the worktree when the record is archived or abandoned,
 	// unless it holds fixes that are not on GitHub.
+	//
+	// A worktree shares the clone's objects, so git fetches only the files the
+	// pull request changed, where a tier-2 clone checks out the whole repository.
+	// The worktree also inherits the clone's config, so the commit hooks that
+	// core.hooksPath names run when the user commits the fixes.
 	Tier3 Tier = 3
 )
 

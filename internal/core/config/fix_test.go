@@ -95,3 +95,28 @@ func TestTheWorktreesDirFollowsReviewCodesOverride(t *testing.T) {
 		t.Errorf("WorktreesDir = %q, want %q", cfg.WorktreesDir(), want)
 	}
 }
+
+// review-code writes its notes under $REVIEW_CODE_REVIEW_DIR when that is set.
+// A background fix session counts as done once its notes appear, so docket has
+// to look where review-code writes them.
+func TestTheNotesFollowReviewCodesOverride(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "config.toml")
+
+	t.Setenv("REVIEW_CODE_REVIEW_DIR", "/srv/reviews")
+	cfg, err := Load(missing)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.NotesPath("PostHog", "posthog", 7), "/srv/reviews/PostHog/posthog/pr-7.md"; got != want {
+		t.Errorf("NotesPath = %q, want %q", got, want)
+	}
+
+	t.Setenv("REVIEW_CODE_REVIEW_DIR", "")
+	cfg, err = Load(missing)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := filepath.Join(cfg.ReviewCodeDir, ".reviews"); cfg.ReviewsDir() != want {
+		t.Errorf("ReviewsDir = %q, want %q", cfg.ReviewsDir(), want)
+	}
+}

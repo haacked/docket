@@ -51,10 +51,14 @@ type Config struct {
 	// per-repository locks there when it is set. Load fills it in. The file never
 	// sets it.
 	ReviewCodeWorktreeDir string `toml:"-"`
-	DefaultEngine         string `toml:"default_engine"`
-	DefaultRun            string `toml:"default_run"`
-	GitHubUser            string `toml:"github_user"`
-	DefaultRepo           string `toml:"default_repo"`
+	// ReviewCodeReviewDir is $REVIEW_CODE_REVIEW_DIR with the tilde expanded, or
+	// empty when it is unset. review-code writes its notes there when it is set.
+	// Load fills it in. The file never sets it.
+	ReviewCodeReviewDir string `toml:"-"`
+	DefaultEngine       string `toml:"default_engine"`
+	DefaultRun          string `toml:"default_run"`
+	GitHubUser          string `toml:"github_user"`
+	DefaultRepo         string `toml:"default_repo"`
 	// Teams are the "org/team" slugs whose review requests the requests screen
 	// lists alongside the ones that name the user. The teams screen writes it.
 	Teams []string `toml:"teams"`
@@ -203,6 +207,7 @@ func expand(cfg Config) Config {
 	cfg.ClaudeConfigDir = ExpandHome(cmp.Or(cfg.ClaudeConfigDir, os.Getenv("CLAUDE_CONFIG_DIR")))
 	cfg.ClaudeDefaultDir = ExpandHome(DefaultClaudeConfigDir)
 	cfg.ReviewCodeWorktreeDir = ExpandHome(os.Getenv("REVIEW_CODE_WORKTREE_DIR"))
+	cfg.ReviewCodeReviewDir = ExpandHome(os.Getenv("REVIEW_CODE_REVIEW_DIR"))
 	cfg.DefaultEngine = cmp.Or(cfg.DefaultEngine, EngineClaude)
 	cfg.DefaultRun = cmp.Or(cfg.DefaultRun, RunBackground)
 	return cfg
@@ -262,7 +267,9 @@ func (c Config) ReposConfPath() string {
 }
 
 // The directories review-code keeps under its installed skill.
-func (c Config) ReviewsDir() string { return filepath.Join(c.ReviewCodeDir, ".reviews") }
+func (c Config) ReviewsDir() string {
+	return cmp.Or(c.ReviewCodeReviewDir, filepath.Join(c.ReviewCodeDir, ".reviews"))
+}
 func (c Config) WorktreesDir() string {
 	return cmp.Or(c.ReviewCodeWorktreeDir, filepath.Join(c.ReviewCodeDir, ".worktrees"))
 }
