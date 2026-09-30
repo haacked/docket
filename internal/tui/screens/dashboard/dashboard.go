@@ -256,7 +256,11 @@ func (m Model) row(rec review.Record, selected bool) string {
 // narrow terminal cuts the metadata from the end, so the busy text goes first.
 // format.Row measures and cuts styled text by its columns.
 func (m Model) meta(rec review.Record) string {
-	parts := []string{rec.Engine, rec.Tier.String(), m.age(rec)}
+	var parts []string
+	if rec.Author != "" {
+		parts = append(parts, rec.Author)
+	}
+	parts = append(parts, rec.Engine, rec.Tier.String(), m.age(rec))
 	if rec.PRState.Closed() {
 		parts = append(parts, rec.PRState.Label())
 	}

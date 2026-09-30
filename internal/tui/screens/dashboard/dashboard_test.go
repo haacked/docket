@@ -266,3 +266,30 @@ func TestARowOnAnOpenPullRequestNamesNoState(t *testing.T) {
 		t.Errorf("the row names the state of an open pull request:\n%s", view)
 	}
 }
+
+func TestARowNamesThePullRequestsAuthor(t *testing.T) {
+	m := New(Styles{}).SetRecords([]review.Record{{
+		ID:     "rec-1",
+		Ref:    pr.Ref{Org: "haacked", Repo: "docket", Number: 7},
+		Author: "octocat",
+		Engine: "claude",
+		State:  review.StateDrafted,
+	}})
+
+	if view := m.View(); !strings.Contains(view, "· octocat · claude") {
+		t.Errorf("the row does not lead its metadata with the author:\n%s", view)
+	}
+}
+
+func TestARowWithNoAuthorLeavesItOut(t *testing.T) {
+	m := New(Styles{}).SetRecords([]review.Record{{
+		ID:     "rec-1",
+		Ref:    pr.Ref{Org: "haacked", Repo: "docket", Number: 7},
+		Engine: "claude",
+		State:  review.StateDrafted,
+	}})
+
+	if view := m.View(); strings.Contains(view, "·  ·") {
+		t.Errorf("a row with no author draws an empty field in its metadata:\n%s", view)
+	}
+}
