@@ -1616,3 +1616,112 @@ func TestAbandonKeepsAPushedRowsFixesAfterAForcePush(t *testing.T) {
 		t.Errorf("git calls = %v, want no removal", got)
 	}
 }
+
+// A bot force-pushed after the fixes were pushed, and the fetch at abandon time
+// fails. The tracking ref is stale and still points at the fixes, so a count
+// against it would read them as safe. The checkout stays.
+func TestAbandonKeepsAPushedRowWhenTheFetchFailsAfterAForcePush(t *testing.T) {
+	svc, ghc, gitc := fixService(t)
+	rec := fixReviewLaunched(t, svc, unlisted)
+	writeFixSummary(t, rec)
+	gitc.heads[rec.Dir] = "fix-sha"
+	pushed, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil || pushed.State != review.StatePushed {
+		t.Fatalf("AfterExit = %q, %v, want pushed", pushed.State, err)
+	}
+	ghc.info.HeadRefOid = "rewritten-sha"
+	gitc.fetchErr = errors.New("could not resolve host: github.com")
+
+	_, err = svc.Abandon(context.Background(), pushed)
+
+	if err == nil || !strings.Contains(err.Error(), "could not fetch") {
+		t.Fatalf("Abandon err = %v, want a refusal that says the fetch failed", err)
+	}
+	if got := called(gitc, "worktree-remove"); len(got) != 0 {
+		t.Errorf("git calls = %v, want no removal", got)
+	}
+	if _, err := os.Stat(rec.Dir); err != nil {
+		t.Errorf("the checkout that holds the fixes is gone: %v", err)
+	}
+}
+
+// The pull request merged while docket still had it stored as open, and the
+// user's clone pruned the merged branch's tracking ref, so a count would fail.
+// GitHub still reports the fix commit as the pull request's head, which is
+// enough to remove the checkout.
+func TestAbandonRemovesAPushedRowWhoseMergedBranchRefWasPruned(t *testing.T) {
+	svc, ghc, gitc := fixService(t)
+	rec := fixReviewLaunched(t, svc, unlisted)
+	writeFixSummary(t, rec)
+	gitc.heads[rec.Dir] = "fix-sha"
+	ghc.info.HeadRefOid = "fix-sha"
+	pushed, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil || pushed.State != review.StatePushed {
+		t.Fatalf("AfterExit = %q, %v, want pushed", pushed.State, err)
+	}
+	ghc.info.State = review.PRMerged
+	gitc.failAt = "ahead " + rec.Dir + " origin/" + botHead
+
+	if _, err := svc.Abandon(context.Background(), pushed); err != nil {
+		t.Fatalf("Abandon: %v", err)
+	}
+	if _, err := os.Stat(rec.Dir); !os.IsNotExist(err) {
+		t.Errorf("the checkout is still there: %v", err)
+	}
+}
+
+// Without GitHub's answer, cleanup cannot tell pushed fixes from ones a
+// force-push left only in the checkout, so it keeps the checkout.
+func TestAbandonKeepsAPushedRowWhenGitHubCannotBeRead(t *testing.T) {
+	svc, ghc, gitc := fixService(t)
+	rec := fixReviewLaunched(t, svc, unlisted)
+	writeFixSummary(t, rec)
+	gitc.heads[rec.Dir] = "fix-sha"
+	ghc.info.HeadRefOid = "fix-sha"
+	pushed, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil || pushed.State != review.StatePushed {
+		t.Fatalf("AfterExit = %q, %v, want pushed", pushed.State, err)
+	}
+	ghc.infoErr = errors.New("gh: HTTP 502")
+
+	_, err = svc.Abandon(context.Background(), pushed)
+
+	if err == nil || !strings.Contains(err.Error(), "could not read") {
+		t.Fatalf("Abandon err = %v, want a refusal that says GitHub could not be read", err)
+	}
+	if _, err := os.Stat(rec.Dir); err != nil {
+		t.Errorf("the checkout is gone: %v", err)
+	}
+}
+
+// s posted the approval, the read back failed, and the user reopened the
+// session. Reopening takes a new snapshot, so the posted review now reads as an
+// earlier one. A second s posts nothing and says why.
+func TestSubmittingAPushedRowAfterAReopenDoesNotPostASecondReview(t *testing.T) {
+	svc, ghc, gitc := fixService(t)
+	rec := fixReviewLaunched(t, svc, unlisted)
+	writeFixSummary(t, rec)
+	gitc.heads[rec.Dir] = "fix-sha"
+	ghc.info.HeadRefOid = "fix-sha"
+	pushed, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil || pushed.State != review.StatePushed {
+		t.Fatalf("AfterExit = %q, %v, want pushed", pushed.State, err)
+	}
+	posted := start.Add(10 * time.Minute)
+	ghc.reviews = []review.GHReview{{ID: 77, User: review.GHUser{Login: "haacked"}, State: "APPROVED", SubmittedAt: &posted, CommitID: "fix-sha"}}
+	// The reopen's snapshot and start time, as launch(rec, true) stamps them.
+	pushed.PriorReviewIDs = append(pushed.PriorReviewIDs, 77)
+	pushed.StartedAt = start.Add(20 * time.Minute)
+
+	done, err := svc.Submit(context.Background(), pushed, review.EventApprove, "")
+
+	if err == nil || !strings.Contains(err.Error(), "already reviewed") {
+		t.Fatalf("Submit err = %v, want a refusal that says the review is already there", err)
+	}
+	if len(ghc.created) != 0 {
+		t.Errorf("created %+v, want no second review", ghc.created)
+	}
+	if done.State != review.StatePushed {
+		t.Errorf("state = %q, want the row left pushed", done.State)
+	}
+}

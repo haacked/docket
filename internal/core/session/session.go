@@ -1139,22 +1139,30 @@ func (s *Service) reviewFixes(ctx context.Context, rec review.Record, me, event,
 	if review.PendingReviewID(reviews, me) != 0 {
 		return rec, fmt.Errorf("you have a pending review on %s; submit or delete it on GitHub first", rec.Ref)
 	}
-	// A review of mine on FixHead posted since the launch means this submit would
-	// post a second one. An earlier submit may have posted and then failed to read
-	// GitHub back, or the user reviewed on GitHub. detect reads that review as this
-	// session's submission and archives the row. A review from before the launch
-	// does not count, so an earlier comment or request for changes on the same
-	// commit does not block an approval.
+	// A review of mine on FixHead posted since docket set the checkout up means
+	// this submit would post a second one. An earlier submit may have posted and
+	// then failed to read GitHub back, or the user reviewed on GitHub. A review
+	// from before the checkout does not count, so an earlier comment or request
+	// for changes on the same commit does not block an approval. The cutoff is
+	// FixBaseAt rather than PriorReviewIDs, because reopening the session takes a
+	// new snapshot that would count a review docket posted as an earlier one.
 	since := slices.DeleteFunc(slices.Clone(reviews), func(r review.GHReview) bool {
-		return slices.Contains(rec.PriorReviewIDs, r.ID)
+		return r.SubmittedAt != nil && r.SubmittedAt.Before(rec.FixBaseAt.Add(-review.SubmitTolerance))
 	})
+	reviewed := slices.Contains(review.ReviewedCommits(since, me), rec.FixHead)
 	rec.Err = ""
-	if !slices.Contains(review.ReviewedCommits(since, me), rec.FixHead) {
+	if !reviewed {
 		if err := s.GH.CreateReview(ctx, rec.Ref, rec.FixHead, event, body); err != nil {
 			return s.recordErr(rec, err)
 		}
 	}
-	return s.detect(ctx, rec)
+	done, err := s.detect(ctx, rec)
+	// detect archives a review it reads as this session's. One it reads as
+	// earlier, after a reopened session's new snapshot, leaves the row pushed.
+	if reviewed && err == nil && done.State == review.StatePushed {
+		return done, fmt.Errorf("you already reviewed %s at %s; press x to close the row", rec.Ref, rec.FixHead)
+	}
+	return done, err
 }
 
 // DraftBody reads the body of the record's pending review, which is the summary
@@ -1540,16 +1548,9 @@ func (s *Service) cleanup(ctx context.Context, rec review.Record) error {
 	// record with no remote therefore ran no session in its checkout. It also has
 	// no remote-tracking ref to count against.
 	if rec.Fix && rec.Remote != "" {
-		// A pushed row's FixHead was on GitHub when docket last read it. The count
-		// would fail once the user's clone prunes the tracking ref of a merged pull
-		// request's branch, so a closed pull request trusts FixHead. So does a row
-		// that changed nothing, because every commit up to FixBase came from
-		// GitHub. On an open pull request, a bot may have force-pushed since. The
-		// local fix commits are then the only copy, so the count runs. On any
-		// other row FixHead may be a local commit.
-		remoteHead := ""
-		if rec.State == review.StatePushed && (rec.PRState.Closed() || rec.NoChanges()) {
-			remoteHead = rec.FixHead
+		remoteHead, err := s.knownRemoteHead(ctx, rec)
+		if err != nil {
+			return fmt.Errorf("docket kept %s because it could not read %s from GitHub to check the fixes: %w", rec.Dir, rec.Ref, err)
 		}
 		checkout, err := s.readCheckout(ctx, rec, remoteHead)
 		if err != nil {
@@ -1558,11 +1559,42 @@ func (s *Service) cleanup(ctx context.Context, rec review.Record) error {
 		if checkout.Local() {
 			return fmt.Errorf("docket kept %s because it holds fixes that are not on GitHub; push or discard them, then try again", rec.Dir)
 		}
+		// A count against a stale ref misses fixes that a force-push left only in
+		// the checkout. A checkout still on FixBase holds nothing from the session.
+		// One on remoteHead fetched nothing.
+		if checkout.FetchErr != nil && checkout.Head != rec.FixBase {
+			return fmt.Errorf("docket kept %s because it could not fetch %s to check the fixes: %w", rec.Dir, rec.Upstream(), checkout.FetchErr)
+		}
 	}
 	if rec.Tier == tier.Tier3 {
 		return s.Worktrees.Remove(ctx, rec.WorktreeOf, rec.Ref, rec.Dir, rec.Branch)
 	}
 	return s.Cloner.Remove(rec.Dir)
+}
+
+// knownRemoteHead is a commit that cleanup may treat as on GitHub without a
+// fetch, or empty when it knows none. A row that changed nothing is still on
+// FixBase, and every commit up to FixBase came from GitHub. A pushed row's
+// FixHead is on GitHub while it is the pull request's head. GitHub keeps that
+// head after the pull request merges or closes and its branch is deleted, when
+// the user's clone may have pruned the tracking ref and a count would fail. A
+// bot that force-pushed after the fixes moves the head. The count then decides.
+// On any other row FixHead may be a local commit.
+func (s *Service) knownRemoteHead(ctx context.Context, rec review.Record) (string, error) {
+	if rec.State != review.StatePushed {
+		return "", nil
+	}
+	if rec.NoChanges() {
+		return rec.FixHead, nil
+	}
+	info, err := s.GH.PR(ctx, rec.Ref)
+	if err != nil {
+		return "", err
+	}
+	if info.HeadRefOid == rec.FixHead {
+		return rec.FixHead, nil
+	}
+	return "", nil
 }
 
 // callerInClone reports whether the agent session this service runs under works

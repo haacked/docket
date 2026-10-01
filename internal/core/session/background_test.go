@@ -766,6 +766,30 @@ func TestAPollClosesALaunchThatStartedNothing(t *testing.T) {
 	}
 }
 
+// Another docket process can poll between a launch's two appends, before the
+// id is written and before the agent lists the session. Within launchGrace that
+// poll leaves the record alone, so the launch's own append is the one that lands.
+func TestAPollRightAfterALaunchLeavesARecordWithNoIdYet(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner("[]")
+	svc.Runner = runner
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	rec.State, rec.StartedAt = review.StateReviewing, svc.now()
+	lostLaunch(t, svc, rec)
+
+	records, _, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatalf("PollBackground: %v", err)
+	}
+	if records[0].State != review.StateReviewing {
+		t.Errorf("state right after the launch = %q, want reviewing", records[0].State)
+	}
+}
+
 // Archiving happens on its own once a review goes in, so there is nobody to
 // weigh an agent that may still be writing against a directory removed under it.
 func TestArchiveKeepsTheCloneWhenTheStopFails(t *testing.T) {

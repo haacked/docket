@@ -1644,9 +1644,11 @@ func (a App) armPoll() (tea.Model, tea.Cmd) {
 	return a, tea.Tick(bgInterval, func(time.Time) tea.Msg { return bgTickMsg{} })
 }
 
-// watching reports whether any record is a background session still running.
+// watching reports whether any record is a background session still running,
+// with or without an id. A record with no id yet still needs the poll, which
+// adopts its session or closes it once the launch's grace has passed.
 func (a App) watching() bool {
-	return slices.ContainsFunc(a.dash.Records, review.Record.BackgroundRunning)
+	return slices.ContainsFunc(a.dash.Records, review.Record.InBackgroundSession)
 }
 
 func (a App) pollBackground() tea.Cmd {

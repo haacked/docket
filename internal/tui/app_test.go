@@ -400,13 +400,19 @@ func TestProgressForFallsBackToTheAgentsState(t *testing.T) {
 var errTest = &stringErr{"claude is not on PATH"}
 
 // A start that failed before reporting an id leaves a row that reads as running
-// with no session behind it. Ticking over it forever is the thing to avoid.
-func TestAReviewThatNeverStartedDoesNotKeepThePollTicking(t *testing.T) {
+// with no session behind it. The tick keeps polling it, because only a poll
+// adopts its session or closes it once the launch's grace has passed. A record
+// the poll closed no longer arms the tick.
+func TestAReviewWithNoIdYetKeepsThePollTickingUntilThePollClosesIt(t *testing.T) {
 	rec := backgroundRecord(review.StateReviewing)
 	rec.BGID = ""
+	if _, armed := polled(t, []review.Record{rec}); !armed {
+		t.Error("a review with no id yet armed no tick, so nothing would poll it")
+	}
 
+	rec.State = review.StateUnreviewed
 	if _, armed := polled(t, []review.Record{rec}); armed {
-		t.Error("a review with no session armed the next tick")
+		t.Error("a review the poll closed armed the next tick")
 	}
 }
 

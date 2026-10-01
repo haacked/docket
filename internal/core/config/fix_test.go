@@ -121,15 +121,18 @@ func TestTheNotesFollowReviewCodesOverride(t *testing.T) {
 	}
 }
 
-// docket and review-code run from different directories, so a relative
-// override would name two places.
+// docket and review-code run from different directories. bash does not expand
+// a tilde in a variable's value. A relative override, or one that starts with
+// ~, would therefore name two places.
 func TestLoadRefusesARelativeReviewCodeOverride(t *testing.T) {
 	for _, name := range []string{"REVIEW_CODE_WORKTREE_DIR", "REVIEW_CODE_REVIEW_DIR"} {
-		t.Run(name, func(t *testing.T) {
-			t.Setenv(name, "relative/dir")
-			if _, err := Load(filepath.Join(t.TempDir(), "config.toml")); err == nil || !strings.Contains(err.Error(), name) {
-				t.Errorf("Load err = %v, want a refusal that names %s", err, name)
-			}
-		})
+		for _, value := range []string{"relative/dir", "~/reviews"} {
+			t.Run(name+" "+value, func(t *testing.T) {
+				t.Setenv(name, value)
+				if _, err := Load(filepath.Join(t.TempDir(), "config.toml")); err == nil || !strings.Contains(err.Error(), name) {
+					t.Errorf("Load err = %v, want a refusal that names %s", err, name)
+				}
+			})
+		}
 	}
 }

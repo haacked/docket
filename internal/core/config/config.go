@@ -46,12 +46,12 @@ type Config struct {
 	// ClaudeDefaultDir is DefaultClaudeConfigDir with the tilde expanded. Load
 	// fills it in. The file never sets it.
 	ClaudeDefaultDir string `toml:"-"`
-	// ReviewCodeWorktreeDir is $REVIEW_CODE_WORKTREE_DIR with the tilde expanded,
+	// ReviewCodeWorktreeDir is $REVIEW_CODE_WORKTREE_DIR as docket inherited it,
 	// or empty when it is unset. review-code keeps its worktrees and its
 	// per-repository locks there when it is set. Load fills it in. The file never
 	// sets it.
 	ReviewCodeWorktreeDir string `toml:"-"`
-	// ReviewCodeReviewDir is $REVIEW_CODE_REVIEW_DIR with the tilde expanded, or
+	// ReviewCodeReviewDir is $REVIEW_CODE_REVIEW_DIR as docket inherited it, or
 	// empty when it is unset. review-code writes its notes there when it is set.
 	// Load fills it in. The file never sets it.
 	ReviewCodeReviewDir string `toml:"-"`
@@ -198,17 +198,19 @@ func checkDirs(path string, cfg Config) (Config, error) {
 	return checkClaudeConfigDir(path, cfg)
 }
 
-// checkReviewCodeDirs refuses a relative review-code override. docket resolves
-// it from its own directory. review-code inherits the variable and runs from
-// the review's directory. It would therefore use a different lock. It would
-// also write its notes where docket never looks.
+// checkReviewCodeDirs refuses a review-code override that is not absolute.
+// docket resolves a relative one from its own directory. review-code inherits
+// the variable and runs from the review's directory. It would therefore use a
+// different lock. It would also write its notes where docket never looks. A
+// value that starts with ~ is relative to review-code, because bash does not
+// expand a tilde in a variable's value.
 func checkReviewCodeDirs(path string, cfg Config) error {
 	for name, dir := range map[string]string{
 		"REVIEW_CODE_WORKTREE_DIR": cfg.ReviewCodeWorktreeDir,
 		"REVIEW_CODE_REVIEW_DIR":   cfg.ReviewCodeReviewDir,
 	} {
 		if dir != "" && !filepath.IsAbs(dir) {
-			return fmt.Errorf("%s: %s is %q, which is relative; give an absolute path or one that starts with ~", path, name, dir)
+			return fmt.Errorf("%s: %s is %q, which is not an absolute path; review-code reads it as given, so give a full path", path, name, dir)
 		}
 	}
 	return nil
@@ -231,8 +233,10 @@ func expand(cfg Config) Config {
 	cfg.CodexSessionsDir = ExpandHome(cmp.Or(cfg.CodexSessionsDir, DefaultCodexSessionsDir))
 	cfg.ClaudeConfigDir = ExpandHome(cmp.Or(cfg.ClaudeConfigDir, os.Getenv("CLAUDE_CONFIG_DIR")))
 	cfg.ClaudeDefaultDir = ExpandHome(DefaultClaudeConfigDir)
-	cfg.ReviewCodeWorktreeDir = ExpandHome(os.Getenv("REVIEW_CODE_WORKTREE_DIR"))
-	cfg.ReviewCodeReviewDir = ExpandHome(os.Getenv("REVIEW_CODE_REVIEW_DIR"))
+	// review-code reads these from its own environment. bash does not expand a
+	// tilde in a variable's value, so docket does not expand one either.
+	cfg.ReviewCodeWorktreeDir = os.Getenv("REVIEW_CODE_WORKTREE_DIR")
+	cfg.ReviewCodeReviewDir = os.Getenv("REVIEW_CODE_REVIEW_DIR")
 	cfg.DefaultEngine = cmp.Or(cfg.DefaultEngine, EngineClaude)
 	cfg.DefaultRun = cmp.Or(cfg.DefaultRun, RunBackground)
 	return cfg

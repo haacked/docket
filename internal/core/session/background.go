@@ -220,6 +220,12 @@ func (s *Service) recoverLost(ctx context.Context, records []review.Record, grou
 		for _, i := range indexes {
 			rec := records[i]
 			id, found := bg.RecoverBackgroundID(rec, res)
+			// Within launchGrace the launch may still be running in another docket
+			// process, which writes the id in its second append. The agent may also
+			// not list the session yet.
+			if !found && s.now().Sub(rec.StartedAt) < launchGrace {
+				continue
+			}
 			if !found {
 				records[i] = s.detectPolled(ctx, rec)
 				continue
