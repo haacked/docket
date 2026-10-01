@@ -266,7 +266,9 @@ func (c Config) ReposConfPath() string {
 	return filepath.Join(c.ReviewCodeDir, "repos.conf")
 }
 
-// The directories review-code keeps under its installed skill.
+// The directories review-code keeps. Each defaults to a directory under its
+// installed skill. ReviewsDir and WorktreesDir follow review-code's environment
+// overrides.
 func (c Config) ReviewsDir() string {
 	return cmp.Or(c.ReviewCodeReviewDir, filepath.Join(c.ReviewCodeDir, ".reviews"))
 }

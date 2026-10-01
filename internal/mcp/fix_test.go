@@ -175,6 +175,30 @@ func TestSubmitReviewApprovesAPushedFixReview(t *testing.T) {
 	}
 }
 
+// An agent may push from the checkout and call submit_review with no
+// list_reviews in between. submit_review reads the fixed record again first.
+func TestSubmitReviewReadsAFixedCheckoutAgain(t *testing.T) {
+	f := newFixture(t)
+	f.fixable()
+	decode[startOutput](t, f.start(t, map[string]any{"fix": true}))
+	f.runner.Results["status --porcelain"] = exec.Result{Stdout: " M src/retry.go\n"}
+	if got := f.listedOne(t); got.State != string(review.StateFixed) {
+		t.Fatalf("state = %q, want fixed", got.State)
+	}
+	f.runner.Results["status --porcelain"] = exec.Result{Stdout: ""}
+	f.runner.Results["rev-parse HEAD"] = exec.Result{Stdout: "pushed-sha\n"}
+	f.svc.GH = headAt{fakeGitHub: f.gh, head: "pushed-sha"}
+
+	out := decode[Review](t, f.submit(t, map[string]any{"event": review.EventApprove}))
+
+	if out.State != string(review.StateArchived) {
+		t.Errorf("state = %q, want archived", out.State)
+	}
+	if len(f.gh.submits) != 1 || !strings.HasPrefix(f.gh.submits[0], "new pushed-sha APPROVE") {
+		t.Errorf("submits = %v, want one new review on pushed-sha", f.gh.submits)
+	}
+}
+
 // No tool abandons a record, so a start refused over an open fix review names
 // the next step for its state.
 func TestAStartOverAnOpenFixReviewNamesTheNextStep(t *testing.T) {

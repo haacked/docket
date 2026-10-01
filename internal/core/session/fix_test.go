@@ -404,6 +404,40 @@ func TestAFixRefusesAnExistingWorktreeThatHoldsLocalWork(t *testing.T) {
 	}
 }
 
+// The refusal tells the user to press x. The refused directory predates the
+// record, so abandoning the record leaves the work where it is.
+func TestAbandoningAFixReviewRefusedForLocalWorkKeepsTheWork(t *testing.T) {
+	svc, _, gitc := fixService(t)
+	dir := svc.Paths.CloneDir(unlisted.Org, unlisted.Repo, unlisted.Number)
+	keep := filepath.Join(dir, "fixed.go")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keep, []byte("package fixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitc.repos[dir] = true
+	gitc.branches[dir] = botHead
+	gitc.dirty[dir] = true
+
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixOn)
+	if err == nil {
+		t.Fatal("Prepare provisioned over a clone that holds fixes")
+	}
+
+	done, err := svc.Abandon(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("Abandon: %v", err)
+	}
+
+	if done.State != review.StateAbandoned {
+		t.Errorf("state = %q, want abandoned", done.State)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("the local work at %s is gone: %v", keep, err)
+	}
+}
+
 // --- Detecting the outcome ---
 
 // A fix review posts nothing, so the checkout says where it stands.
@@ -1209,6 +1243,32 @@ func TestRereviewOfAPushedRowMovesTheCheckoutToTheCurrentHead(t *testing.T) {
 	}
 	if line := launchLine(t, spec); !strings.Contains(line, "--fix") || !strings.Contains(line, "--append") {
 		t.Errorf("command %s, want --fix and --append", line)
+	}
+}
+
+// A re-review stamps a new FixBaseAt, so the Fix Summary the previous run wrote
+// no longer counts. A session that ends before review-code writes new notes did
+// not finish.
+func TestARereviewThatEndsBeforeItsNotesIsUnfinished(t *testing.T) {
+	svc, _, _ := fixService(t)
+	rec := fixReviewPushed(t, svc, unlisted)
+	svc.Now = func() time.Time { return start.Add(2 * time.Hour) }
+
+	again, err := svc.Rereview(context.Background(), rec, review.IntentOverwrite, review.ModeInteractive)
+	if err != nil {
+		t.Fatalf("Rereview: %v", err)
+	}
+	again, _, err = svc.LaunchSpec(context.Background(), again)
+	if err != nil {
+		t.Fatalf("LaunchSpec: %v", err)
+	}
+	done, err := svc.AfterExit(context.Background(), again, nil)
+	if err != nil {
+		t.Fatalf("AfterExit: %v", err)
+	}
+
+	if done.State != review.StateUnreviewed {
+		t.Errorf("state = %q, want unreviewed", done.State)
 	}
 }
 

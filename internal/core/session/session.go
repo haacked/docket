@@ -379,6 +379,9 @@ func (s *Service) provision(ctx context.Context, rec review.Record, plan Plan, i
 		// A checkout kept from an earlier review may hold fixes. Ensure resets a
 		// clone it reuses.
 		if err := s.refuseLocalWork(ctx, plan.Dir, "origin/"+info.HeadRefName); err != nil {
+			// docket did not create the directory, so abandoning this record must
+			// not delete it.
+			rec.Dir = ""
 			return rec, err
 		}
 	}
@@ -1171,9 +1174,12 @@ func (s *Service) DraftBody(ctx context.Context, rec review.Record) (string, err
 }
 
 // RefreshFixed re-reads a fixed record. The user may push its fixes from outside
-// any session docket opened. Only this read notices that push. A dirty checkout
-// still holds local work, so such a record comes back as it is, with nothing
-// read from GitHub and nothing written. Any record that is not fixed comes back
+// any session docket opened. The poll reads only running sessions, so the MCP
+// tools call this to notice that push. A dirty checkout still holds local work.
+// So does a clean one still on FixHead with commits its remote-tracking ref
+// lacks, because a push from the checkout moves that ref. Either comes back as
+// it is, with nothing read from GitHub and nothing written. A push made from
+// another clone therefore waits for r. Any record that is not fixed comes back
 // unchanged.
 func (s *Service) RefreshFixed(ctx context.Context, rec review.Record) (review.Record, error) {
 	if rec.State != review.StateFixed {
@@ -1181,6 +1187,11 @@ func (s *Service) RefreshFixed(ctx context.Context, rec review.Record) (review.R
 	}
 	if dirty, err := s.Git.Dirty(ctx, rec.Dir); err == nil && dirty {
 		return rec, nil
+	}
+	if head, err := s.Git.Head(ctx, rec.Dir); err == nil && head == rec.FixHead {
+		if ahead, err := s.Git.Ahead(ctx, rec.Dir, rec.Upstream()); err == nil && ahead > 0 {
+			return rec, nil
+		}
 	}
 	return s.Refresh(ctx, rec)
 }
@@ -1314,13 +1325,12 @@ func fixNotesWritten(rec review.Record) bool {
 	return err == nil && strings.Contains(string(notes), "## Fix Summary")
 }
 
-// readCheckout reads a fix review's working tree. remoteHead is the head GitHub
-// reports for the pull request, or empty when the caller has not read it.
+// readCheckout reads a fix review's working tree. remoteHead is a commit the
+// caller knows is on the remote branch, or empty when it knows none.
 //
-// It fetches the branch unless the checkout is dirty or on remoteHead.
-// refreshCheckout resets to the ref that fetch updates. A dirty checkout holds
-// local work whatever the remote has. A clean checkout on remoteHead has nothing
-// local. A clean checkout still on FixBase has nothing
+// It fetches the branch unless the checkout is dirty or on remoteHead. A dirty
+// checkout holds local work whatever the remote has. A clean checkout on
+// remoteHead has nothing local. A clean checkout still on FixBase has nothing
 // local either, because every commit up to FixBase came from GitHub. A
 // force-push can move the branch off FixBase, and counting against the
 // rewritten branch would then read those commits as local.
@@ -1346,6 +1356,8 @@ func (s *Service) readCheckout(ctx context.Context, rec review.Record, remoteHea
 	} else {
 		c.FetchErr = s.Git.FetchBranch(ctx, rec.Dir, rec.Remote, rec.Branch)
 	}
+	// The fetch runs for a checkout on FixBase too, because refreshCheckout
+	// resets to the ref it updates.
 	if c.Head == rec.FixBase {
 		return c, nil
 	}

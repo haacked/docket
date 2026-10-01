@@ -259,10 +259,14 @@ func RemoteFor(remotes []Remote, org, repo string) (string, bool) {
 // ShadowsRemote reports whether a local branch named branch would hide a
 // remote-tracking ref. git resolves a short name in refs/heads before
 // refs/remotes, so a branch named origin/main in a clone with an origin remote
-// takes over origin/main there.
+// takes over origin/main there. The comparison ignores case. git reads a loose
+// ref through the filesystem. On a case-insensitive filesystem,
+// refs/heads/Origin/main answers for refs/heads/origin/main.
 func ShadowsRemote(remotes []Remote, branch string) bool {
+	branch = strings.ToLower(branch)
 	for _, r := range remotes {
-		if branch == r.Name || strings.HasPrefix(branch, r.Name+"/") {
+		name := strings.ToLower(r.Name)
+		if branch == name || strings.HasPrefix(branch, name+"/") {
 			return true
 		}
 	}

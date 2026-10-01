@@ -377,6 +377,32 @@ func TestRemoteForFindsTheRemoteThatPointsAtThePullRequestsRepository(t *testing
 	}
 }
 
+func TestShadowsRemoteFindsABranchThatHidesARemoteTrackingRef(t *testing.T) {
+	remotes := []Remote{
+		{Name: "origin", URL: "git@github.com:haacked/posthog.git"},
+		{Name: "upstream", URL: "git@github.com:PostHog/posthog.git"},
+	}
+	tests := []struct {
+		branch string
+		want   bool
+	}{
+		{branch: "origin", want: true},
+		{branch: "upstream/main", want: true},
+		// A case-insensitive filesystem reads refs/heads/Origin/main for origin/main.
+		{branch: "Origin/main", want: true},
+		{branch: "origin-hotfix", want: false},
+		{branch: "feature/retry", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.branch, func(t *testing.T) {
+			if got := ShadowsRemote(remotes, tt.branch); got != tt.want {
+				t.Errorf("ShadowsRemote(%q) = %v, want %v", tt.branch, got, tt.want)
+			}
+		})
+	}
+}
+
 // --track makes the new branch's upstream the remote branch, so `git push` in
 // the session needs no arguments.
 func TestWorktreeAddStartsATrackingBranchAtTheRemoteBranch(t *testing.T) {
