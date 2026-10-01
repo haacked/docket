@@ -172,7 +172,7 @@ func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return checkClaudeConfigDir(path, expand(cfg))
+			return checkDirs(path, expand(cfg))
 		}
 		return cfg, fmt.Errorf("read %s: %w", path, err)
 	}
@@ -186,7 +186,32 @@ func Load(path string) (Config, error) {
 	if cfg.DefaultRun != RunBackground && cfg.DefaultRun != RunTerminal {
 		return cfg, fmt.Errorf("%s: default_run is %q, want %q or %q", path, cfg.DefaultRun, RunBackground, RunTerminal)
 	}
-	return checkClaudeConfigDir(path, expand(cfg))
+	return checkDirs(path, expand(cfg))
+}
+
+// checkDirs refuses the directories docket and the agents would resolve
+// differently.
+func checkDirs(path string, cfg Config) (Config, error) {
+	if err := checkReviewCodeDirs(path, cfg); err != nil {
+		return cfg, err
+	}
+	return checkClaudeConfigDir(path, cfg)
+}
+
+// checkReviewCodeDirs refuses a relative review-code override. docket resolves
+// it from its own directory. review-code inherits the variable and runs from
+// the review's directory. It would therefore use a different lock. It would
+// also write its notes where docket never looks.
+func checkReviewCodeDirs(path string, cfg Config) error {
+	for name, dir := range map[string]string{
+		"REVIEW_CODE_WORKTREE_DIR": cfg.ReviewCodeWorktreeDir,
+		"REVIEW_CODE_REVIEW_DIR":   cfg.ReviewCodeReviewDir,
+	} {
+		if dir != "" && !filepath.IsAbs(dir) {
+			return fmt.Errorf("%s: %s is %q, which is relative; give an absolute path or one that starts with ~", path, name, dir)
+		}
+	}
+	return nil
 }
 
 // checkClaudeConfigDir refuses a relative claude config dir. docket runs some

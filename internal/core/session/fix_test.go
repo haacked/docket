@@ -1589,3 +1589,29 @@ func TestRefreshFixedLeavesADirtyCheckoutAlone(t *testing.T) {
 		t.Error("RefreshFixed wrote to the index")
 	}
 }
+
+// A bot may force-push the head branch after the fixes were pushed. The local
+// fix commits are then the only copy, so abandoning the row keeps the checkout.
+func TestAbandonKeepsAPushedRowsFixesAfterAForcePush(t *testing.T) {
+	svc, _, gitc := fixService(t)
+	rec := fixReviewLaunched(t, svc, unlisted)
+	writeFixSummary(t, rec)
+	gitc.heads[rec.Dir] = "fix-sha"
+	pushed, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil || pushed.State != review.StatePushed {
+		t.Fatalf("AfterExit = %q, %v, want pushed", pushed.State, err)
+	}
+	gitc.ahead[rec.Dir] = 1
+
+	done, err := svc.Abandon(context.Background(), pushed)
+
+	if err == nil {
+		t.Fatal("Abandon deleted a checkout whose fixes are no longer on the remote")
+	}
+	if done.State != review.StatePushed {
+		t.Errorf("state = %q, want the row left pushed", done.State)
+	}
+	if got := called(gitc, "worktree-remove"); len(got) != 0 {
+		t.Errorf("git calls = %v, want no removal", got)
+	}
+}

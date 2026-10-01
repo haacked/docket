@@ -120,3 +120,16 @@ func TestTheNotesFollowReviewCodesOverride(t *testing.T) {
 		t.Errorf("ReviewsDir = %q, want %q", cfg.ReviewsDir(), want)
 	}
 }
+
+// docket and review-code run from different directories, so a relative
+// override would name two places.
+func TestLoadRefusesARelativeReviewCodeOverride(t *testing.T) {
+	for _, name := range []string{"REVIEW_CODE_WORKTREE_DIR", "REVIEW_CODE_REVIEW_DIR"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, "relative/dir")
+			if _, err := Load(filepath.Join(t.TempDir(), "config.toml")); err == nil || !strings.Contains(err.Error(), name) {
+				t.Errorf("Load err = %v, want a refusal that names %s", err, name)
+			}
+		})
+	}
+}

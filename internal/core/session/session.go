@@ -1540,12 +1540,15 @@ func (s *Service) cleanup(ctx context.Context, rec review.Record) error {
 	// record with no remote therefore ran no session in its checkout. It also has
 	// no remote-tracking ref to count against.
 	if rec.Fix && rec.Remote != "" {
-		// A pushed row's FixHead was on GitHub when docket last read it, so a
-		// clean checkout still there needs no count. The count would fail once the
-		// user's clone prunes the tracking ref of a merged pull request's branch.
-		// On any other row FixHead may be a local commit.
+		// A pushed row's FixHead was on GitHub when docket last read it. The count
+		// would fail once the user's clone prunes the tracking ref of a merged pull
+		// request's branch, so a closed pull request trusts FixHead. So does a row
+		// that changed nothing, because every commit up to FixBase came from
+		// GitHub. On an open pull request, a bot may have force-pushed since. The
+		// local fix commits are then the only copy, so the count runs. On any
+		// other row FixHead may be a local commit.
 		remoteHead := ""
-		if rec.State == review.StatePushed {
+		if rec.State == review.StatePushed && (rec.PRState.Closed() || rec.NoChanges()) {
 			remoteHead = rec.FixHead
 		}
 		checkout, err := s.readCheckout(ctx, rec, remoteHead)
