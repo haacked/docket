@@ -111,3 +111,23 @@ func TestDecideReturnsTheExpandedTier1Path(t *testing.T) {
 		t.Errorf("Decide with path %q dir = %q, want %q", entries[0].Path, gotDir, want)
 	}
 }
+
+func TestTierString(t *testing.T) {
+	tests := []struct {
+		name string
+		tier tier.Tier
+		want string
+	}{
+		{name: "tier 1", tier: tier.Tier1, want: "tier1"},
+		{name: "tier 2", tier: tier.Tier2, want: "tier2"},
+		{name: "out of range", tier: tier.Tier(0), want: "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.tier.String(); got != tt.want {
+				t.Errorf("Tier(%d).String() = %q, want %q", int(tt.tier), got, tt.want)
+			}
+		})
+	}
+}
