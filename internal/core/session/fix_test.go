@@ -1429,6 +1429,36 @@ func TestSubmittingAPushedRowIAlreadyReviewedPostsNothing(t *testing.T) {
 	}
 }
 
+// A review the user made before the fix review started does not stop an
+// approval, even on the same commit. A fix review that changed nothing leaves
+// the head where the user commented or asked for changes.
+func TestAnEarlierReviewOfTheSameCommitDoesNotBlockAnApproval(t *testing.T) {
+	for _, state := range []string{"COMMENTED", "CHANGES_REQUESTED"} {
+		t.Run(state, func(t *testing.T) {
+			svc, ghc, _ := fixService(t)
+			before := start.Add(-time.Hour)
+			earlier := review.GHReview{ID: 7, User: review.GHUser{Login: "haacked"}, State: state, SubmittedAt: &before, Body: "please fix the retry loop", CommitID: "base-sha"}
+			ghc.reviews = []review.GHReview{earlier}
+			rec := fixReviewPushed(t, svc, unlisted)
+			if !rec.NoChanges() || !slices.Contains(rec.PriorReviewIDs, earlier.ID) {
+				t.Fatalf("setup: no changes %v, prior %v", rec.NoChanges(), rec.PriorReviewIDs)
+			}
+
+			done, err := svc.Submit(context.Background(), rec, review.EventApprove, "")
+			if err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+
+			if len(ghc.created) != 1 || ghc.created[0].event != review.EventApprove || ghc.created[0].commitID != rec.FixHead {
+				t.Errorf("created %+v, want one approval on %s", ghc.created, rec.FixHead)
+			}
+			if done.State != review.StateArchived {
+				t.Errorf("state = %q, want archived", done.State)
+			}
+		})
+	}
+}
+
 // GitHub requires a body for a comment and for a request for changes. Only an
 // approval may go without one.
 func TestSubmittingAPushedRowRefusesAnEmptyBodyForACommentOrARequestForChanges(t *testing.T) {

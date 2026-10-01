@@ -1139,22 +1139,22 @@ func (s *Service) reviewFixes(ctx context.Context, rec review.Record, me, event,
 	if review.PendingReviewID(reviews, me) != 0 {
 		return rec, fmt.Errorf("you have a pending review on %s; submit or delete it on GitHub first", rec.Ref)
 	}
-	// A review of mine on FixHead means this submit would post a second one. The
-	// user may have reviewed on GitHub, or an earlier submit may have posted and
-	// then failed to read GitHub back. Reading GitHub again archives the row when
-	// that review came after the launch.
-	reviewed := slices.Contains(review.ReviewedCommits(reviews, me), rec.FixHead)
+	// A review of mine on FixHead posted since the launch means this submit would
+	// post a second one. An earlier submit may have posted and then failed to read
+	// GitHub back, or the user reviewed on GitHub. detect reads that review as this
+	// session's submission and archives the row. A review from before the launch
+	// does not count, so an earlier comment or request for changes on the same
+	// commit does not block an approval.
+	since := slices.DeleteFunc(slices.Clone(reviews), func(r review.GHReview) bool {
+		return slices.Contains(rec.PriorReviewIDs, r.ID)
+	})
 	rec.Err = ""
-	if !reviewed {
+	if !slices.Contains(review.ReviewedCommits(since, me), rec.FixHead) {
 		if err := s.GH.CreateReview(ctx, rec.Ref, rec.FixHead, event, body); err != nil {
 			return s.recordErr(rec, err)
 		}
 	}
-	done, err := s.detect(ctx, rec)
-	if reviewed && err == nil && done.State == review.StatePushed {
-		return done, fmt.Errorf("you already reviewed %s at %s; press x to close the row", rec.Ref, rec.FixHead)
-	}
-	return done, err
+	return s.detect(ctx, rec)
 }
 
 // DraftBody reads the body of the record's pending review, which is the summary
