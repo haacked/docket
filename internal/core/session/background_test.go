@@ -73,7 +73,16 @@ func launchBackground(t *testing.T, svc *Service, runner *exec.Fake, ref pr.Ref)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	return svc.StartBackground(context.Background(), rec)
+	rec, err = svc.StartBackground(context.Background(), rec)
+	pastLaunch(svc)
+	return rec, err
+}
+
+// pastLaunch moves the service clock past launchGrace, the way a poll a minute
+// after the launch sees it. Within launchGrace no session reads as over.
+func pastLaunch(svc *Service) {
+	now := svc.now()
+	svc.Now = func() time.Time { return now.Add(launchGrace + time.Minute) }
 }
 
 // lostLaunch stores rec the way a docket killed between the launch and the
@@ -308,6 +317,48 @@ func TestPollDetectsASessionTheAgentNoLongerKnows(t *testing.T) {
 	}
 	if records[0].State != review.StateUnreviewed {
 		t.Errorf("state = %q, want the record moved off running", records[0].State)
+	}
+}
+
+// claude --bg prints the id before the session's process starts, and the poll
+// that follows a launch runs at once. A listing taken in that gap does not name
+// the session, or names it with no process. Neither closes the record until
+// launchGrace has passed.
+func TestAPollRightAfterTheLaunchKeepsASessionTheAgentHasNotStarted(t *testing.T) {
+	for name, listing := range map[string]string{
+		"not listed":     "[]",
+		"no process yet": `[{"kind":"bg","id":"6d681a76","sessionId":"` + bgSession + `","state":"working","status":"idle"}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ghc := &fakeGH{login: "haacked", info: prInfo()}
+			svc, _ := newService(t, ghc, newFakeGit())
+			runner := bgRunner(listing)
+			svc.Runner = runner
+			rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			if _, err := svc.StartBackground(context.Background(), rec); err != nil {
+				t.Fatalf("StartBackground: %v", err)
+			}
+
+			records, _, err := svc.PollBackground(context.Background())
+			if err != nil {
+				t.Fatalf("PollBackground: %v", err)
+			}
+			if records[0].State != review.StateReviewing {
+				t.Errorf("state right after the launch = %q, want reviewing", records[0].State)
+			}
+
+			pastLaunch(svc)
+			records, _, err = svc.PollBackground(context.Background())
+			if err != nil {
+				t.Fatalf("PollBackground: %v", err)
+			}
+			if records[0].State != review.StateUnreviewed {
+				t.Errorf("state after the grace = %q, want the record moved off running", records[0].State)
+			}
+		})
 	}
 }
 

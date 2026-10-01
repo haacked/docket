@@ -87,6 +87,7 @@ func fixReviewInBackground(t *testing.T, svc *Service, listing string) review.Re
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
+	pastLaunch(svc)
 	return rec
 }
 
