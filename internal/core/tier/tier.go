@@ -23,7 +23,7 @@ func (t Tier) String() string {
 	case Tier1:
 		return "tier1"
 	case Tier2:
-		return "tier2"
+		return "tier1"
 	default:
 		return "unknown"
 	}
