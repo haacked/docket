@@ -66,6 +66,9 @@ func TestPRReadsTheFieldsTheCloneNeeds(t *testing.T) {
 	if !strings.Contains(line, "headRefOid") {
 		t.Errorf("command = %s, want it to ask for the head commit", line)
 	}
+	if !strings.Contains(line, "assignees") {
+		t.Errorf("command = %s, want it to ask for the assignees", line)
+	}
 }
 
 func TestPRRejectsAResponseWithNoHeadBranch(t *testing.T) {

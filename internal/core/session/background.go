@@ -92,7 +92,7 @@ func (s *Service) Restart(ctx context.Context, rec review.Record) (review.Record
 		return rec, err
 	}
 	rec.PRState = pull.State
-	rec, err = s.snapshot(ctx, rec)
+	rec, _, err = s.snapshot(ctx, rec)
 	if err != nil {
 		return rec, err
 	}
