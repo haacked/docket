@@ -35,7 +35,11 @@ type Model struct {
 	// Background is the user's choice. An engine with no background mode runs
 	// in the terminal and leaves it set. A move back to an engine that has a
 	// background mode runs there again.
-	Background  bool
+	Background bool
+	// Fix is whether the review fixes the code rather than drafting a review.
+	// Auto leaves it to fix_authors, and Reset puts it back there, because the
+	// choice belongs to one pull request.
+	Fix         review.FixChoice
 	DefaultRepo string
 	Styles      Styles
 	Busy        string
@@ -142,6 +146,7 @@ func (m Model) Reset() Model {
 	m.Input.SetValue("")
 	m.Busy = ""
 	m.Existing = nil
+	m.Fix = review.FixAuto
 	return m
 }
 
@@ -191,13 +196,16 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 				m.Background = !m.Background
 			}
 			return m, nil
+		case "ctrl+f":
+			m.Fix = nextFix(m.Fix)
+			return m, nil
 		case "enter":
 			value := strings.TrimSpace(m.Input.Value())
 			if _, err := m.ref(); err != nil {
 				return m, nil
 			}
 			m.Busy = "resolving"
-			return m, msg.Send(msg.StartReview{Input: value, Engine: m.Engine, Background: m.background()})
+			return m, msg.Send(msg.StartReview{Input: value, Engine: m.Engine, Background: m.background(), Fix: string(m.Fix)})
 		}
 	}
 
@@ -223,6 +231,12 @@ func (m Model) choose(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.Background = !m.Background
 		}
 		return m, nil
+	case "ctrl+f":
+		// A re-review keeps the record's own choice.
+		if found.RecordID == "" {
+			m.Fix = nextFix(m.Fix)
+		}
+		return m, nil
 	case "v":
 		if !found.CanAsk() {
 			return m, nil
@@ -245,7 +259,15 @@ func (m Model) choose(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		Background: m.background() && intent != review.IntentAsk,
 		Intent:     string(intent),
 		RecordID:   found.RecordID,
+		Fix:        string(m.Fix),
 	})
+}
+
+// fixOrder is the order ctrl+f cycles the fix choice in.
+var fixOrder = []string{string(review.FixAuto), string(review.FixOn), string(review.FixOff)}
+
+func nextFix(c review.FixChoice) review.FixChoice {
+	return review.FixChoice(choice.Next(fixOrder, string(c)))
 }
 
 func (m Model) ref() (pr.Ref, error) {
@@ -273,6 +295,7 @@ func (m Model) View() string {
 
 	b.WriteString("\n" + m.Styles.Label.Render("Engine") + " " + choice.Line(m.Engines, m.Engine, lipgloss.Style{}, m.Styles.Dim) + "\n")
 	b.WriteString(m.Styles.Label.Render("Run") + " " + m.runLine() + "\n")
+	b.WriteString(m.Styles.Label.Render("Fix") + " " + m.fixLine() + "\n")
 	if m.Busy != "" {
 		b.WriteString("\n" + m.Spinner.Render(m.Busy) + "\n")
 	}
@@ -297,6 +320,9 @@ func (m Model) existingView(found Existing) string {
 	b.WriteString("\n" + strings.Join(choices, " · ") + "\n")
 	b.WriteString("\n" + m.Styles.Label.Render("Engine") + " " + m.engine() + "\n")
 	b.WriteString(m.Styles.Label.Render("Run") + " " + m.runLine() + "\n")
+	if found.RecordID == "" {
+		b.WriteString(m.Styles.Label.Render("Fix") + " " + m.fixLine() + "\n")
+	}
 	if found.CanAsk() && m.background() {
 		b.WriteString(m.Styles.Dim.Render("view and ask runs in this terminal") + "\n")
 	}
@@ -316,4 +342,17 @@ func (m Model) runLine() string {
 		return "in the background" + " " + m.Styles.Dim.Render("· ctrl+b for this terminal")
 	}
 	return "in this terminal" + " " + m.Styles.Dim.Render("· ctrl+b for the background")
+}
+
+// fixLine says whether the review fixes the code or drafts a review, and what
+// ctrl+f switches to.
+func (m Model) fixLine() string {
+	switch m.Fix {
+	case review.FixOn:
+		return "fixes the code for you to push" + " " + m.Styles.Dim.Render("· ctrl+f to draft a review")
+	case review.FixOff:
+		return "drafts a review" + " " + m.Styles.Dim.Render("· ctrl+f to let fix_authors decide")
+	default:
+		return "fixes pull requests by fix_authors, drafts a review of others" + " " + m.Styles.Dim.Render("· ctrl+f to always fix")
+	}
 }

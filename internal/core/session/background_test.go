@@ -69,11 +69,20 @@ func startedBackground(t *testing.T, svc *Service, runner *exec.Fake) review.Rec
 func launchBackground(t *testing.T, svc *Service, runner *exec.Fake, ref pr.Ref) (review.Record, error) {
 	t.Helper()
 	svc.Runner = runner
-	rec, _, err := svc.Prepare(context.Background(), ref, "claude", review.ModeBackground, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), ref, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	return svc.StartBackground(context.Background(), rec)
+	rec, err = svc.StartBackground(context.Background(), rec)
+	pastLaunch(svc)
+	return rec, err
+}
+
+// pastLaunch moves the service clock past launchGrace, the way a poll a minute
+// after the launch sees it. Within launchGrace no session reads as over.
+func pastLaunch(svc *Service) {
+	now := svc.now()
+	svc.Now = func() time.Time { return now.Add(launchGrace + time.Minute) }
 }
 
 // lostLaunch stores rec the way a docket killed between the launch and the
@@ -119,7 +128,7 @@ func TestPrepareMintsNoSessionIdForABackgroundReview(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -159,7 +168,7 @@ func TestStartBackgroundRecordsTheReviewBeforeLaunchingIt(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	svc.Runner = &exec.Fake{Errs: map[string]error{"--bg": errors.New("claude is not logged in")}}
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -190,7 +199,7 @@ func TestAStartThatReportedNoIdIsNotWaitedOn(t *testing.T) {
 	}
 	svc.Runner = runner
 
-	rec, _, _ := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
+	rec, _, _ := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	rec, _ = svc.StartBackground(context.Background(), rec)
 
 	if rec.BackgroundRunning() {
@@ -308,6 +317,48 @@ func TestPollDetectsASessionTheAgentNoLongerKnows(t *testing.T) {
 	}
 	if records[0].State != review.StateUnreviewed {
 		t.Errorf("state = %q, want the record moved off running", records[0].State)
+	}
+}
+
+// claude --bg prints the id before the session's process starts, and the poll
+// that follows a launch runs at once. A listing taken in that gap does not name
+// the session, or names it with no process. Neither closes the record until
+// launchGrace has passed.
+func TestAPollRightAfterTheLaunchKeepsASessionTheAgentHasNotStarted(t *testing.T) {
+	for name, listing := range map[string]string{
+		"not listed":     "[]",
+		"no process yet": `[{"kind":"bg","id":"6d681a76","sessionId":"` + bgSession + `","state":"working","status":"idle"}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ghc := &fakeGH{login: "haacked", info: prInfo()}
+			svc, _ := newService(t, ghc, newFakeGit())
+			runner := bgRunner(listing)
+			svc.Runner = runner
+			rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			if _, err := svc.StartBackground(context.Background(), rec); err != nil {
+				t.Fatalf("StartBackground: %v", err)
+			}
+
+			records, _, err := svc.PollBackground(context.Background())
+			if err != nil {
+				t.Fatalf("PollBackground: %v", err)
+			}
+			if records[0].State != review.StateReviewing {
+				t.Errorf("state right after the launch = %q, want reviewing", records[0].State)
+			}
+
+			pastLaunch(svc)
+			records, _, err = svc.PollBackground(context.Background())
+			if err != nil {
+				t.Fatalf("PollBackground: %v", err)
+			}
+			if records[0].State != review.StateUnreviewed {
+				t.Errorf("state after the grace = %q, want the record moved off running", records[0].State)
+			}
+		})
 	}
 }
 
@@ -527,7 +578,7 @@ func TestExplainBackgroundRecordsNothing(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	svc.Runner = bgRunner("[]")
 
-	_, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview)
+	_, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("ExplainBackground: %v", err)
 	}
@@ -549,7 +600,7 @@ func TestBackgroundIsRefusedForAnEngineThatHasNone(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	svc.Runner = bgRunner("[]")
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "codex", review.ModeBackground, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "codex", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -597,7 +648,7 @@ func TestAbandoningAnInteractiveReviewStopsNothing(t *testing.T) {
 	runner := bgRunner("[]")
 	svc.Runner = runner
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +704,7 @@ func TestPrepareMarksYourOwnPullRequest(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: mine}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -663,7 +714,7 @@ func TestPrepareMarksYourOwnPullRequest(t *testing.T) {
 
 	theirs := &fakeGH{login: "haacked", info: prInfo()}
 	other, _ := newService(t, theirs, newFakeGit())
-	rec, _, err = other.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
+	rec, _, err = other.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -712,6 +763,30 @@ func TestAPollClosesALaunchThatStartedNothing(t *testing.T) {
 	}
 	if records[0].State == review.StateReviewing {
 		t.Error("a launch that started nothing is still waiting to finish")
+	}
+}
+
+// Another docket process can poll between a launch's two appends, before the
+// id is written and before the agent lists the session. Within launchGrace that
+// poll leaves the record alone, so the launch's own append is the one that lands.
+func TestAPollRightAfterALaunchLeavesARecordWithNoIdYet(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner("[]")
+	svc.Runner = runner
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	rec.State, rec.StartedAt = review.StateReviewing, svc.now()
+	lostLaunch(t, svc, rec)
+
+	records, _, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatalf("PollBackground: %v", err)
+	}
+	if records[0].State != review.StateReviewing {
+		t.Errorf("state right after the launch = %q, want reviewing", records[0].State)
 	}
 }
 

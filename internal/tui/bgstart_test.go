@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/pr"
@@ -11,8 +12,9 @@ import (
 )
 
 // A launch that exited zero without printing an id may have started a session
-// docket has no id for. r and R refuse that record. The poll has to run now to
-// adopt the session or close the record, not at the next restart.
+// docket has no id for. r and R refuse that record. The poll runs now and keeps
+// running, to adopt the session or close the record once the launch's grace has
+// passed, not at the next restart.
 func TestAFailedLaunchThatRecordedReviewingPollsRightAway(t *testing.T) {
 	svc, runner := cloningService(t)
 	runner.Results["agents --json"] = exec.Result{Stdout: "[]"}
@@ -22,7 +24,7 @@ func TestAFailedLaunchThatRecordedReviewingPollsRightAway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseRef: %v", err)
 	}
-	rec, _, err := svc.Prepare(context.Background(), ref, "claude", review.ModeBackground, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), ref, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -52,8 +54,8 @@ func TestAFailedLaunchThatRecordedReviewingPollsRightAway(t *testing.T) {
 	if poll == nil {
 		t.Fatal("the failure did not poll for a session it may have started anyway")
 	}
-	if len(poll.records) != 1 || poll.records[0].State == review.StateReviewing {
-		t.Errorf("the poll left the record waiting on a session nobody holds: %+v", poll.records)
+	if len(poll.records) != 1 || poll.records[0].State != review.StateReviewing {
+		t.Errorf("the poll right after the launch closed the record: %+v", poll.records)
 	}
 
 	// A poll that works clears a.err. The launch failure still has to be on screen.
@@ -61,6 +63,18 @@ func TestAFailedLaunchThatRecordedReviewingPollsRightAway(t *testing.T) {
 	a = next.(App)
 	if a.err == nil && !strings.Contains(a.status, "started no background session") {
 		t.Errorf("the poll wiped the launch failure off the status line: status %q", a.status)
+	}
+	if !a.polling {
+		t.Error("no tick armed for a record still waiting on its session")
+	}
+
+	svc.Now = func() time.Time { return time.Now().Add(time.Minute) }
+	later, ok := a.pollBackground()().(bgPolledMsg)
+	if !ok {
+		t.Fatal("the later poll did not answer with bgPolledMsg")
+	}
+	if len(later.records) != 1 || later.records[0].State == review.StateReviewing {
+		t.Errorf("a poll after the grace left the record waiting on a session nobody holds: %+v", later.records)
 	}
 }
 

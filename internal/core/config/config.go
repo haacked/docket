@@ -46,13 +46,26 @@ type Config struct {
 	// ClaudeDefaultDir is DefaultClaudeConfigDir with the tilde expanded. Load
 	// fills it in. The file never sets it.
 	ClaudeDefaultDir string `toml:"-"`
-	DefaultEngine    string `toml:"default_engine"`
-	DefaultRun       string `toml:"default_run"`
-	GitHubUser       string `toml:"github_user"`
-	DefaultRepo      string `toml:"default_repo"`
+	// ReviewCodeWorktreeDir is $REVIEW_CODE_WORKTREE_DIR as docket inherited it,
+	// or empty when it is unset. review-code keeps its worktrees and its
+	// per-repository locks there when it is set. Load fills it in. The file never
+	// sets it.
+	ReviewCodeWorktreeDir string `toml:"-"`
+	// ReviewCodeReviewDir is $REVIEW_CODE_REVIEW_DIR as docket inherited it, or
+	// empty when it is unset. review-code writes its notes there when it is set.
+	// Load fills it in. The file never sets it.
+	ReviewCodeReviewDir string `toml:"-"`
+	DefaultEngine       string `toml:"default_engine"`
+	DefaultRun          string `toml:"default_run"`
+	GitHubUser          string `toml:"github_user"`
+	DefaultRepo         string `toml:"default_repo"`
 	// Teams are the "org/team" slugs whose review requests the requests screen
 	// lists alongside the ones that name the user. The teams screen writes it.
 	Teams []string `toml:"teams"`
+	// FixAuthors are the pull request authors a new review fixes rather than
+	// drafting a review for, such as "app/posthog". A GitHub App matches as
+	// "app/<name>" or "<name>[bot]".
+	FixAuthors []string `toml:"fix_authors"`
 }
 
 // Paths are the files and directories under DOCKET_HOME.
@@ -63,6 +76,8 @@ type Paths struct {
 	Clones  string
 	Scratch string
 	Config  string
+	// Worktrees holds the tier-3 worktrees docket adds to repos.conf clones.
+	Worktrees string
 }
 
 // NewPaths resolves DOCKET_HOME, falling back to ~/.docket.
@@ -84,18 +99,19 @@ func NewPaths(home string) (Paths, error) {
 	}
 	home = abs
 	return Paths{
-		Home:    home,
-		Index:   filepath.Join(home, "index.jsonl"),
-		Lock:    filepath.Join(home, "index.lock"),
-		Clones:  filepath.Join(home, "clones"),
-		Scratch: filepath.Join(home, "scratch"),
-		Config:  filepath.Join(home, "config.toml"),
+		Home:      home,
+		Index:     filepath.Join(home, "index.jsonl"),
+		Lock:      filepath.Join(home, "index.lock"),
+		Clones:    filepath.Join(home, "clones"),
+		Scratch:   filepath.Join(home, "scratch"),
+		Config:    filepath.Join(home, "config.toml"),
+		Worktrees: filepath.Join(home, "worktrees"),
 	}, nil
 }
 
 // EnsureDirs creates the directories docket writes to.
 func (p Paths) EnsureDirs() error {
-	for _, dir := range []string{p.Home, p.Clones, p.Scratch} {
+	for _, dir := range []string{p.Home, p.Clones, p.Scratch, p.Worktrees} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
@@ -115,6 +131,31 @@ func (c Config) ClaudeJobsDir(configDir string) string {
 	return filepath.Join(dir, "jobs")
 }
 
+// Inside returns dir made absolute when it lies inside root, and an error when
+// it is root itself or anywhere outside it. Callers delete what it returns, so
+// root never counts.
+func Inside(root, dir string) (string, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", root, err)
+	}
+	target, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", dir, err)
+	}
+	rel, err := filepath.Rel(absRoot, target)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("%s is not inside %s", target, absRoot)
+	}
+	return target, nil
+}
+
+// FixWorktreeDir is where the tier-3 worktree of one pull request lives.
+// Config.WorktreeDir is review-code's own worktree, which is another directory.
+func (p Paths) FixWorktreeDir(org, repo string, number int) string {
+	return filepath.Join(p.Worktrees, org, repo, fmt.Sprintf("pr-%d", number))
+}
+
 // CloneDir is where a tier-2 clone of one pull request lives.
 func (p Paths) CloneDir(org, repo string, number int) string {
 	return filepath.Join(p.Clones, org, repo, fmt.Sprintf("pr-%d", number))
@@ -131,7 +172,7 @@ func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return checkClaudeConfigDir(path, expand(cfg))
+			return checkDirs(path, expand(cfg))
 		}
 		return cfg, fmt.Errorf("read %s: %w", path, err)
 	}
@@ -145,7 +186,34 @@ func Load(path string) (Config, error) {
 	if cfg.DefaultRun != RunBackground && cfg.DefaultRun != RunTerminal {
 		return cfg, fmt.Errorf("%s: default_run is %q, want %q or %q", path, cfg.DefaultRun, RunBackground, RunTerminal)
 	}
-	return checkClaudeConfigDir(path, expand(cfg))
+	return checkDirs(path, expand(cfg))
+}
+
+// checkDirs refuses the directories docket and the agents would resolve
+// differently.
+func checkDirs(path string, cfg Config) (Config, error) {
+	if err := checkReviewCodeDirs(path, cfg); err != nil {
+		return cfg, err
+	}
+	return checkClaudeConfigDir(path, cfg)
+}
+
+// checkReviewCodeDirs refuses a review-code override that is not absolute.
+// docket resolves a relative one from its own directory. review-code inherits
+// the variable and runs from the review's directory. It would therefore use a
+// different lock. It would also write its notes where docket never looks. A
+// value that starts with ~ is relative to review-code, because bash does not
+// expand a tilde in a variable's value.
+func checkReviewCodeDirs(path string, cfg Config) error {
+	for name, dir := range map[string]string{
+		"REVIEW_CODE_WORKTREE_DIR": cfg.ReviewCodeWorktreeDir,
+		"REVIEW_CODE_REVIEW_DIR":   cfg.ReviewCodeReviewDir,
+	} {
+		if dir != "" && !filepath.IsAbs(dir) {
+			return fmt.Errorf("%s: %s is %q, which is not an absolute path; review-code reads it as given, so give a full path", path, name, dir)
+		}
+	}
+	return nil
 }
 
 // checkClaudeConfigDir refuses a relative claude config dir. docket runs some
@@ -165,6 +233,10 @@ func expand(cfg Config) Config {
 	cfg.CodexSessionsDir = ExpandHome(cmp.Or(cfg.CodexSessionsDir, DefaultCodexSessionsDir))
 	cfg.ClaudeConfigDir = ExpandHome(cmp.Or(cfg.ClaudeConfigDir, os.Getenv("CLAUDE_CONFIG_DIR")))
 	cfg.ClaudeDefaultDir = ExpandHome(DefaultClaudeConfigDir)
+	// review-code reads these from its own environment. bash does not expand a
+	// tilde in a variable's value, so docket does not expand one either.
+	cfg.ReviewCodeWorktreeDir = os.Getenv("REVIEW_CODE_WORKTREE_DIR")
+	cfg.ReviewCodeReviewDir = os.Getenv("REVIEW_CODE_REVIEW_DIR")
 	cfg.DefaultEngine = cmp.Or(cfg.DefaultEngine, EngineClaude)
 	cfg.DefaultRun = cmp.Or(cfg.DefaultRun, RunBackground)
 	return cfg
@@ -223,10 +295,16 @@ func (c Config) ReposConfPath() string {
 	return filepath.Join(c.ReviewCodeDir, "repos.conf")
 }
 
-// The directories review-code keeps under its installed skill.
-func (c Config) ReviewsDir() string   { return filepath.Join(c.ReviewCodeDir, ".reviews") }
-func (c Config) WorktreesDir() string { return filepath.Join(c.ReviewCodeDir, ".worktrees") }
-func (c Config) SessionsDir() string  { return filepath.Join(c.ReviewCodeDir, ".sessions") }
+// The directories review-code keeps. Each defaults to a directory under its
+// installed skill. ReviewsDir and WorktreesDir follow review-code's environment
+// overrides.
+func (c Config) ReviewsDir() string {
+	return cmp.Or(c.ReviewCodeReviewDir, filepath.Join(c.ReviewCodeDir, ".reviews"))
+}
+func (c Config) WorktreesDir() string {
+	return cmp.Or(c.ReviewCodeWorktreeDir, filepath.Join(c.ReviewCodeDir, ".worktrees"))
+}
+func (c Config) SessionsDir() string { return filepath.Join(c.ReviewCodeDir, ".sessions") }
 
 // AgentDirs are the directories an agent has to be able to write to, beyond the
 // one it runs in. review-code keeps its notes, worktrees, and session state

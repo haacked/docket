@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
+	"github.com/haacked/docket/internal/core/worktree"
 )
 
 const (
@@ -67,6 +69,13 @@ func (f *fakeGitHub) SubmitReview(_ context.Context, _ pr.Ref, id int64, event, 
 	return nil
 }
 
+func (f *fakeGitHub) CreateReview(_ context.Context, _ pr.Ref, commitID, event, body string) error {
+	f.submits = append(f.submits, fmt.Sprintf("new %s %s %q", commitID, event, body))
+	now := time.Now()
+	f.post(review.GHReview{ID: int64(9000 + len(f.submits)), State: "APPROVED", SubmittedAt: &now, CommitID: commitID})
+	return nil
+}
+
 func (f *fakeGitHub) ReviewRequests(context.Context, string) ([]requests.PR, error) { return nil, nil }
 
 func (f *fakeGitHub) Teams(context.Context) ([]string, error) { return nil, nil }
@@ -81,6 +90,9 @@ type fixture struct {
 	gh     *fakeGitHub
 	runner *exec.Fake
 	client *sdk.ClientSession
+	// elapsed moves the service's clock forward by a minute for each tool call,
+	// so a poll never runs inside the grace a launch gives its session.
+	elapsed *atomic.Int64
 }
 
 // newFixture is a real service over a temporary index, connected to a client
@@ -110,13 +122,16 @@ func newFixture(t *testing.T) *fixture {
 			DefaultEngine:    "claude",
 			GitHubUser:       me,
 		},
-		Paths:  paths,
-		Store:  index.New(paths.Index, paths.Lock),
-		GH:     github,
-		Git:    gitc,
-		Cloner: clone.New(gitc, paths),
-		Runner: runner,
+		Paths:     paths,
+		Store:     index.New(paths.Index, paths.Lock),
+		GH:        github,
+		Git:       gitc,
+		Cloner:    clone.New(gitc, paths),
+		Worktrees: worktree.New(gitc, paths, t.TempDir()),
+		Runner:    runner,
 	}
+	elapsed := &atomic.Int64{}
+	svc.Now = func() time.Time { return time.Now().Add(time.Duration(elapsed.Load())) }
 
 	serverEnd, clientEnd := sdk.NewInMemoryTransports()
 	if _, err := New(svc, "claude").Connect(t.Context(), serverEnd, nil); err != nil {
@@ -127,11 +142,12 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("connect the client: %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	return &fixture{svc: svc, gh: github, runner: runner, client: client}
+	return &fixture{svc: svc, gh: github, runner: runner, client: client, elapsed: elapsed}
 }
 
 func (f *fixture) call(t *testing.T, name string, args map[string]any) *sdk.CallToolResult {
 	t.Helper()
+	f.elapsed.Add(int64(time.Minute))
 	res, err := f.client.CallTool(t.Context(), &sdk.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
@@ -750,7 +766,7 @@ func TestSubmitReviewTellsAnInteractiveSessionWhenDocketReadsItsDraft(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, _, err := f.svc.Prepare(t.Context(), ref, "claude", review.ModeInteractive, review.IntentReview)
+	rec, _, err := f.svc.Prepare(t.Context(), ref, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

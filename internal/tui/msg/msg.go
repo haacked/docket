@@ -27,13 +27,15 @@ type Goto struct{ Screen Screen }
 // Intent is the user's answer when the pull request already has a review, as
 // one of review.Intent's values. It is empty on the first request, which is
 // the one that asks what is already there. RecordID names the dashboard record
-// to review again instead of the typed input.
+// to review again instead of the typed input. Fix is one of review.FixChoice's
+// values: empty lets fix_authors decide.
 type StartReview struct {
 	Input      string
 	Engine     string
 	Background bool
 	Intent     string
 	RecordID   string
+	Fix        string
 }
 
 // Ask opens a question-and-answer session about a record's notes.

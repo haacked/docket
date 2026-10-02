@@ -49,7 +49,7 @@ func refused(t *testing.T, a *App, number int) review.Record {
 func prepared(t *testing.T, a *App, number int) review.Record {
 	t.Helper()
 	ref := pr.Ref{Org: "haacked", Repo: "docket", Number: number}
-	rec, _, err := a.svc.Prepare(t.Context(), ref, "claude", review.ModeBackground, review.IntentReview)
+	rec, _, err := a.svc.Prepare(t.Context(), ref, "claude", review.ModeBackground, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

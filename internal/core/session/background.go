@@ -220,6 +220,12 @@ func (s *Service) recoverLost(ctx context.Context, records []review.Record, grou
 		for _, i := range indexes {
 			rec := records[i]
 			id, found := bg.RecoverBackgroundID(rec, res)
+			// Within launchGrace the launch may still be running in another docket
+			// process, which writes the id in its second append. The agent may also
+			// not list the session yet.
+			if !found && s.now().Sub(rec.StartedAt) < launchGrace {
+				continue
+			}
 			if !found {
 				records[i] = s.detectPolled(ctx, rec)
 				continue
@@ -254,7 +260,7 @@ func (s *Service) statuses(ctx context.Context, bg engine.BackgroundEngine, path
 // few seconds does not grow the index.
 func (s *Service) applyStatus(ctx context.Context, rec review.Record, found map[string]engine.BGStatus) (review.Record, engine.BGStatus, bool) {
 	before := rec.SessionID
-	status, over := readStatus(rec, found)
+	status, over := s.readStatus(rec, found)
 	rec.SessionID = status.SessionID
 	if over {
 		// detectPolled writes what it decides, so an id learned on this same poll
@@ -333,8 +339,14 @@ func (s *Service) settle(ctx context.Context, rec review.Record) (review.Record,
 // pending review as a draft, and it counts a submission a little before the
 // launch because of clock skew. A finished session is judged that way too, but
 // a running one may not have posted anything yet.
+//
+// A fix review posts nothing. Its session is done once review-code has written
+// the notes, which it does after the fix pass. Until then the checkout may hold
+// only part of the fixes.
 func ownWork(rec, decided review.Record) bool {
 	switch decided.State {
+	case review.StateFixed, review.StatePushed:
+		return fixNotesWritten(rec)
 	case review.StateDrafted:
 		return decided.ReviewID != rec.PriorPendingID
 	case review.StateSubmitted:
@@ -344,17 +356,27 @@ func ownWork(rec, decided review.Record) bool {
 	}
 }
 
+// launchGrace is how long after a launch a session the agent does not list, or
+// lists with no process, still counts as starting. claude --bg prints the id
+// before the session's process starts, and the poll that follows a launch runs
+// at once.
+const launchGrace = 30 * time.Second
+
 // readStatus answers what a poll and a closed session both ask: is this session
 // over, and what has the agent said about it. A session the agent no longer
 // lists counts as over. A record waiting on a session nobody holds would wait
-// forever.
+// forever. Within launchGrace of the launch, no session is over yet, so the
+// first poll does not close a record whose session has not started.
 //
 // The status carries the record's own id when the agent named none, so a caller
 // that adopts it never blanks the id the record already had.
-func readStatus(rec review.Record, found map[string]engine.BGStatus) (engine.BGStatus, bool) {
+func (s *Service) readStatus(rec review.Record, found map[string]engine.BGStatus) (engine.BGStatus, bool) {
 	status, known := found[rec.BGID]
 	if status.SessionID == "" {
 		status.SessionID = rec.SessionID
+	}
+	if s.now().Sub(rec.StartedAt) < launchGrace {
+		return status, false
 	}
 	return status, !known || status.Done
 }
@@ -401,7 +423,7 @@ func (s *Service) afterBackgroundExit(ctx context.Context, rec review.Record) (r
 		return rec, nil
 	}
 
-	status, over := readStatus(rec, found)
+	status, over := s.readStatus(rec, found)
 	rec.SessionID = status.SessionID
 	if over {
 		return s.detect(ctx, rec)
@@ -461,7 +483,7 @@ func (s *Service) stopFinished(ctx context.Context, rec review.Record) (review.R
 		rec.Err = fmt.Sprintf("read the background session's status: %v", err)
 		return rec, false
 	}
-	status, over := readStatus(rec, found)
+	status, over := s.readStatus(rec, found)
 	status.Progress = bg.Progress(rec.BGID, paths)
 	if !over && !status.Waiting() {
 		rec.Err = "the background session was still working, so docket left it running"

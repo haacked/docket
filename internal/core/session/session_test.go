@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"os"
@@ -14,11 +15,13 @@ import (
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/gh"
+	"github.com/haacked/docket/internal/core/git"
 	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/tier"
+	"github.com/haacked/docket/internal/core/worktree"
 )
 
 var (
@@ -52,6 +55,17 @@ type fakeGH struct {
 	reviewsFor map[pr.Ref][]review.GHReview
 	// reviewErrs fails Reviews for one pull request, ahead of reviewsFor.
 	reviewErrs map[pr.Ref]error
+	// created and createErr record and fail CreateReview.
+	created   []createCall
+	createErr error
+}
+
+// createCall is one POST to the reviews endpoint.
+type createCall struct {
+	ref      pr.Ref
+	commitID string
+	event    string
+	body     string
 }
 
 // submitCall is one POST to the reviews events endpoint.
@@ -95,6 +109,20 @@ func (f *fakeGH) ReviewRequests(_ context.Context, query string) ([]requests.PR,
 	return f.requested[query], f.requestErrs[query]
 }
 
+// CreateReview records the call and, on success, adds the submitted review the
+// way GitHub reports it afterwards.
+func (f *fakeGH) CreateReview(_ context.Context, ref pr.Ref, commitID, event, body string) error {
+	f.created = append(f.created, createCall{ref: ref, commitID: commitID, event: event, body: body})
+	if f.createErr != nil {
+		return f.createErr
+	}
+	at := start.Add(time.Hour)
+	r := review.GHReview{ID: int64(9000 + len(f.created)), State: ghStates[event], SubmittedAt: &at, Body: body, CommitID: commitID}
+	r.User.Login = f.login
+	f.reviews = append(f.reviews, r)
+	return nil
+}
+
 // SubmitReview records the call and, on success, leaves the review the way
 // GitHub does: no longer pending, with the time it was submitted.
 func (f *fakeGH) SubmitReview(_ context.Context, ref pr.Ref, id int64, event, body string) error {
@@ -119,10 +147,31 @@ type fakeGit struct {
 	branches   map[string]string
 	checkedOut string
 	failAt     string
+	// heads, dirty, and ahead describe each checkout for a fix review.
+	heads map[string]string
+	dirty map[string]bool
+	ahead map[string]int
+	// refs holds the commit a remote-tracking ref points at. A reset to one
+	// moves the checkout's head there.
+	refs map[string]string
+	// localBranches holds "<repo dir> <branch>" for each local branch a
+	// repository has.
+	localBranches map[string]bool
+	remotes       []git.Remote
+	fetchErr      error
 }
 
 func newFakeGit() *fakeGit {
-	return &fakeGit{repos: map[string]bool{}, branches: map[string]string{}}
+	return &fakeGit{
+		repos:         map[string]bool{},
+		branches:      map[string]string{},
+		heads:         map[string]string{},
+		dirty:         map[string]bool{},
+		ahead:         map[string]int{},
+		refs:          map[string]string{},
+		localBranches: map[string]bool{},
+		remotes:       []git.Remote{{Name: "origin", URL: "https://github.com/PostHog/posthog.git"}},
+	}
 }
 
 func (f *fakeGit) record(name string) error {
@@ -168,7 +217,15 @@ func (f *fakeGit) Checkout(_ context.Context, dir, branch string) error {
 	return nil
 }
 
-func (f *fakeGit) ResetHard(_ context.Context, _, _ string) error { return f.record("reset") }
+func (f *fakeGit) ResetHard(_ context.Context, dir, ref string) error {
+	if err := f.record("reset " + dir + " " + ref); err != nil {
+		return err
+	}
+	if sha, ok := f.refs[ref]; ok {
+		f.heads[dir] = sha
+	}
+	return nil
+}
 
 func (f *fakeGit) CurrentBranch(_ context.Context, dir string) (string, error) {
 	return f.branches[dir], nil
@@ -180,6 +237,84 @@ func (f *fakeGit) WorkTreeEmpty(_ context.Context, dir string) (bool, error) {
 		return true, nil
 	}
 	return len(entries) == 0, nil
+}
+
+func (f *fakeGit) Head(_ context.Context, dir string) (string, error) {
+	if err := f.record("head " + dir); err != nil {
+		return "", err
+	}
+	return cmp.Or(f.heads[dir], "base-sha"), nil
+}
+
+func (f *fakeGit) Dirty(_ context.Context, dir string) (bool, error) {
+	if err := f.record("status " + dir); err != nil {
+		return false, err
+	}
+	return f.dirty[dir], nil
+}
+
+func (f *fakeGit) FetchBranch(_ context.Context, dir, remote, branch string) error {
+	if err := f.record("fetch-branch " + dir + " " + remote + "/" + branch); err != nil {
+		return err
+	}
+	return f.fetchErr
+}
+
+func (f *fakeGit) Ahead(_ context.Context, dir, upstream string) (int, error) {
+	if err := f.record("ahead " + dir + " " + upstream); err != nil {
+		return 0, err
+	}
+	return f.ahead[dir], nil
+}
+
+func (f *fakeGit) SetUpstream(_ context.Context, dir, _, upstream string) error {
+	return f.record("upstream " + dir + " " + upstream)
+}
+
+func (f *fakeGit) SetCredentialHelper(_ context.Context, dir string) error {
+	return f.record("credential " + dir)
+}
+
+func (f *fakeGit) Remotes(_ context.Context, dir string) ([]git.Remote, error) {
+	if err := f.record("remotes " + dir); err != nil {
+		return nil, err
+	}
+	return f.remotes, nil
+}
+
+func (f *fakeGit) BranchExists(_ context.Context, dir, branch string) (bool, error) {
+	return f.localBranches[dir+" "+branch], nil
+}
+
+func (f *fakeGit) WorktreeAdd(_ context.Context, base, dir, branch, _ string) error {
+	if err := f.record("worktree-add " + base + " " + dir + " " + branch); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi"), 0o644); err != nil {
+		return err
+	}
+	f.repos[dir] = true
+	f.branches[dir] = branch
+	f.localBranches[base+" "+branch] = true
+	return nil
+}
+
+func (f *fakeGit) WorktreeRemove(_ context.Context, base, dir string) error {
+	if err := f.record("worktree-remove " + base + " " + dir); err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
+func (f *fakeGit) BranchDelete(_ context.Context, base, branch string) error {
+	if err := f.record("branch-delete " + base + " " + branch); err != nil {
+		return err
+	}
+	delete(f.localBranches, base+" "+branch)
+	return nil
 }
 
 func newService(t *testing.T, ghc *fakeGH, gitc *fakeGit) (*Service, config.Paths) {
@@ -203,15 +338,16 @@ func newService(t *testing.T, ghc *fakeGH, gitc *fakeGit) (*Service, config.Path
 
 	cfg := config.Config{ReviewCodeDir: reviewCode, DefaultEngine: "claude", DefaultRun: config.RunBackground, GitHubUser: ghc.login}
 	svc := &Service{
-		Runner: &exec.Fake{},
-		Cfg:    cfg,
-		Paths:  paths,
-		Store:  index.New(paths.Index, paths.Lock),
-		GH:     ghc,
-		Git:    gitc,
-		Cloner: clone.New(gitc, paths),
-		Now:    func() time.Time { return start },
-		NewID:  func() string { return "rec-1" },
+		Runner:    &exec.Fake{},
+		Cfg:       cfg,
+		Paths:     paths,
+		Store:     index.New(paths.Index, paths.Lock),
+		GH:        ghc,
+		Git:       gitc,
+		Cloner:    clone.New(gitc, paths),
+		Worktrees: worktree.New(gitc, paths, cfg.WorktreesDir()),
+		Now:       func() time.Time { return start },
+		NewID:     func() string { return "rec-1" },
 	}
 	return svc, paths
 }
@@ -237,7 +373,7 @@ func TestPrepareTier1MakesNoClone(t *testing.T) {
 	gitc := newFakeGit()
 	svc, paths := newService(t, ghc, gitc)
 
-	rec, plan, err := svc.Prepare(context.Background(), listed, "claude", review.ModeInteractive, review.IntentReview)
+	rec, plan, err := svc.Prepare(context.Background(), listed, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -264,7 +400,7 @@ func TestPrepareTier2ClonesTheHead(t *testing.T) {
 	gitc := newFakeGit()
 	svc, paths := newService(t, ghc, gitc)
 
-	rec, plan, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
+	rec, plan, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -287,7 +423,7 @@ func TestPrepareKeepsARecordWhenTheCloneFails(t *testing.T) {
 	gitc.failAt = "fetch"
 	svc, _ := newService(t, ghc, gitc)
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err == nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto); err == nil {
 		t.Fatal("Prepare succeeded, want the fetch failure")
 	}
 
@@ -319,7 +455,7 @@ func TestPrepareSnapshotsOnlySubmittedReviews(t *testing.T) {
 	}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -333,7 +469,7 @@ func TestLaunchSpecRecordsTheSessionBeforeReturning(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -373,7 +509,7 @@ func TestLaunchSpecRefusesAMissingDirectory(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -388,7 +524,7 @@ func TestLaunchSpecRefusesAMissingDirectory(t *testing.T) {
 
 func launched(t *testing.T, svc *Service, ref pr.Ref) review.Record {
 	t.Helper()
-	rec, _, err := svc.Prepare(context.Background(), ref, "claude", review.ModeInteractive, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), ref, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -740,7 +876,7 @@ func TestRefreshRefusesARecordThatNeverStartedASession(t *testing.T) {
 	gitc.failAt = "fetch"
 	svc, _ := newService(t, ghc, gitc)
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err == nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto); err == nil {
 		t.Fatal("Prepare succeeded, want the fetch failure")
 	}
 	records, err := svc.Records()
@@ -805,11 +941,11 @@ func TestPrepareRefusesAPullRequestThatIsAlreadyOpen(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, paths := newService(t, ghc, newFakeGit())
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err != nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err == nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto); err == nil {
 		t.Fatal("Prepare made a second record for a pull request already open; abandoning either deletes the clone the other uses")
 	}
 
@@ -829,7 +965,7 @@ func TestPrepareAllowsAReviewAfterTheEarlierOneClosed(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	first, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
+	first, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -837,7 +973,7 @@ func TestPrepareAllowsAReviewAfterTheEarlierOneClosed(t *testing.T) {
 		t.Fatalf("Abandon: %v", err)
 	}
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err != nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto); err != nil {
 		t.Errorf("Prepare refused a pull request whose earlier review was abandoned: %v", err)
 	}
 }
@@ -908,7 +1044,7 @@ func TestExplainReportsWithoutProvisioningOrRecording(t *testing.T) {
 	gitc := newFakeGit()
 	svc, paths := newService(t, ghc, gitc)
 
-	plan, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
+	plan, spec, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Explain: %v", err)
 	}
@@ -938,14 +1074,14 @@ func TestPrepareRefusesTheSamePullRequestInADifferentCase(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview); err != nil {
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 
 	// GitHub resolves an owner and a repository without case, so this is the same
 	// pull request and the same clone directory.
 	shouted := pr.Ref{Org: strings.ToUpper(unlisted.Org), Repo: strings.ToUpper(unlisted.Repo), Number: unlisted.Number}
-	if _, _, err := svc.Prepare(context.Background(), shouted, "claude", review.ModeInteractive, review.IntentReview); err == nil {
+	if _, _, err := svc.Prepare(context.Background(), shouted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto); err == nil {
 		t.Fatal("Prepare opened a second record for the same pull request under a different case")
 	}
 

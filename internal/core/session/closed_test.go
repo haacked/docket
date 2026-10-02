@@ -160,7 +160,7 @@ func TestPrepareRefusesAMergedPullRequest(t *testing.T) {
 	gitc := newFakeGit()
 	svc, _ := newService(t, ghc, gitc)
 
-	_, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
+	_, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err == nil || !strings.Contains(err.Error(), "merged") {
 		t.Fatalf("Prepare err = %v, want a refusal that names the merge", err)
 	}
@@ -178,7 +178,7 @@ func TestPrepareRecordsThatThePullRequestIsOpen(t *testing.T) {
 	ghc.info.State = review.PROpen
 	svc, _ := newService(t, ghc, newFakeGit())
 
-	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview)
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

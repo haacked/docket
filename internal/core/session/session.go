@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,6 +27,7 @@ import (
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/tier"
+	"github.com/haacked/docket/internal/core/worktree"
 )
 
 // Service holds everything a review needs and owns every write to the index.
@@ -36,6 +38,8 @@ type Service struct {
 	GH     gh.GitHub
 	Git    git.Git
 	Cloner *clone.Cloner
+	// Worktrees adds and removes the tier-3 worktree a fix review edits.
+	Worktrees *worktree.Adder
 	// Runner runs the commands that need nothing but their output. The session
 	// a user works in is not one of them: internal/tui hands that to the
 	// terminal. A background agent is driven entirely through here.
@@ -77,6 +81,8 @@ type Plan struct {
 	LocalClone string
 	Worktree   string
 	NotesPath  string
+	// Branch is the head branch a fix review's checkout is on.
+	Branch string
 }
 
 // Description says what the tier means in one line.
@@ -85,7 +91,14 @@ func (p Plan) Description() string {
 	case tier.Tier1:
 		return fmt.Sprintf("review-code knows this repo (%s), so it provisions and tears down its own worktree at %s; docket clones nothing", p.LocalClone, p.Worktree)
 	case tier.Tier2:
+		// Decide names no local clone for tier 2. A tier-2 plan that has one is a
+		// fix review whose clone already has a branch named like the head branch.
+		if p.LocalClone != "" {
+			return fmt.Sprintf("%s already has a branch named %s, so docket checks the head out at %s instead of adding a worktree", p.LocalClone, p.Branch, p.Dir)
+		}
 		return fmt.Sprintf("review-code has no clone for this repo, so docket checks the head out at %s", p.Dir)
+	case tier.Tier3:
+		return fmt.Sprintf("a fix review edits the head branch, so docket adds a worktree of %s on %s at %s", p.LocalClone, p.Branch, p.Dir)
 	default:
 		return "unknown tier"
 	}
@@ -313,8 +326,8 @@ func (s *Service) peekLogin(ctx context.Context) (string, error) {
 // provisions a row. On tier 2 that puts the files the notes cite in the working
 // directory. On tier 1 the working directory is the shared scratch repository,
 // so the ask prompt sends the agent to GitHub for the files.
-func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent) (review.Record, Plan, error) {
-	rec, plan, info, _, err := s.resolve(ctx, ref, engineName, mode, intent)
+func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent, choice review.FixChoice) (review.Record, Plan, error) {
+	rec, plan, info, _, err := s.resolve(ctx, ref, engineName, mode, intent, choice)
 	if err != nil {
 		return review.Record{}, Plan{}, err
 	}
@@ -332,16 +345,8 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mo
 		return rec, plan, err
 	}
 
-	if plan.Tier == tier.Tier1 {
-		if err := s.ensureScratch(ctx); err != nil {
-			return s.fail(rec, plan, err)
-		}
-	} else {
-		dir, err := s.Cloner.Ensure(ctx, ref, info)
-		if err != nil {
-			return s.fail(rec, plan, err)
-		}
-		rec.Dir = dir
+	if rec, err = s.provision(ctx, rec, plan, info); err != nil {
+		return s.fail(rec, plan, err)
 	}
 
 	// resolve read the login docket had cached, which a fresh install does not
@@ -363,6 +368,95 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mo
 		return rec, plan, err
 	}
 	return rec, plan, nil
+}
+
+// provision makes the directory the session runs in: the shared scratch
+// repository on tier 1, a clone of the head on tier 2, and a worktree of the
+// repos.conf clone on tier 3. A fix review's checkout also records the branch,
+// the remote it tracks, and the commit it starts from.
+func (s *Service) provision(ctx context.Context, rec review.Record, plan Plan, info gh.PRInfo) (review.Record, error) {
+	if rec.Fix {
+		// A checkout kept from an earlier review may hold fixes. Ensure resets a
+		// clone it reuses.
+		if err := s.refuseLocalWork(ctx, plan.Dir, "origin/"+info.HeadRefName); err != nil {
+			// docket did not create the directory, so abandoning this record must
+			// not delete it.
+			rec.Dir = ""
+			return rec, err
+		}
+	}
+	switch plan.Tier {
+	case tier.Tier1:
+		return rec, s.ensureScratch(ctx)
+	case tier.Tier3:
+		dir, remote, err := s.Worktrees.Ensure(ctx, plan.LocalClone, rec.Ref, info.HeadRefName)
+		if err != nil {
+			return rec, err
+		}
+		rec.Dir, rec.Remote = dir, remote
+	default:
+		dir, err := s.Cloner.Ensure(ctx, rec.Ref, info)
+		if err != nil {
+			return rec, err
+		}
+		rec.Dir = dir
+		if rec.Fix {
+			if err := s.trackOrigin(ctx, dir, info.HeadRefName); err != nil {
+				return rec, err
+			}
+			rec.Remote = "origin"
+		}
+	}
+	if !rec.Fix {
+		return rec, nil
+	}
+	return s.stampBase(ctx, rec)
+}
+
+// stampBase records the commit a fix review's checkout starts from.
+func (s *Service) stampBase(ctx context.Context, rec review.Record) (review.Record, error) {
+	head, err := s.Git.Head(ctx, rec.Dir)
+	if err != nil {
+		return rec, err
+	}
+	rec.FixBase, rec.FixHead = head, head
+	rec.FixBaseAt = s.now()
+	return rec, nil
+}
+
+// trackOrigin makes the tier-2 clone's head branch track origin, so a push from
+// the fix session needs no arguments and docket can count the commits origin
+// does not have. The clone's own credential helper makes that push
+// authenticate the way docket's fetches do.
+func (s *Service) trackOrigin(ctx context.Context, dir, branch string) error {
+	if err := s.Git.FetchBranch(ctx, dir, "origin", branch); err != nil {
+		return err
+	}
+	if err := s.Git.SetUpstream(ctx, dir, branch, "origin/"+branch); err != nil {
+		return err
+	}
+	return s.Git.SetCredentialHelper(ctx, dir)
+}
+
+// refuseLocalWork refuses a repository at dir that holds uncommitted changes or
+// commits upstream does not have. A directory that is not a repository holds
+// nothing git can lose, and provisioning builds a new checkout there. A clone
+// made for a draft review has no remote-tracking ref for the branch, so a
+// failed count reads as nothing ahead.
+func (s *Service) refuseLocalWork(ctx context.Context, dir, upstream string) error {
+	if !s.Git.IsRepo(ctx, dir) {
+		return nil
+	}
+	var checkout review.Checkout
+	var err error
+	if checkout.Dirty, err = s.Git.Dirty(ctx, dir); err != nil {
+		return err
+	}
+	checkout.Ahead, _ = s.Git.Ahead(ctx, dir, upstream)
+	if checkout.Local() {
+		return fmt.Errorf("%s holds changes that are not on GitHub; push or discard them first", dir)
+	}
+	return nil
 }
 
 // adopt sets the state of a record taken over from a review docket did not run.
@@ -431,7 +525,7 @@ func (s *Service) Existing(ctx context.Context, ref pr.Ref) (review.Found, error
 
 // resolve works out everything about a review that reads nothing but GitHub and
 // repos.conf. Prepare goes on to provision and record. Explain stops here.
-func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent) (review.Record, Plan, gh.PRInfo, engine.Engine, error) {
+func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent, choice review.FixChoice) (review.Record, Plan, gh.PRInfo, engine.Engine, error) {
 	eng, err := engine.For(engineName)
 	if err != nil {
 		return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
@@ -447,15 +541,32 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		return s.Git.IsRepo(ctx, path)
 	})
 
+	fix, err := fixes(ref, info, intent, choice, s.Config().FixAuthors)
+	if err != nil {
+		return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
+	}
 	plan := Plan{
 		Tier:       decided,
 		LocalClone: localClone,
 		NotesPath:  s.Cfg.NotesPath(ref.Org, ref.Repo, ref.Number),
 	}
-	if decided == tier.Tier1 {
+	if fix {
+		plan.Branch = info.HeadRefName
+		taken := false
+		if decided == tier.Tier1 {
+			if taken, err = s.Git.BranchExists(ctx, localClone, info.HeadRefName); err != nil {
+				return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
+			}
+		}
+		plan.Tier = tier.ForFix(decided, taken)
+	}
+	switch plan.Tier {
+	case tier.Tier1:
 		plan.Dir = s.Paths.Scratch
 		plan.Worktree = s.Cfg.WorktreeDir(ref.Org, ref.Repo, ref.Number)
-	} else {
+	case tier.Tier3:
+		plan.Dir = s.Worktrees.Dir(ref)
+	default:
 		plan.Dir = s.Cloner.Dir(ref)
 	}
 
@@ -474,7 +585,7 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		Title:     info.Title,
 		Author:    info.Author.Login,
 		Engine:    eng.Name(),
-		Tier:      decided,
+		Tier:      plan.Tier,
 		Mode:      mode,
 		Dir:       plan.Dir,
 		SessionID: sessionID,
@@ -488,15 +599,38 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		// --self off the command it prints.
 		OwnPR:           ownPR(info.Author.Login, s.Config().GitHubUser),
 		ClaudeConfigDir: s.Cfg.ClaudeConfigDir,
+		Fix:             fix,
+		Branch:          plan.Branch,
+	}
+	if plan.Tier == tier.Tier3 {
+		rec.WorktreeOf = localClone
 	}
 	return rec, plan, info, eng, nil
+}
+
+// fixes decides whether a review runs --fix. An ask adopts a review rather
+// than running one. A fix review pushes to the head branch by name, which
+// lives in the fork for a cross-repository pull request. Auto then drafts a
+// review, and an explicit fix is refused.
+func fixes(ref pr.Ref, info gh.PRInfo, intent review.Intent, choice review.FixChoice, authors []string) (bool, error) {
+	if intent == review.IntentAsk {
+		return false, nil
+	}
+	fix := choice.Fixes(review.ListedAuthor(authors, info.Author.Login))
+	if !fix || !info.IsCrossRepository {
+		return fix, nil
+	}
+	if choice == review.FixOn {
+		return false, fmt.Errorf("%s comes from a fork, so a fix review has no branch it can push to", ref)
+	}
+	return false, nil
 }
 
 // Explain says what a review would do without doing any of it. A dry run must not
 // provision. A check that reads what provisioning would have written then tells
 // the user nothing, so Explain stops before both.
-func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent) (Plan, exec.CommandSpec, error) {
-	rec, plan, _, eng, err := s.resolve(ctx, ref, engineName, mode, intent)
+func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent, choice review.FixChoice) (Plan, exec.CommandSpec, error) {
+	rec, plan, _, eng, err := s.resolve(ctx, ref, engineName, mode, intent, choice)
 	if err != nil {
 		return Plan{}, exec.CommandSpec{}, err
 	}
@@ -726,7 +860,7 @@ func (s *Service) AfterAsk(ctx context.Context, rec review.Record, childErr erro
 	}
 
 	switch current.State {
-	case review.StateDrafted, review.StateReviewed, review.StateUnreviewed:
+	case review.StateDrafted, review.StateReviewed, review.StateUnreviewed, review.StateFixed, review.StatePushed:
 	case review.StateSubmitted:
 		// The review is already on GitHub. Only the archive that waited for this
 		// session is left.
@@ -799,12 +933,38 @@ func (s *Service) Rereview(ctx context.Context, rec review.Record, intent review
 	if !ok {
 		return s.recordErr(rec, errors.New(rec.Err))
 	}
+	if rearmed.Fix {
+		if rearmed, err = s.refreshCheckout(ctx, rearmed); err != nil {
+			return s.recordErr(rec, err)
+		}
+	}
 	rearmed, err = s.snapshot(ctx, rearmed)
 	if err != nil {
 		return s.recordErr(rec, err)
 	}
 	rearmed.BGID = ""
 	return rearmed, s.append(rearmed)
+}
+
+// refreshCheckout moves a fix review's checkout to the head branch as GitHub
+// has it, so the review and its fixes see the current head. It refuses a
+// checkout that holds work GitHub does not have, which the reset would lose,
+// and one whose branch it cannot fetch.
+func (s *Service) refreshCheckout(ctx context.Context, rec review.Record) (review.Record, error) {
+	checkout, err := s.readCheckout(ctx, rec, "")
+	if err != nil {
+		return rec, err
+	}
+	if checkout.Local() {
+		return rec, fmt.Errorf("%s holds fixes that are not on GitHub; push or discard them before reviewing again", rec.Dir)
+	}
+	if checkout.FetchErr != nil {
+		return rec, checkout.FetchErr
+	}
+	if err := s.Git.ResetHard(ctx, rec.Dir, rec.Upstream()); err != nil {
+		return rec, err
+	}
+	return s.stampBase(ctx, rec)
 }
 
 // ExplainRereview is the command a re-review would run, without recording or
@@ -861,6 +1021,8 @@ func RefuseSubmit(rec review.Record) error {
 		return nil
 	case rec.HasPendingDraft():
 		return fmt.Errorf("%s has a pending review, but its interactive session may still be using the clone; close it first", rec.Ref)
+	case rec.State == review.StateFixed:
+		return fmt.Errorf("%s's fixes in %s are not on GitHub yet; press enter to open the session and push them", rec.Ref, rec.Dir)
 	default:
 		return fmt.Errorf("%s is %s with no pending review to submit", rec.Ref, rec.State)
 	}
@@ -925,6 +1087,9 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 	if !slices.Contains(review.SubmitEventsFor(rec.Author, me), event) {
 		return rec, fmt.Errorf("GitHub refuses an approval of your own pull request; submit %s as %s instead", rec.Ref, review.EventComment)
 	}
+	if rec.State == review.StatePushed {
+		return s.reviewFixes(ctx, rec, me, event, body)
+	}
 
 	// A reviewing row's background session may have replaced or submitted this
 	// draft since the poll last read GitHub. GitHub refuses a submit of either id
@@ -950,6 +1115,56 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 	return s.detect(ctx, rec)
 }
 
+// reviewFixes posts a new review of a fix review's pull request, on the commit
+// docket saw pushed. A fix review leaves no pending review to submit.
+//
+// It refuses a pull request whose head has moved past that commit, because the
+// review would then vouch for commits the user has not seen. It also refuses
+// while I have a pending review there, which the new review would sit beside.
+func (s *Service) reviewFixes(ctx context.Context, rec review.Record, me, event, body string) (review.Record, error) {
+	if event != review.EventApprove && strings.TrimSpace(body) == "" {
+		return rec, fmt.Errorf("GitHub needs a body to post a review of %s as %s", rec.Ref, event)
+	}
+	info, err := s.GH.PR(ctx, rec.Ref)
+	if err != nil {
+		return s.recordErr(rec, err)
+	}
+	if info.HeadRefOid != rec.FixHead {
+		return rec, fmt.Errorf("%s has commits the fixes were not made on; press u to review them", rec.Ref)
+	}
+	reviews, err := s.GH.Reviews(ctx, rec.Ref)
+	if err != nil {
+		return s.recordErr(rec, err)
+	}
+	if review.PendingReviewID(reviews, me) != 0 {
+		return rec, fmt.Errorf("you have a pending review on %s; submit or delete it on GitHub first", rec.Ref)
+	}
+	// A review of mine on FixHead posted since docket set the checkout up means
+	// this submit would post a second one. An earlier submit may have posted and
+	// then failed to read GitHub back, or the user reviewed on GitHub. A review
+	// from before the checkout does not count, so an earlier comment or request
+	// for changes on the same commit does not block an approval. The cutoff is
+	// FixBaseAt rather than PriorReviewIDs, because reopening the session takes a
+	// new snapshot that would count a review docket posted as an earlier one.
+	since := slices.DeleteFunc(slices.Clone(reviews), func(r review.GHReview) bool {
+		return r.SubmittedAt != nil && r.SubmittedAt.Before(rec.FixBaseAt.Add(-review.SubmitTolerance))
+	})
+	reviewed := slices.Contains(review.ReviewedCommits(since, me), rec.FixHead)
+	rec.Err = ""
+	if !reviewed {
+		if err := s.GH.CreateReview(ctx, rec.Ref, rec.FixHead, event, body); err != nil {
+			return s.recordErr(rec, err)
+		}
+	}
+	done, err := s.detect(ctx, rec)
+	// detect archives a review it reads as this session's. One it reads as
+	// earlier, after a reopened session's new snapshot, leaves the row pushed.
+	if reviewed && err == nil && done.State == review.StatePushed {
+		return done, fmt.Errorf("you already reviewed %s at %s; press x to close the row", rec.Ref, rec.FixHead)
+	}
+	return done, err
+}
+
 // DraftBody reads the body of the record's pending review, which is the summary
 // review-code posted with it. A review that is no longer on GitHub answers
 // empty. Submit reports the missing review when the user tries it.
@@ -964,6 +1179,29 @@ func (s *Service) DraftBody(ctx context.Context, rec review.Record) (string, err
 		}
 	}
 	return "", nil
+}
+
+// RefreshFixed re-reads a fixed record. The user may push its fixes from outside
+// any session docket opened. The poll reads only running sessions, so the MCP
+// tools call this to notice that push. A dirty checkout still holds local work.
+// So does a clean one still on FixHead with commits its remote-tracking ref
+// lacks, because a push from the checkout moves that ref. Either comes back as
+// it is, with nothing read from GitHub and nothing written. A push made from
+// another clone therefore waits for r. Any record that is not fixed comes back
+// unchanged.
+func (s *Service) RefreshFixed(ctx context.Context, rec review.Record) (review.Record, error) {
+	if rec.State != review.StateFixed {
+		return rec, nil
+	}
+	if dirty, err := s.Git.Dirty(ctx, rec.Dir); err == nil && dirty {
+		return rec, nil
+	}
+	if head, err := s.Git.Head(ctx, rec.Dir); err == nil && head == rec.FixHead {
+		if ahead, err := s.Git.Ahead(ctx, rec.Dir, rec.Upstream()); err == nil && ahead > 0 {
+			return rec, nil
+		}
+	}
+	return s.Refresh(ctx, rec)
 }
 
 // Refresh re-reads GitHub for a record whose session is over.
@@ -1005,7 +1243,7 @@ func ownPR(author, me string) bool {
 // snapshots every submitted review, which gives it a window to measure against.
 func detectable(rec review.Record) bool {
 	switch rec.State {
-	case review.StateReviewing, review.StateDrafted, review.StateSubmitted, review.StateUnreviewed, review.StateReviewed:
+	case review.StateReviewing, review.StateDrafted, review.StateSubmitted, review.StateUnreviewed, review.StateReviewed, review.StateFixed, review.StatePushed:
 		return true
 	default:
 		return false
@@ -1020,12 +1258,15 @@ func (s *Service) detect(ctx context.Context, rec review.Record) (review.Record,
 	return s.record(ctx, decided, reviews)
 }
 
-// decide reads GitHub and works out where the review stands, writing nothing.
+// decide reads GitHub and works out where the review stands. It writes nothing
+// to the index.
 //
 // It reads the pull request's state as well as its reviews, because record
 // archives a row whose pull request merged or closed. The two reads are
 // independent and run concurrently. A detection then takes about as long as one
-// read.
+// read. A fix review's detection also reads the checkout, which may fetch the
+// head branch and wait up to two seconds for review-code's lock on a tier-3
+// worktree.
 func (s *Service) decide(ctx context.Context, rec review.Record) (review.Record, []review.GHReview, error) {
 	me, err := s.Login(ctx)
 	if err != nil {
@@ -1058,9 +1299,80 @@ func (s *Service) decide(ctx context.Context, rec review.Record) (review.Record,
 	if rec.State == review.StateReviewed && state == review.StateUnreviewed {
 		return rec, reviews, nil
 	}
+	// A fix review posts nothing, so GitHub cannot say where it stands unless
+	// the user submitted a review. Anything else, including a pending review
+	// left from before the launch, is read off the checkout.
+	if rec.Fix && state != review.StateSubmitted {
+		checkout, err := s.readCheckout(ctx, rec, read.info.HeadRefOid)
+		if err != nil {
+			return rec, nil, err
+		}
+		rec.State = checkout.State(rec.FixBase, fixNotesWritten(rec))
+		rec.FixHead = checkout.Head
+		rec.ReviewID = 0
+		if checkout.FetchErr != nil {
+			rec.Err = fmt.Sprintf("docket could not fetch %s, so it compared the checkout with what it fetched last: %v", rec.Upstream(), checkout.FetchErr)
+		}
+		return rec, reviews, nil
+	}
 	rec.State = state
 	rec.ReviewID = reviewID
 	return rec, reviews, nil
+}
+
+// fixNotesWritten reports whether review-code wrote a fix review's notes since
+// docket stamped the checkout's base. It composes the notes after the fix pass
+// and puts a Fix Summary in them. The append and overwrite paths do not write
+// the notes file before that step.
+func fixNotesWritten(rec review.Record) bool {
+	info, err := os.Stat(rec.NotesPath)
+	if err != nil || !info.ModTime().After(rec.FixBaseAt) {
+		return false
+	}
+	notes, err := os.ReadFile(rec.NotesPath)
+	return err == nil && strings.Contains(string(notes), "## Fix Summary")
+}
+
+// readCheckout reads a fix review's working tree. remoteHead is a commit the
+// caller knows is on the remote branch, or empty when it knows none.
+//
+// It fetches the branch unless the checkout is dirty or on remoteHead. A dirty
+// checkout holds local work whatever the remote has. A clean checkout on
+// remoteHead has nothing local. A clean checkout still on FixBase has nothing
+// local either, because every commit up to FixBase came from GitHub. A
+// force-push can move the branch off FixBase, and counting against the
+// rewritten branch would then read those commits as local.
+//
+// A failed fetch is not an error. The head branch is deleted when its pull
+// request merges, and every fetch fails from then on. Counting against the
+// remote-tracking ref from the last fetch that worked can only count a commit
+// pushed since then as local, so a checkout that reads as clean is clean.
+func (s *Service) readCheckout(ctx context.Context, rec review.Record, remoteHead string) (review.Checkout, error) {
+	var c review.Checkout
+	var err error
+	if c.Head, err = s.Git.Head(ctx, rec.Dir); err != nil {
+		return c, err
+	}
+	if c.Dirty, err = s.Git.Dirty(ctx, rec.Dir); err != nil {
+		return c, err
+	}
+	if c.Dirty || (remoteHead != "" && c.Head == remoteHead) {
+		return c, nil
+	}
+	if rec.Tier == tier.Tier3 {
+		c.FetchErr = s.Worktrees.Fetch(ctx, rec.Ref, rec.Dir, rec.Remote, rec.Branch)
+	} else {
+		c.FetchErr = s.Git.FetchBranch(ctx, rec.Dir, rec.Remote, rec.Branch)
+	}
+	// The fetch runs for a checkout on FixBase too, because refreshCheckout
+	// resets to the ref it updates.
+	if c.Head == rec.FixBase {
+		return c, nil
+	}
+	if c.Ahead, err = s.Git.Ahead(ctx, rec.Dir, rec.Upstream()); err != nil {
+		return c, err
+	}
+	return c, nil
 }
 
 // record writes what decide worked out. It archives a review that went in, and a
@@ -1191,7 +1503,7 @@ func (s *Service) Archive(ctx context.Context, rec review.Record) (review.Record
 		rec.State = review.StateArchived
 		return rec, s.append(rec)
 	}
-	if err := s.cleanup(rec); err != nil {
+	if err := s.cleanup(ctx, rec); err != nil {
 		return s.recordErr(rec, err)
 	}
 	at := s.now()
@@ -1207,28 +1519,89 @@ func (s *Service) Archive(ctx context.Context, rec review.Record) (review.Record
 // will not answer is worse than a directory deleted under one.
 func (s *Service) Abandon(ctx context.Context, rec review.Record) (review.Record, error) {
 	rec, _ = s.stopBackground(ctx, rec)
-	if err := s.cleanup(rec); err != nil {
+	if err := s.cleanup(ctx, rec); err != nil {
 		return s.recordErr(rec, err)
 	}
 	rec.State = review.StateAbandoned
 	return rec, s.append(rec)
 }
 
-// cleanup deletes the tier-2 clone. A tier-1 worktree belongs to review-code,
-// which tears it down at its own session end. docket reports that worktree and
-// never deletes it.
-func (s *Service) cleanup(rec review.Record) error {
-	if !rec.HasClone() {
+// cleanup deletes the record's checkout: the tier-2 clone, or the tier-3
+// worktree and its branch. A tier-1 worktree belongs to review-code, which
+// tears it down at its own session end. docket reports that worktree and never
+// deletes it.
+//
+// It keeps a fix review's checkout that holds work GitHub does not have, or
+// that it cannot read, and says why. Archive and Abandon then leave the record
+// open, which also keeps a new review of the pull request from resetting the
+// checkout.
+func (s *Service) cleanup(ctx context.Context, rec review.Record) error {
+	if !rec.HasCheckout() {
 		return nil
 	}
+	// A checkout whose setup failed before it existed holds nothing. docket owns
+	// no branch for it.
+	if _, err := os.Stat(rec.Dir); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	// provision records the remote last. A launch needs provision to finish. A fix
+	// record with no remote therefore ran no session in its checkout. It also has
+	// no remote-tracking ref to count against.
+	if rec.Fix && rec.Remote != "" {
+		remoteHead, err := s.knownRemoteHead(ctx, rec)
+		if err != nil {
+			return fmt.Errorf("docket kept %s because it could not read %s from GitHub to check the fixes: %w", rec.Dir, rec.Ref, err)
+		}
+		checkout, err := s.readCheckout(ctx, rec, remoteHead)
+		if err != nil {
+			return fmt.Errorf("docket kept %s because it could not check it for fixes that are not on GitHub: %w", rec.Dir, err)
+		}
+		if checkout.Local() {
+			return fmt.Errorf("docket kept %s because it holds fixes that are not on GitHub; push or discard them, then try again", rec.Dir)
+		}
+		// A count against a stale ref misses fixes that a force-push left only in
+		// the checkout. A checkout still on FixBase holds nothing from the session.
+		// One on remoteHead fetched nothing.
+		if checkout.FetchErr != nil && checkout.Head != rec.FixBase {
+			return fmt.Errorf("docket kept %s because it could not fetch %s to check the fixes: %w", rec.Dir, rec.Upstream(), checkout.FetchErr)
+		}
+	}
+	if rec.Tier == tier.Tier3 {
+		return s.Worktrees.Remove(ctx, rec.WorktreeOf, rec.Ref, rec.Dir, rec.Branch)
+	}
 	return s.Cloner.Remove(rec.Dir)
+}
+
+// knownRemoteHead is a commit that cleanup may treat as on GitHub without a
+// fetch, or empty when it knows none. A row that changed nothing is still on
+// FixBase, and every commit up to FixBase came from GitHub. A pushed row's
+// FixHead is on GitHub while it is the pull request's head. GitHub keeps that
+// head after the pull request merges or closes and its branch is deleted, when
+// the user's clone may have pruned the tracking ref and a count would fail. A
+// bot that force-pushed after the fixes moves the head. The count then decides.
+// On any other row FixHead may be a local commit.
+func (s *Service) knownRemoteHead(ctx context.Context, rec review.Record) (string, error) {
+	if rec.State != review.StatePushed {
+		return "", nil
+	}
+	if rec.NoChanges() {
+		return rec.FixHead, nil
+	}
+	info, err := s.GH.PR(ctx, rec.Ref)
+	if err != nil {
+		return "", err
+	}
+	if info.HeadRefOid == rec.FixHead {
+		return rec.FixHead, nil
+	}
+	return "", nil
 }
 
 // callerInClone reports whether the agent session this service runs under works
 // inside rec's clone. A tier-1 record has no directory of its own, so a match on
 // the scratch directory would not say which record the caller belongs to.
 func (s *Service) callerInClone(rec review.Record) bool {
-	if s.CallerDir == "" || !rec.HasClone() {
+	if s.CallerDir == "" || !rec.HasCheckout() {
 		return false
 	}
 	rel, err := filepath.Rel(engine.RealPath(rec.Dir), engine.RealPath(s.CallerDir))

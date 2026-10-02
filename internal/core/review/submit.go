@@ -13,6 +13,10 @@ const (
 // Comment leads because it is the one that always applies.
 var SubmitEvents = []string{EventComment, EventApprove, EventRequestChanges}
 
+// FixEvents are the events in the order the submit screen offers them for a
+// pushed fix review. Approve leads because the user fixed what the review found.
+var FixEvents = []string{EventApprove, EventComment, EventRequestChanges}
+
 // SubmitEventsFor lists the events the user may submit on this pull request.
 // GitHub answers 422 to approving your own, so that choice is left out rather
 // than offered and refused after the fact.

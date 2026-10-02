@@ -40,7 +40,7 @@ var (
 		{Key: "n", Short: "new", Long: "start a new review"},
 		{Key: "i", Short: "requests", Long: "list the pull requests waiting on your review"},
 		{Key: "enter", Short: "resume", Long: "resume or open the selected record"},
-		{Key: "s", Short: "submit", Long: "submit your pending review"},
+		{Key: "s", Short: "submit", Long: "submit your pending review, or review pushed fixes"},
 		{Key: "v", Short: "notes", Long: "view the review notes"},
 		{Key: "o", Short: "github", Long: "open the pull request on GitHub, at your review when it is a draft"},
 		{Key: "c", Short: "ask", Long: "ask questions about the review notes"},
@@ -58,6 +58,7 @@ var (
 		{Key: "enter", Short: "start", Long: "start the review"},
 		{Key: "tab", Short: "engine", Long: "change the engine"},
 		{Key: "ctrl+b", Short: "background", Long: "toggle background vs. this terminal"},
+		{Key: "ctrl+f", Short: "fix", Long: "fix the code rather than draft a review: for fix_authors, always, or never"},
 		{Key: "v/a/o", Long: "when a review exists: view and ask, append, or overwrite"},
 		{Key: "esc", Short: "back", Long: "back to the dashboard"},
 	}

@@ -24,6 +24,8 @@ const (
 	EventUnreviewed = "unreviewed"
 	EventReviewed   = "reviewed"
 	EventNotStarted = "not_started"
+	EventFixed      = "fixed"
+	EventPushed     = "pushed"
 )
 
 var eventStates = map[string]State{
@@ -36,6 +38,8 @@ var eventStates = map[string]State{
 	EventUnreviewed: StateUnreviewed,
 	EventReviewed:   StateReviewed,
 	EventNotStarted: StateNotStarted,
+	EventFixed:      StateFixed,
+	EventPushed:     StatePushed,
 }
 
 // stateEvents is the inverse of eventStates, spelled out rather than derived. Two
@@ -51,6 +55,8 @@ var stateEvents = map[State]string{
 	StateUnreviewed: EventUnreviewed,
 	StateReviewed:   EventReviewed,
 	StateNotStarted: EventNotStarted,
+	StateFixed:      EventFixed,
+	StatePushed:     EventPushed,
 }
 
 // KnownEvent reports whether Fold understands this event's type. Compaction asks,

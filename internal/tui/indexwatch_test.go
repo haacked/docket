@@ -157,8 +157,9 @@ func TestAReloadArmsThePollForABackgroundReviewAnotherProcessStarted(t *testing.
 		{name: "a tick already outstanding", polling: true, records: running},
 		{name: "a dry run", dryRun: true, records: running},
 		// A launch writes its record before claude reports the session's id. A
-		// poll then would find no session and close the record under the launch.
-		{name: "a launch still starting", records: []review.Record{starting}},
+		// poll leaves it alone within the launch's grace, then adopts its session
+		// or closes it.
+		{name: "a launch still starting", records: []review.Record{starting}, want: true},
 		{name: "nothing running", records: []review.Record{backgroundRecord(review.StateDrafted)}},
 	}
 	for _, tc := range tests {

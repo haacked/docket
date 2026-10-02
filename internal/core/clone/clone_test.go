@@ -10,6 +10,7 @@ import (
 
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/gh"
+	"github.com/haacked/docket/internal/core/git"
 	"github.com/haacked/docket/internal/core/pr"
 )
 
@@ -97,6 +98,18 @@ func (f *fakeGit) WorkTreeEmpty(_ context.Context, dir string) (bool, error) {
 	}
 	return !f.files[dir], nil
 }
+
+func (f *fakeGit) Head(context.Context, string) (string, error)                      { return "", nil }
+func (f *fakeGit) Dirty(context.Context, string) (bool, error)                       { return false, nil }
+func (f *fakeGit) FetchBranch(context.Context, string, string, string) error         { return nil }
+func (f *fakeGit) Ahead(context.Context, string, string) (int, error)                { return 0, nil }
+func (f *fakeGit) SetUpstream(context.Context, string, string, string) error         { return nil }
+func (f *fakeGit) SetCredentialHelper(context.Context, string) error                 { return nil }
+func (f *fakeGit) Remotes(context.Context, string) ([]git.Remote, error)             { return nil, nil }
+func (f *fakeGit) BranchExists(context.Context, string, string) (bool, error)        { return false, nil }
+func (f *fakeGit) WorktreeAdd(context.Context, string, string, string, string) error { return nil }
+func (f *fakeGit) WorktreeRemove(context.Context, string, string) error              { return nil }
+func (f *fakeGit) BranchDelete(context.Context, string, string) error                { return nil }
 
 func setup(t *testing.T) (*Cloner, *fakeGit, config.Paths) {
 	t.Helper()
