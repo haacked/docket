@@ -1170,7 +1170,7 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 // review would then vouch for commits the user has not seen. It also refuses
 // while I have a pending review there, which the new review would sit beside.
 func (s *Service) reviewFixes(ctx context.Context, rec review.Record, me, event, body string) (review.Record, error) {
-	if event != review.EventApprove && strings.TrimSpace(body) == "" {
+	if rec.NeedsBody(event) && strings.TrimSpace(body) == "" {
 		return rec, fmt.Errorf("GitHub needs a body to post a review of %s as %s", rec.Ref, event)
 	}
 	info, err := s.GH.PR(ctx, rec.Ref)

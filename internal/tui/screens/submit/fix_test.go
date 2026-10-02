@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/haacked/docket/internal/core/review"
@@ -20,9 +21,15 @@ func pushedRecord() review.Record {
 	return rec
 }
 
+// pushedModel is the screen as the root opens it for a pushed fix review of a
+// pull request that is not mine.
+func pushedModel() Model {
+	return New(Styles{}).For(pushedRecord(), review.SubmitEventsFor("someone", "haacked"))
+}
+
 // The user fixed what the review found, so approving is the likely answer.
 func TestAPushedRowStartsOnApprove(t *testing.T) {
-	m := New(Styles{}).For(pushedRecord(), review.SubmitEventsFor("someone", "haacked"))
+	m := pushedModel()
 
 	if m.Event != review.EventApprove {
 		t.Errorf("event = %q, want approve first for a pushed fix review", m.Event)
@@ -56,7 +63,7 @@ func TestADraftedRowStillStartsOnComment(t *testing.T) {
 // The review goes on the commit the fixes ended at, which is not necessarily
 // the head the user sees on GitHub by the time they read this.
 func TestThePushedRowsScreenSaysItPostsANewReviewOnTheFixHead(t *testing.T) {
-	m := New(Styles{}).For(pushedRecord(), review.SubmitEventsFor("someone", "haacked"))
+	m := pushedModel()
 
 	view := ansi.Strip(m.View())
 
@@ -71,7 +78,7 @@ func TestThePushedRowsScreenSaysItPostsANewReviewOnTheFixHead(t *testing.T) {
 // A pushed row has no pending review, so the body starts empty and ctrl+s
 // sends what the user typed.
 func TestAPushedRowStartsWithAnEmptyBodyAndSendsWhatWasTyped(t *testing.T) {
-	m := New(Styles{}).For(pushedRecord(), review.SubmitEventsFor("someone", "haacked"))
+	m := pushedModel()
 	if got := m.Body.Value(); got != "" {
 		t.Fatalf("body = %q, want empty", got)
 	}
@@ -87,5 +94,48 @@ func TestAPushedRowStartsWithAnEmptyBodyAndSendsWhatWasTyped(t *testing.T) {
 	want := msg.SubmitReview{ID: "rec-1", ReviewID: 0, Event: review.EventApprove, Body: "LGTM"}
 	if got := cmd(); got != want {
 		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+// GitHub refuses a new comment or request for changes with no body, so the
+// placeholder of a pushed row says which events need one. A drafted row keeps
+// the draft's summary when the body is empty, so every event may leave it out.
+func TestThePlaceholderSaysWhetherTheChosenEventNeedsABody(t *testing.T) {
+	const (
+		optional = "Optional summary to post with the review"
+		required = "Required summary to post with the review"
+	)
+	tests := []struct {
+		name  string
+		model Model
+		want  map[string]string
+	}{
+		{"pushed", pushedModel(), map[string]string{
+			review.EventApprove:        optional,
+			review.EventComment:        required,
+			review.EventRequestChanges: required,
+		}},
+		{"drafted", model(), map[string]string{
+			review.EventComment:        optional,
+			review.EventApprove:        optional,
+			review.EventRequestChanges: optional,
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.model
+			for range len(m.Events) {
+				view := ansi.Strip(m.View())
+				want, other := tt.want[m.Event], required
+				if want == required {
+					other = optional
+				}
+				if !strings.Contains(view, want) || strings.Contains(view, other) {
+					t.Errorf("on %s the view does not show %q alone:\n%s", m.Event, want, view)
+				}
+				m, _ = m.Update(key(tea.KeyTab))
+			}
+		})
 	}
 }

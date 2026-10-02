@@ -82,6 +82,14 @@ func (r Record) Submittable() bool {
 	return r.HasPendingDraft() && (r.State == StateDrafted || r.Mode == ModeBackground)
 }
 
+// NeedsBody reports whether submitting the record as event needs a body. A
+// pushed fix review posts a new review, and GitHub refuses a new comment or
+// request for changes with no body. The submit screen says so and the service
+// refuses an empty one.
+func (r Record) NeedsBody(event string) bool {
+	return r.State == StatePushed && event != EventApprove
+}
+
 // WebURL is the page that shows the record's review on GitHub. A pending draft
 // opens on the Conversation tab at the review. GitHub shows a pending review to
 // its author only.
