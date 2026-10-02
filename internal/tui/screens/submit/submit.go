@@ -42,7 +42,6 @@ const fieldWidth = 60
 
 func New(styles Styles) Model {
 	body := textarea.New()
-	body.Placeholder = "Optional summary to post with the review"
 	body.SetWidth(fieldWidth)
 	body.SetHeight(4)
 	return Model{Styles: styles, Body: body}
@@ -157,6 +156,7 @@ func (m Model) View() string {
 	}
 
 	b.WriteString("\n" + m.Styles.Label.Render("Body") + "\n")
+	m.Body.Placeholder = m.placeholder()
 	b.WriteString(m.Body.View() + "\n")
 	if m.draft != "" && strings.TrimSpace(m.Body.Value()) == "" {
 		b.WriteString(m.Styles.Dim.Render("GitHub keeps the draft's summary when the body is empty.") + "\n")
@@ -166,6 +166,14 @@ func (m Model) View() string {
 		b.WriteString("\n" + m.Spinner.Render(m.Busy) + "\n")
 	}
 	return b.String()
+}
+
+// placeholder says whether the body may stay empty for the chosen event.
+func (m Model) placeholder() string {
+	if m.Record.NeedsBody(m.Event) {
+		return "Required summary to post with the review"
+	}
+	return "Optional summary to post with the review"
 }
 
 // short is the abbreviated form of a commit id.
