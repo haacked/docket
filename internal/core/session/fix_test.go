@@ -360,6 +360,25 @@ func TestExplainNamesTheAssignmentAndMakesNone(t *testing.T) {
 	}
 }
 
+// A fresh install has cached no login. A dry run asks GitHub for it without
+// saving it, so the explanation still names the assignment.
+func TestExplainNamesTheAssignmentOnAFreshInstallAndCachesNothing(t *testing.T) {
+	svc, ghc, _ := fixService(t)
+	svc.Cfg.GitHubUser = ""
+
+	plan, _, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+
+	if plan.Assignee != "haacked" {
+		t.Errorf("plan assignee = %q, want haacked", plan.Assignee)
+	}
+	if svc.Config().GitHubUser != "" || len(ghc.assigned) != 0 {
+		t.Errorf("dry run cached %q and assigned %v, want neither", svc.Config().GitHubUser, ghc.assigned)
+	}
+}
+
 // Someone may have unassigned the user since the last review. Reviewing again
 // fixes the pull request again, so it assigns the user again.
 func TestRereviewOfAFixRowAssignsMeWhenIAmNoLongerAssigned(t *testing.T) {

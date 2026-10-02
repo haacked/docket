@@ -669,9 +669,14 @@ func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string, mo
 	if err != nil {
 		return Plan{}, exec.CommandSpec{}, err
 	}
-	// A dry run reads only the cached login, as resolve does for OwnPR. On an
-	// install that has not cached one, the dry run names no assignee.
-	plan.Assignee = assignee(info, rec.Fix, s.Config().GitHubUser)
+	if rec.Fix && info.Author.IsBot {
+		// peekLogin leaves the login uncached, which a dry run must.
+		me, err := s.peekLogin(ctx)
+		if err != nil {
+			return Plan{}, exec.CommandSpec{}, err
+		}
+		plan.Assignee = assignee(info, rec.Fix, me)
+	}
 	if intent == review.IntentAsk {
 		rec.AskSessionID = eng.NewSessionID()
 		return plan, eng.Ask(rec, s.enginePaths(rec.ClaudeConfigDir)), nil
