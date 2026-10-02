@@ -58,6 +58,9 @@ type fakeGH struct {
 	// created and createErr record and fail CreateReview.
 	created   []createCall
 	createErr error
+	// assigned and assignErr record and fail AddAssignee.
+	assigned  []string
+	assignErr error
 }
 
 // createCall is one POST to the reviews endpoint.
@@ -120,6 +123,17 @@ func (f *fakeGH) CreateReview(_ context.Context, ref pr.Ref, commitID, event, bo
 	r := review.GHReview{ID: int64(9000 + len(f.created)), State: ghStates[event], SubmittedAt: &at, Body: body, CommitID: commitID}
 	r.User.Login = f.login
 	f.reviews = append(f.reviews, r)
+	return nil
+}
+
+// AddAssignee records the call and, on success, adds the login to the pull
+// request's assignees the way GitHub reports them afterwards.
+func (f *fakeGH) AddAssignee(_ context.Context, _ pr.Ref, login string) error {
+	f.assigned = append(f.assigned, login)
+	if f.assignErr != nil {
+		return f.assignErr
+	}
+	f.info.Assignees = append(f.info.Assignees, review.GHUser{Login: login})
 	return nil
 }
 

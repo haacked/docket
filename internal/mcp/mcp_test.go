@@ -76,6 +76,8 @@ func (f *fakeGitHub) CreateReview(_ context.Context, _ pr.Ref, commitID, event, 
 	return nil
 }
 
+func (f *fakeGitHub) AddAssignee(context.Context, pr.Ref, string) error { return nil }
+
 func (f *fakeGitHub) ReviewRequests(context.Context, string) ([]requests.PR, error) { return nil, nil }
 
 func (f *fakeGitHub) Teams(context.Context) ([]string, error) { return nil, nil }

@@ -31,6 +31,7 @@ func fixService(t *testing.T) (*Service, *fakeGH, *fakeGit) {
 	info.HeadRefName = botHead
 	info.HeadRefOid = "base-sha"
 	info.Author.Login = "app/posthog"
+	info.Author.IsBot = true
 	ghc := &fakeGH{login: "haacked", info: info}
 	gitc := newFakeGit()
 	svc, _ := newService(t, ghc, gitc)
@@ -231,6 +232,208 @@ func TestAutoDraftsAForkPullRequestByAListedAuthor(t *testing.T) {
 	}
 	if rec.Fix {
 		t.Error("a pull request from a fork was recorded as a fix review")
+	}
+}
+
+// --- Assigning me ---
+
+// A bot opened the pull request, so it has no owner until a person is
+// assigned. A fix review assigns the user before the session starts.
+func TestAFixReviewOfABotsPullRequestAssignsMe(t *testing.T) {
+	svc, ghc, _ := fixService(t)
+
+	_, plan, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	if !slices.Equal(ghc.assigned, []string{"haacked"}) {
+		t.Errorf("assigned = %v, want haacked", ghc.assigned)
+	}
+	if plan.Assignee != "haacked" {
+		t.Errorf("plan assignee = %q, want haacked", plan.Assignee)
+	}
+	if got := plan.Description(); !strings.Contains(got, "assigns the pull request to haacked") {
+		t.Errorf("description %q does not say docket assigns the pull request", got)
+	}
+}
+
+// A person's pull request already has an owner. A draft review and an ask leave
+// the branch alone. GitHub logins ignore case, so an assignee spelled HAACKED is
+// already the user.
+func TestOnlyAFixReviewOfABotsPullRequestIDoNotHaveAssignsMe(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(*fakeGH)
+		intent review.Intent
+		choice review.FixChoice
+	}{
+		{name: "a draft review of a bot's pull request", intent: review.IntentReview, choice: review.FixOff},
+		{
+			name: "a fix review of a person's pull request",
+			setup: func(ghc *fakeGH) {
+				ghc.info.Author.Login = "someone"
+				ghc.info.Author.IsBot = false
+			},
+			intent: review.IntentReview,
+			choice: review.FixOn,
+		},
+		{name: "an ask about a bot's pull request", intent: review.IntentAsk, choice: review.FixOn},
+		{
+			name: "a fix review of a bot's pull request I already have",
+			setup: func(ghc *fakeGH) {
+				ghc.info.Assignees = []review.GHUser{{Login: "someone"}, {Login: "HAACKED"}}
+			},
+			intent: review.IntentReview,
+			choice: review.FixOn,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, ghc, _ := fixService(t)
+			if tt.setup != nil {
+				tt.setup(ghc)
+			}
+			notesFor(t, svc, unlisted)
+
+			_, plan, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, tt.intent, tt.choice)
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+
+			if len(ghc.assigned) != 0 {
+				t.Errorf("assigned = %v, want nobody", ghc.assigned)
+			}
+			if plan.Assignee != "" || strings.Contains(plan.Description(), "assigns") {
+				t.Errorf("plan = %+v, want no assignee", plan)
+			}
+		})
+	}
+}
+
+// resolve reads only the cached login, which a fresh install does not have.
+// Prepare asks GitHub for it before it assigns.
+func TestAFixReviewOnAFreshInstallAssignsTheLoginGitHubReports(t *testing.T) {
+	svc, ghc, _ := fixService(t)
+	svc.Cfg.GitHubUser = ""
+
+	if _, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	if !slices.Equal(ghc.assigned, []string{"haacked"}) {
+		t.Errorf("assigned = %v, want haacked", ghc.assigned)
+	}
+}
+
+// A fix review needs push access. Assigning needs the same access, so a refused
+// assignment stops the review. The row keeps GitHub's answer.
+func TestAFailedAssignmentStopsTheFixReview(t *testing.T) {
+	svc, ghc, _ := fixService(t)
+	ghc.assignErr = errors.New("HTTP 403: Resource not accessible by integration")
+
+	rec, _, err := svc.Prepare(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
+
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("Prepare answered %v, want GitHub's refusal", err)
+	}
+	if got := storedByID(t, svc, rec.ID); !strings.Contains(got.Err, "403") {
+		t.Errorf("stored error = %q, want GitHub's refusal", got.Err)
+	}
+}
+
+// A dry run names the assignment and makes none.
+func TestExplainNamesTheAssignmentAndMakesNone(t *testing.T) {
+	svc, ghc, _ := fixService(t)
+
+	plan, _, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+
+	if plan.Assignee != "haacked" {
+		t.Errorf("plan assignee = %q, want haacked", plan.Assignee)
+	}
+	if len(ghc.assigned) != 0 {
+		t.Errorf("assigned = %v, want no call in a dry run", ghc.assigned)
+	}
+}
+
+// A fresh install has cached no login. A dry run asks GitHub for it without
+// saving it, so the explanation still names the assignment.
+func TestExplainNamesTheAssignmentOnAFreshInstallAndCachesNothing(t *testing.T) {
+	svc, ghc, _ := fixService(t)
+	svc.Cfg.GitHubUser = ""
+
+	plan, _, err := svc.Explain(context.Background(), unlisted, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+
+	if plan.Assignee != "haacked" {
+		t.Errorf("plan assignee = %q, want haacked", plan.Assignee)
+	}
+	if svc.Config().GitHubUser != "" || len(ghc.assigned) != 0 {
+		t.Errorf("dry run cached %q and assigned %v, want neither", svc.Config().GitHubUser, ghc.assigned)
+	}
+}
+
+// Someone may have unassigned the user since the last review. Reviewing again
+// fixes the pull request again, so it assigns the user again.
+func TestRereviewOfAFixRowAssignsMeWhenIAmNoLongerAssigned(t *testing.T) {
+	svc, ghc, _ := fixService(t)
+	rec := fixReviewPushed(t, svc, unlisted)
+	ghc.info.Assignees = nil
+	ghc.assigned = nil
+
+	if _, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive); err != nil {
+		t.Fatalf("Rereview: %v", err)
+	}
+
+	if !slices.Equal(ghc.assigned, []string{"haacked"}) {
+		t.Errorf("assigned = %v, want haacked", ghc.assigned)
+	}
+}
+
+// The reset moves the checkout past the commits the record names. If the reset
+// ran before a failed assignment, the next refresh would read the bot's new
+// commits as pushed fixes, ready to approve.
+func TestAFailedRereviewAssignmentLeavesTheCheckoutWhereTheRecordSays(t *testing.T) {
+	svc, ghc, gitc := fixService(t)
+	rec := fixReviewPushed(t, svc, unlisted)
+	gitc.refs["origin/"+botHead] = "new-head"
+	ghc.info.HeadRefOid = "new-head"
+	ghc.info.Assignees = nil
+	ghc.assignErr = errors.New("HTTP 502: Bad Gateway")
+
+	if _, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive); err == nil {
+		t.Fatal("Rereview succeeded, want the assignment's failure")
+	}
+
+	if got := called(gitc, "reset"); len(got) != 0 {
+		t.Errorf("git calls = %v, want no reset after a failed assignment", gitc.calls)
+	}
+	head, err := gitc.Head(context.Background(), rec.Dir)
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if stored := storedByID(t, svc, rec.ID); head != stored.FixBase {
+		t.Errorf("checkout HEAD = %q, stored fix base = %q, want them equal", head, stored.FixBase)
+	}
+}
+
+func TestRereviewOfAFixRowLeavesMeAssigned(t *testing.T) {
+	svc, ghc, _ := fixService(t)
+	rec := fixReviewPushed(t, svc, unlisted)
+	ghc.assigned = nil
+
+	if _, err := svc.Rereview(context.Background(), rec, review.IntentAppend, review.ModeInteractive); err != nil {
+		t.Fatalf("Rereview: %v", err)
+	}
+
+	if len(ghc.assigned) != 0 {
+		t.Errorf("assigned = %v, want no call while I am still assigned", ghc.assigned)
 	}
 }
 
@@ -1275,9 +1478,11 @@ func TestARereviewThatEndsBeforeItsNotesIsUnfinished(t *testing.T) {
 
 // A dry run reaches no runner with a write.
 func TestExplainRereviewOfAFixRowResetsNothing(t *testing.T) {
-	svc, _, gitc := fixService(t)
+	svc, ghc, gitc := fixService(t)
 	rec := fixReviewPushed(t, svc, unlisted)
 	gitc.calls = nil
+	ghc.info.Assignees = nil
+	ghc.assigned = nil
 
 	spec, err := svc.ExplainRereview(context.Background(), rec, review.IntentOverwrite, review.ModeInteractive)
 	if err != nil {
@@ -1286,6 +1491,9 @@ func TestExplainRereviewOfAFixRowResetsNothing(t *testing.T) {
 
 	if got := called(gitc, "reset"); len(got) != 0 {
 		t.Errorf("git calls = %v, want no reset in a dry run", gitc.calls)
+	}
+	if len(ghc.assigned) != 0 {
+		t.Errorf("assigned = %v, want no call in a dry run", ghc.assigned)
 	}
 	if line := launchLine(t, spec); !strings.Contains(line, "--fix") {
 		t.Errorf("command %s, want --fix", line)

@@ -83,10 +83,19 @@ type Plan struct {
 	NotesPath  string
 	// Branch is the head branch a fix review's checkout is on.
 	Branch string
+	// Assignee is the login docket adds to the pull request's assignees.
+	Assignee string
 }
 
-// Description says what the tier means in one line.
+// Description says in one line what the tier means and whom docket assigns.
 func (p Plan) Description() string {
+	if p.Assignee == "" {
+		return p.tierDescription()
+	}
+	return p.tierDescription() + "; docket assigns the pull request to " + p.Assignee
+}
+
+func (p Plan) tierDescription() string {
 	switch p.Tier {
 	case tier.Tier1:
 		return fmt.Sprintf("review-code knows this repo (%s), so it provisions and tears down its own worktree at %s; docket clones nothing", p.LocalClone, p.Worktree)
@@ -356,6 +365,9 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mo
 		return s.fail(rec, plan, err)
 	}
 	rec.OwnPR = ownPR(rec.Author, me)
+	if plan.Assignee, err = s.assign(ctx, ref, info, rec.Fix, me); err != nil {
+		return s.fail(rec, plan, err)
+	}
 
 	rec.PriorReviewIDs = review.PriorSubmittedIDs(reviews, me)
 	rec.PriorPendingID = review.PendingReviewID(reviews, me)
@@ -626,13 +638,44 @@ func fixes(ref pr.Ref, info gh.PRInfo, intent review.Intent, choice review.FixCh
 	return false, nil
 }
 
+// assignee is the login a review adds to the pull request's assignees. A fix
+// review of a bot's pull request adds me, unless I am already an assignee.
+// GitHub logins ignore case.
+func assignee(info gh.PRInfo, fix bool, me string) string {
+	if !fix || !info.Author.IsBot || me == "" {
+		return ""
+	}
+	if slices.ContainsFunc(info.Assignees, func(a review.GHUser) bool { return strings.EqualFold(a.Login, me) }) {
+		return ""
+	}
+	return me
+}
+
+// assign adds me to the pull request's assignees when assignee says to, and
+// returns the login it added.
+func (s *Service) assign(ctx context.Context, ref pr.Ref, info gh.PRInfo, fix bool, me string) (string, error) {
+	login := assignee(info, fix, me)
+	if login == "" {
+		return "", nil
+	}
+	return login, s.GH.AddAssignee(ctx, ref, login)
+}
+
 // Explain says what a review would do without doing any of it. A dry run must not
 // provision. A check that reads what provisioning would have written then tells
 // the user nothing, so Explain stops before both.
 func (s *Service) Explain(ctx context.Context, ref pr.Ref, engineName string, mode review.Mode, intent review.Intent, choice review.FixChoice) (Plan, exec.CommandSpec, error) {
-	rec, plan, _, eng, err := s.resolve(ctx, ref, engineName, mode, intent, choice)
+	rec, plan, info, eng, err := s.resolve(ctx, ref, engineName, mode, intent, choice)
 	if err != nil {
 		return Plan{}, exec.CommandSpec{}, err
+	}
+	if rec.Fix && info.Author.IsBot {
+		// peekLogin leaves the login uncached, which a dry run must.
+		me, err := s.peekLogin(ctx)
+		if err != nil {
+			return Plan{}, exec.CommandSpec{}, err
+		}
+		plan.Assignee = assignee(info, rec.Fix, me)
 	}
 	if intent == review.IntentAsk {
 		rec.AskSessionID = eng.NewSessionID()
@@ -729,7 +772,7 @@ func (s *Service) launch(ctx context.Context, rec review.Record, resume bool) (r
 		// A stale snapshot is worse than a refused resume. Keeping the old list
 		// would leave out a review submitted since the last session. Detection
 		// would then read that review as this session's own and archive against it.
-		rec, err = s.snapshot(ctx, rec)
+		rec, _, err = s.snapshot(ctx, rec)
 		if err != nil {
 			return rec, spec, fmt.Errorf("refresh the submitted reviews for %s: %w", rec.Ref, err)
 		}
@@ -933,14 +976,19 @@ func (s *Service) Rereview(ctx context.Context, rec review.Record, intent review
 	if !ok {
 		return s.recordErr(rec, errors.New(rec.Err))
 	}
+	rearmed, me, err := s.snapshot(ctx, rearmed)
+	if err != nil {
+		return s.recordErr(rec, err)
+	}
+	if _, err := s.assign(ctx, rec.Ref, pull, rearmed.Fix, me); err != nil {
+		return s.recordErr(rec, err)
+	}
+	// The reset comes last. A failure after it would record rec, whose FixBase
+	// names the commit the checkout has left.
 	if rearmed.Fix {
 		if rearmed, err = s.refreshCheckout(ctx, rearmed); err != nil {
 			return s.recordErr(rec, err)
 		}
-	}
-	rearmed, err = s.snapshot(ctx, rearmed)
-	if err != nil {
-		return s.recordErr(rec, err)
 	}
 	rearmed.BGID = ""
 	return rearmed, s.append(rearmed)
@@ -1671,15 +1719,16 @@ func (s *Service) fail(rec review.Record, plan Plan, cause error) (review.Record
 }
 
 // snapshot records my reviews on GitHub as a launch finds them, so that an
-// older review of mine does not look like this session's.
-func (s *Service) snapshot(ctx context.Context, rec review.Record) (review.Record, error) {
+// older review of mine does not look like this session's. It also returns my
+// login.
+func (s *Service) snapshot(ctx context.Context, rec review.Record) (review.Record, string, error) {
 	me, reviews, err := s.myReviews(ctx, rec.Ref, s.Login)
 	if err != nil {
-		return rec, err
+		return rec, "", err
 	}
 	rec.PriorReviewIDs = review.PriorSubmittedIDs(reviews, me)
 	rec.PriorPendingID = review.PendingReviewID(reviews, me)
-	return rec, nil
+	return rec, me, nil
 }
 
 // myReviews is the login docket compares authors against and every review on the
