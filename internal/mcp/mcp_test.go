@@ -26,7 +26,6 @@ import (
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
-	"github.com/haacked/docket/internal/core/worktree"
 )
 
 const (
@@ -68,15 +67,6 @@ func (f *fakeGitHub) SubmitReview(_ context.Context, _ pr.Ref, id int64, event, 
 	}
 	return nil
 }
-
-func (f *fakeGitHub) CreateReview(_ context.Context, _ pr.Ref, commitID, event, body string) error {
-	f.submits = append(f.submits, fmt.Sprintf("new %s %s %q", commitID, event, body))
-	now := time.Now()
-	f.post(review.GHReview{ID: int64(9000 + len(f.submits)), State: "APPROVED", SubmittedAt: &now, CommitID: commitID})
-	return nil
-}
-
-func (f *fakeGitHub) AddAssignee(context.Context, pr.Ref, string) error { return nil }
 
 func (f *fakeGitHub) ReviewRequests(context.Context, string) ([]requests.PR, error) { return nil, nil }
 
@@ -124,13 +114,12 @@ func newFixture(t *testing.T) *fixture {
 			DefaultEngine:    "claude",
 			GitHubUser:       me,
 		},
-		Paths:     paths,
-		Store:     index.New(paths.Index, paths.Lock),
-		GH:        github,
-		Git:       gitc,
-		Cloner:    clone.New(gitc, paths),
-		Worktrees: worktree.New(gitc, paths, t.TempDir()),
-		Runner:    runner,
+		Paths:  paths,
+		Store:  index.New(paths.Index, paths.Lock),
+		GH:     github,
+		Git:    gitc,
+		Cloner: clone.New(gitc, paths),
+		Runner: runner,
 	}
 	elapsed := &atomic.Int64{}
 	svc.Now = func() time.Time { return time.Now().Add(time.Duration(elapsed.Load())) }
@@ -768,7 +757,7 @@ func TestSubmitReviewTellsAnInteractiveSessionWhenDocketReadsItsDraft(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, _, err := f.svc.Prepare(t.Context(), ref, "claude", review.ModeInteractive, review.IntentReview, review.FixAuto)
+	rec, _, err := f.svc.Prepare(t.Context(), ref, "claude", review.ModeInteractive, review.IntentReview)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

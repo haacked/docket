@@ -223,6 +223,33 @@ func TestFoldKeepsAdvancingPastAnUnknownEventType(t *testing.T) {
 	}
 }
 
+// Fix reviews wrote these event types. An unknown type stops compaction for
+// good, and a fold that skipped the last event of an open row would put it back
+// to reviewing with no session behind it.
+func TestFoldReadsTheFixReviewEventsAsUnreviewed(t *testing.T) {
+	for _, eventType := range []string{"fixed", "pushed"} {
+		t.Run(eventType, func(t *testing.T) {
+			legacy := event("rec-1", foldBase.Add(time.Minute), eventType, map[string]any{"fix": true, "fix_head": "abc123"})
+			if !review.KnownEvent(legacy) {
+				t.Errorf("event %q is unknown, so compaction never runs again", eventType)
+			}
+
+			got := review.Fold([]review.Event{
+				event("rec-1", foldBase, "started", map[string]any{"title": "Fix the retry loop"}),
+				legacy,
+			})
+
+			rec := recordByID(t, got, "rec-1")
+			if rec.State != review.StateUnreviewed {
+				t.Errorf("state = %v, want %v", rec.State, review.StateUnreviewed)
+			}
+			if rec.Title != "Fix the retry loop" {
+				t.Errorf("title = %q, want the started event's", rec.Title)
+			}
+		})
+	}
+}
+
 func TestFoldOrdersRecordsByFirstAppearance(t *testing.T) {
 	events := []review.Event{
 		event("rec-2", foldBase, "started", nil),

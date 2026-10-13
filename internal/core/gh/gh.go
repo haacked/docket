@@ -19,23 +19,17 @@ import (
 )
 
 // PRInfo is the pull request metadata docket needs to clone, to label a row, to
-// tell whether the pull request is still open, to tell whether the user has
-// reviewed its head, and to assign the user to a bot's pull request.
+// tell whether the pull request is still open, and to tell whether the user has
+// reviewed its head.
 type PRInfo struct {
 	Number      int            `json:"number"`
 	Title       string         `json:"title"`
 	HeadRefName string         `json:"headRefName"`
 	HeadRefOid  string         `json:"headRefOid"`
 	State       review.PRState `json:"state"`
-	// IsCrossRepository reports a head branch in a fork. A fix review pushes to
-	// the head branch by name, which only works on the base repository.
-	IsCrossRepository bool `json:"isCrossRepository"`
-	Author            struct {
+	Author      struct {
 		Login string `json:"login"`
-		// IsBot reports a GitHub App, which gh names app/<name>.
-		IsBot bool `json:"is_bot"`
 	} `json:"author"`
-	Assignees []review.GHUser `json:"assignees"`
 }
 
 // GitHub is the GitHub access docket needs. Tests substitute a fake.
@@ -44,8 +38,6 @@ type GitHub interface {
 	PR(ctx context.Context, ref pr.Ref) (PRInfo, error)
 	Reviews(ctx context.Context, ref pr.Ref) ([]review.GHReview, error)
 	SubmitReview(ctx context.Context, ref pr.Ref, reviewID int64, event, body string) error
-	CreateReview(ctx context.Context, ref pr.Ref, commitID, event, body string) error
-	AddAssignee(ctx context.Context, ref pr.Ref, login string) error
 	ReviewRequests(ctx context.Context, query string) ([]requests.PR, error)
 	Teams(ctx context.Context) ([]string, error)
 }
@@ -78,7 +70,7 @@ func (c *CLI) PR(ctx context.Context, ref pr.Ref) (PRInfo, error) {
 	res, err := c.run(ctx,
 		"pr", "view", strconv.Itoa(ref.Number),
 		"--repo", ref.Slug(),
-		"--json", "number,title,author,assignees,headRefName,headRefOid,state,isCrossRepository",
+		"--json", "number,title,author,headRefName,headRefOid,state",
 	)
 	if err != nil {
 		return PRInfo{}, fmt.Errorf("gh pr view %s: %w", ref, err)
@@ -128,37 +120,6 @@ func (c *CLI) SubmitReview(ctx context.Context, ref pr.Ref, reviewID int64, even
 	}
 	if _, err := c.run(ctx, args...); err != nil {
 		return fmt.Errorf("submit review %d on %s: %w", reviewID, ref, err)
-	}
-	return nil
-}
-
-// CreateReview posts a submitted review on the commit commitID. GitHub reads a
-// review on an older commit as a review of that commit, not of the current head.
-func (c *CLI) CreateReview(ctx context.Context, ref pr.Ref, commitID, event, body string) error {
-	args := []string{
-		"api", "--method", "POST",
-		fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", ref.Org, ref.Repo, ref.Number),
-		"-f", "commit_id=" + commitID,
-		"-f", "event=" + event,
-	}
-	if body != "" {
-		args = append(args, "-f", "body="+body)
-	}
-	if _, err := c.run(ctx, args...); err != nil {
-		return fmt.Errorf("post a review on %s: %w", ref, err)
-	}
-	return nil
-}
-
-// AddAssignee adds login to the pull request's assignees and keeps the ones
-// already there.
-func (c *CLI) AddAssignee(ctx context.Context, ref pr.Ref, login string) error {
-	if _, err := c.run(ctx,
-		"api", "--method", "POST",
-		fmt.Sprintf("/repos/%s/%s/issues/%d/assignees", ref.Org, ref.Repo, ref.Number),
-		"-f", "assignees[]="+login,
-	); err != nil {
-		return fmt.Errorf("assign %s to %s: %w", login, ref, err)
 	}
 	return nil
 }

@@ -24,8 +24,6 @@ const (
 	EventUnreviewed = "unreviewed"
 	EventReviewed   = "reviewed"
 	EventNotStarted = "not_started"
-	EventFixed      = "fixed"
-	EventPushed     = "pushed"
 )
 
 var eventStates = map[string]State{
@@ -38,13 +36,17 @@ var eventStates = map[string]State{
 	EventUnreviewed: StateUnreviewed,
 	EventReviewed:   StateReviewed,
 	EventNotStarted: StateNotStarted,
-	EventFixed:      StateFixed,
-	EventPushed:     StatePushed,
+	// Older logs carry these from fix reviews, which docket no longer runs. A row
+	// left open in either reads as one whose session posted nothing, so x can
+	// close it. Compaction rewrites both as unreviewed.
+	"fixed":  StateUnreviewed,
+	"pushed": StateUnreviewed,
 }
 
-// stateEvents is the inverse of eventStates, spelled out rather than derived. Two
-// event types that share one state then collide visibly here, instead of letting
-// map iteration pick an arbitrary winner.
+// stateEvents names the event that records each state, which is the event type
+// in eventStates for that state that docket still writes. It is spelled out
+// rather than derived. Two event types that share one state then collide
+// visibly here, instead of letting map iteration pick an arbitrary winner.
 var stateEvents = map[State]string{
 	StatePreparing:  EventPrepared,
 	StateReviewing:  EventStarted,
@@ -55,8 +57,6 @@ var stateEvents = map[State]string{
 	StateUnreviewed: EventUnreviewed,
 	StateReviewed:   EventReviewed,
 	StateNotStarted: EventNotStarted,
-	StateFixed:      EventFixed,
-	StatePushed:     EventPushed,
 }
 
 // KnownEvent reports whether Fold understands this event's type. Compaction asks,
