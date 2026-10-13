@@ -17,7 +17,6 @@ import (
 	"github.com/haacked/docket/internal/core/git"
 	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/session"
-	"github.com/haacked/docket/internal/core/worktree"
 	"github.com/haacked/docket/internal/mcp"
 	"github.com/haacked/docket/internal/tui"
 )
@@ -92,14 +91,13 @@ func run() error {
 	runner := exec.Real{}
 	gitCLI := git.New(runner)
 	svc := &session.Service{
-		Cfg:       cfg,
-		Paths:     paths,
-		Store:     store,
-		GH:        gh.New(runner),
-		Git:       gitCLI,
-		Cloner:    clone.New(gitCLI, paths),
-		Worktrees: worktree.New(gitCLI, paths, cfg.WorktreesDir()),
-		Runner:    runner,
+		Cfg:    cfg,
+		Paths:  paths,
+		Store:  store,
+		GH:     gh.New(runner),
+		Git:    gitCLI,
+		Cloner: clone.New(gitCLI, paths),
+		Runner: runner,
 	}
 
 	if opts.mcp {

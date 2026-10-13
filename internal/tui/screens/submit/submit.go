@@ -42,6 +42,7 @@ const fieldWidth = 60
 
 func New(styles Styles) Model {
 	body := textarea.New()
+	body.Placeholder = "Optional summary to post with the review"
 	body.SetWidth(fieldWidth)
 	body.SetHeight(4)
 	return Model{Styles: styles, Body: body}
@@ -58,12 +59,8 @@ func (m Model) SetWidth(width int) Model {
 
 // For aims the screen at a record. The events come from the caller because
 // approving your own pull request is a 422 from GitHub, so that choice is left
-// out rather than offered and refused. A pushed fix review offers approve
-// first, because the user fixed what the review found.
+// out rather than offered and refused.
 func (m Model) For(rec review.Record, events []string) Model {
-	if rec.State == review.StatePushed && slices.Contains(events, review.EventApprove) {
-		events = review.FixEvents
-	}
 	m.Record = rec
 	m.Events = events
 	m.Event = ""
@@ -148,15 +145,11 @@ func (m Model) View() string {
 	fmt.Fprintf(&b, "%s %s  %s\n\n", m.Styles.Label.Render("Submit"), m.Record.Ref, cmp.Or(m.Record.Title, m.Record.URL))
 
 	b.WriteString(m.Styles.Label.Render("Event") + " " + choice.Line(m.Events, m.Event, m.Styles.Selected, m.Styles.Dim) + "\n")
-	if m.Record.State == review.StatePushed {
-		b.WriteString(m.Styles.Dim.Render("Posts a new review on commit "+short(m.Record.FixHead)+". Comment and request changes need a body.") + "\n")
-	}
 	if !slices.Contains(m.Events, review.EventApprove) {
 		b.WriteString(m.Styles.Dim.Render("GitHub refuses an approval of your own pull request, so approve is not offered.") + "\n")
 	}
 
 	b.WriteString("\n" + m.Styles.Label.Render("Body") + "\n")
-	m.Body.Placeholder = m.placeholder()
 	b.WriteString(m.Body.View() + "\n")
 	if m.draft != "" && strings.TrimSpace(m.Body.Value()) == "" {
 		b.WriteString(m.Styles.Dim.Render("GitHub keeps the draft's summary when the body is empty.") + "\n")
@@ -166,17 +159,4 @@ func (m Model) View() string {
 		b.WriteString("\n" + m.Spinner.Render(m.Busy) + "\n")
 	}
 	return b.String()
-}
-
-// placeholder says whether the body may stay empty for the chosen event.
-func (m Model) placeholder() string {
-	if m.Record.NeedsBody(m.Event) {
-		return "Required summary to post with the review"
-	}
-	return "Optional summary to post with the review"
-}
-
-// short is the abbreviated form of a commit id.
-func short(commit string) string {
-	return commit[:min(len(commit), 7)]
 }
