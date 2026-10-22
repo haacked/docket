@@ -54,10 +54,14 @@ func TestPathsLayout(t *testing.T) {
 		"clones":  paths.Clones,
 		"scratch": paths.Scratch,
 		"config":  paths.Config,
+		"limits":  paths.Limits,
 	} {
 		if !strings.HasPrefix(got, "/tmp/docket/") {
 			t.Errorf("%s = %q, want it under the home directory", name, got)
 		}
+	}
+	if want := "/tmp/docket/limits.jsonl"; paths.Limits != want {
+		t.Errorf("limits = %q, want %q", paths.Limits, want)
 	}
 	if want := "/tmp/docket/clones/haacked/docket/pr-7"; paths.CloneDir("haacked", "docket", 7) != want {
 		t.Errorf("clone dir = %q, want %q", paths.CloneDir("haacked", "docket", 7), want)
@@ -270,6 +274,9 @@ func TestLoadReadsTheClaudeConfigDir(t *testing.T) {
 		{name: "the environment under a file that empties it", body: `claude_config_dir = ""`, env: automation, want: automation},
 		{name: "a tilde in the environment", env: "~/.claude-automation", want: "~/.claude-automation"},
 		{name: "the file over the environment", body: `claude_config_dir = "` + automation + `"`, env: personal, want: automation},
+		{name: "claude's own directory in the file", body: `claude_config_dir = "~/.claude/"`, env: personal, want: ""},
+		{name: "claude's own directory in the environment", env: "~/.claude", want: "~/.claude"},
+		{name: "a path in the file with a trailing slash", body: `claude_config_dir = "` + automation + `/"`, want: automation + "/"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -344,6 +351,192 @@ func TestClaudeJobsDirIsUnderTheAccountsConfigDir(t *testing.T) {
 func TestAConfigLoadDidNotFillInHasNoJobsDirForTheDefaultAccount(t *testing.T) {
 	if got := (Config{}).ClaudeJobsDir(""); got != "" {
 		t.Errorf("jobs = %q, want none", got)
+	}
+}
+
+func TestClaudeProjectsDirIsUnderTheAccountsConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg, err := Load(filepath.Join(t.TempDir(), "config.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	for account, want := range map[string]string{
+		"/Users/me/.claude-automation": "/Users/me/.claude-automation/projects",
+		"":                             filepath.Join(home, ".claude", "projects"),
+	} {
+		if got := cfg.ClaudeProjectsDir(account); got != want {
+			t.Errorf("projects for %q = %q, want %q", account, got, want)
+		}
+	}
+}
+
+// A test that builds its own Config reads no transcript from the real home
+// directory.
+func TestAConfigLoadDidNotFillInHasNoProjectsDirForTheDefaultAccount(t *testing.T) {
+	if got := (Config{}).ClaudeProjectsDir(""); got != "" {
+		t.Errorf("projects = %q, want none", got)
+	}
+}
+
+// claude looks up a different login whenever CLAUDE_CONFIG_DIR is set, even to
+// ~/.claude. A fallback that names claude's own directory therefore has to run
+// with the variable unset, which docket writes as "".
+func TestLoadReadsTheClaudeFallbackConfigDirs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// entry is the TOML string for the one fallback. A {home} in it is the
+		// test's home directory.
+		entry string
+		// want is the account Load reads. A {home} in it is the test's home
+		// directory.
+		want string
+	}{
+		{name: "an absolute directory", entry: "/opt/claude-work", want: "/opt/claude-work"},
+		{name: "a tilde", entry: "~/.claude-automation", want: "{home}/.claude-automation"},
+		{name: "an empty entry", entry: "", want: ""},
+		{name: "claude's directory with a tilde", entry: "~/.claude", want: ""},
+		{name: "claude's directory with a tilde and a trailing slash", entry: "~/.claude/", want: ""},
+		{name: "claude's directory in full", entry: "{home}/.claude", want: ""},
+		{name: "claude's directory in full with a trailing slash", entry: "{home}/.claude/", want: ""},
+		{name: "claude's directory with a dot segment", entry: "~/./.claude", want: ""},
+		{name: "a directory beside claude's", entry: "~/.claude-work", want: "{home}/.claude-work"},
+		{name: "a directory inside claude's", entry: "~/.claude/work", want: "{home}/.claude/work"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			path := filepath.Join(t.TempDir(), "config.toml")
+			entry := strings.ReplaceAll(tc.entry, "{home}", home)
+			if err := os.WriteFile(path, []byte(`claude_fallback_config_dirs = ["`+entry+`"]`+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+
+			want := []string{strings.ReplaceAll(tc.want, "{home}", home)}
+			if !slices.Equal(cfg.ClaudeFallbackConfigDirs, want) {
+				t.Errorf("claude_fallback_config_dirs = %q, want %q", cfg.ClaudeFallbackConfigDirs, want)
+			}
+		})
+	}
+}
+
+func TestLoadKeepsTheOrderOfTheClaudeFallbackConfigDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `claude_fallback_config_dirs = ["~/.claude-work", "~/.claude", "/opt/claude-team"]` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	want := []string{filepath.Join(home, ".claude-work"), "", "/opt/claude-team"}
+	if !slices.Equal(cfg.ClaudeFallbackConfigDirs, want) {
+		t.Errorf("claude_fallback_config_dirs = %q, want %q", cfg.ClaudeFallbackConfigDirs, want)
+	}
+}
+
+// docket runs some claude commands in the review's directory and others in its
+// own. A relative directory would name a different account for each.
+func TestLoadRefusesARelativeClaudeFallbackConfigDir(t *testing.T) {
+	for _, entry := range []string{
+		".claude-work",
+		"claude-work/",
+		"./.claude",
+		"../.claude",
+		"~other/.claude",
+	} {
+		t.Run(entry, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			path := filepath.Join(t.TempDir(), "config.toml")
+			body := `claude_fallback_config_dirs = ["/opt/claude-work", "` + entry + `"]` + "\n"
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Load(path); err == nil {
+				t.Errorf("Load accepted the relative fallback %q", entry)
+			}
+		})
+	}
+}
+
+func TestClaudeAccountsPutTheConfigDirFirstAndNameEachAccountOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configDir string
+		fallbacks []string
+		want      []string
+	}{
+		{name: "the default account alone", configDir: "", want: []string{""}},
+		{name: "a named account alone", configDir: "/a", want: []string{"/a"}},
+		{name: "fallbacks in order", configDir: "/a", fallbacks: []string{"/b", "", "/c"}, want: []string{"/a", "/b", "", "/c"}},
+		{name: "repeats dropped", configDir: "/a", fallbacks: []string{"", "/a", "/b", ""}, want: []string{"/a", "", "/b"}},
+		{name: "the default account first", configDir: "", fallbacks: []string{"/a", "", "/b"}, want: []string{"", "/a", "/b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{ClaudeConfigDir: tc.configDir, ClaudeFallbackConfigDirs: tc.fallbacks}
+
+			if got := cfg.ClaudeAccounts(); !slices.Equal(got, tc.want) {
+				t.Errorf("accounts = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The setup the rotation was built for: docket starts under an automation
+// account and falls back to the default account.
+func TestClaudeAccountsFromALoadedConfig(t *testing.T) {
+	const automation = "/Users/me/.claude-automation"
+	for _, tc := range []struct {
+		name, body, env string
+		want            []string
+	}{
+		{
+			name: "the account from the environment",
+			body: `claude_fallback_config_dirs = ["~/.claude"]`,
+			env:  automation,
+			want: []string{automation, ""},
+		},
+		{
+			name: "the account from the file",
+			body: `claude_config_dir = "` + automation + `"` + "\n" + `claude_fallback_config_dirs = ["~/.claude"]`,
+			want: []string{automation, ""},
+		},
+		{
+			name: "a fallback that repeats the default account",
+			body: `claude_fallback_config_dirs = ["~/.claude", "` + automation + `"]`,
+			want: []string{"", automation},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("CLAUDE_CONFIG_DIR", tc.env)
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(tc.body+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+
+			if got := cfg.ClaudeAccounts(); !slices.Equal(got, tc.want) {
+				t.Errorf("accounts = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

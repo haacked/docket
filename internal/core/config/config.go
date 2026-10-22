@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -41,8 +42,14 @@ type Config struct {
 	// ClaudeConfigDir is the CLAUDE_CONFIG_DIR a new review runs claude under.
 	// The variable picks the account. Empty means claude's own default. docket then
 	// unsets the variable rather than setting it to DefaultClaudeConfigDir,
-	// because claude looks up a different keychain entry whenever it is set.
+	// because claude looks up a different keychain entry whenever it is set. Load
+	// therefore turns ~/.claude in the file into "". It keeps a CLAUDE_CONFIG_DIR
+	// that docket inherited as given, because claude reads that value as given.
 	ClaudeConfigDir string `toml:"claude_config_dir"`
+	// ClaudeFallbackConfigDirs are the accounts a new review moves to once
+	// claude refuses a session for a usage limit, in the order docket tries
+	// them. Load turns ~/.claude into "" here too.
+	ClaudeFallbackConfigDirs []string `toml:"claude_fallback_config_dirs"`
 	// ClaudeDefaultDir is DefaultClaudeConfigDir with the tilde expanded. Load
 	// fills it in. The file never sets it.
 	ClaudeDefaultDir string `toml:"-"`
@@ -71,6 +78,9 @@ type Paths struct {
 	Clones  string
 	Scratch string
 	Config  string
+	// Limits is the log of the usage limits claude reported. The rotation reads
+	// it to pick the account for a new review.
+	Limits string
 }
 
 // NewPaths resolves DOCKET_HOME, falling back to ~/.docket.
@@ -98,6 +108,7 @@ func NewPaths(home string) (Paths, error) {
 		Clones:  filepath.Join(home, "clones"),
 		Scratch: filepath.Join(home, "scratch"),
 		Config:  filepath.Join(home, "config.toml"),
+		Limits:  filepath.Join(home, "limits.jsonl"),
 	}, nil
 }
 
@@ -116,11 +127,33 @@ func (p Paths) EnsureDirs() error {
 // default account. The result is "" for that account on a Config that Load did
 // not fill in.
 func (c Config) ClaudeJobsDir(configDir string) string {
+	return c.claudeDir(configDir, "jobs")
+}
+
+// ClaudeProjectsDir is where claude keeps the transcript of each session run
+// under configDir, in a directory named for the session's working directory.
+func (c Config) ClaudeProjectsDir(configDir string) string {
+	return c.claudeDir(configDir, "projects")
+}
+
+func (c Config) claudeDir(configDir, name string) string {
 	dir := cmp.Or(configDir, c.ClaudeDefaultDir)
 	if dir == "" {
 		return ""
 	}
-	return filepath.Join(dir, "jobs")
+	return filepath.Join(dir, name)
+}
+
+// ClaudeAccounts are the accounts docket rotates new claude sessions through:
+// ClaudeConfigDir first, then each fallback, each account once.
+func (c Config) ClaudeAccounts() []string {
+	accounts := []string{c.ClaudeConfigDir}
+	for _, dir := range c.ClaudeFallbackConfigDirs {
+		if !slices.Contains(accounts, dir) {
+			accounts = append(accounts, dir)
+		}
+	}
+	return accounts
 }
 
 // CloneDir is where a tier-2 clone of one pull request lives.
@@ -190,6 +223,11 @@ func checkClaudeConfigDir(path string, cfg Config) (Config, error) {
 	if cfg.ClaudeConfigDir != "" && !filepath.IsAbs(cfg.ClaudeConfigDir) {
 		return cfg, fmt.Errorf("%s: the claude config dir %q from claude_config_dir or CLAUDE_CONFIG_DIR is relative; give an absolute path or one that starts with ~", path, cfg.ClaudeConfigDir)
 	}
+	for _, dir := range cfg.ClaudeFallbackConfigDirs {
+		if dir != "" && !filepath.IsAbs(dir) {
+			return cfg, fmt.Errorf("%s: claude_fallback_config_dirs names %q, which is relative; give an absolute path or one that starts with ~", path, dir)
+		}
+	}
 	return cfg, nil
 }
 
@@ -198,8 +236,17 @@ func checkClaudeConfigDir(path string, cfg Config) (Config, error) {
 func expand(cfg Config) Config {
 	cfg.ReviewCodeDir = ExpandHome(cmp.Or(cfg.ReviewCodeDir, DefaultReviewCodeDir))
 	cfg.CodexSessionsDir = ExpandHome(cmp.Or(cfg.CodexSessionsDir, DefaultCodexSessionsDir))
-	cfg.ClaudeConfigDir = ExpandHome(cmp.Or(cfg.ClaudeConfigDir, os.Getenv("CLAUDE_CONFIG_DIR")))
 	cfg.ClaudeDefaultDir = ExpandHome(DefaultClaudeConfigDir)
+	if cfg.ClaudeConfigDir != "" {
+		cfg.ClaudeConfigDir = accountDir(cfg.ClaudeConfigDir, cfg.ClaudeDefaultDir)
+	} else {
+		cfg.ClaudeConfigDir = ExpandHome(os.Getenv("CLAUDE_CONFIG_DIR"))
+	}
+	fallbacks := make([]string, 0, len(cfg.ClaudeFallbackConfigDirs))
+	for _, dir := range cfg.ClaudeFallbackConfigDirs {
+		fallbacks = append(fallbacks, accountDir(dir, cfg.ClaudeDefaultDir))
+	}
+	cfg.ClaudeFallbackConfigDirs = fallbacks
 	// review-code reads these from its own environment. bash does not expand a
 	// tilde in a variable's value, so docket does not expand one either.
 	cfg.ReviewCodeWorktreeDir = os.Getenv("REVIEW_CODE_WORKTREE_DIR")
@@ -207,6 +254,19 @@ func expand(cfg Config) Config {
 	cfg.DefaultEngine = cmp.Or(cfg.DefaultEngine, EngineClaude)
 	cfg.DefaultRun = cmp.Or(cfg.DefaultRun, RunBackground)
 	return cfg
+}
+
+// accountDir resolves the ~ in an account that config.toml names and keeps the
+// rest as written, because claude derives the login it looks up from the exact
+// string. Any spelling of claude's own directory becomes "", which runs the
+// default account with CLAUDE_CONFIG_DIR unset. Setting the variable to that
+// directory would look up a login that does not exist.
+func accountDir(dir, defaultDir string) string {
+	dir = ExpandHome(dir)
+	if filepath.Clean(dir) == defaultDir {
+		return ""
+	}
+	return dir
 }
 
 // SaveKey sets one key in config.toml and keeps every other key as the file has

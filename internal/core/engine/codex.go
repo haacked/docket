@@ -97,6 +97,9 @@ const (
 	fileLayout = "2006-01-02T15-04-05"
 )
 
+// UsageLimit finds nothing. docket rotates claude accounts only.
+func (Codex) UsageLimit(string, Paths) (UsageLimit, bool) { return UsageLimit{}, false }
+
 // CaptureSessionID finds the session codex just recorded for this record and
 // returns its id. A session matches when it ran in the record's directory and
 // began no earlier than the record did. The oldest match wins.

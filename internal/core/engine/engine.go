@@ -25,6 +25,9 @@ type Paths struct {
 	// ClaudeJobs is where claude's background service keeps a status file for
 	// each background session run under ClaudeConfig.
 	ClaudeJobs string
+	// ClaudeProjects is where claude keeps the transcript of each session run
+	// under ClaudeConfig.
+	ClaudeProjects string
 }
 
 // Engine launches and resumes a review session.
@@ -50,6 +53,10 @@ type Engine interface {
 	// runs no review, so it passes none of the review-code flags. The session id
 	// it runs under is rec.AskSessionID.
 	Ask(rec review.Record, paths Paths) exec.CommandSpec
+	// UsageLimit reports whether the session's last turn ended because the
+	// agent refused it for the account's usage limit. paths names the account
+	// the session ran under.
+	UsageLimit(sessionID string, paths Paths) (UsageLimit, bool)
 }
 
 // For returns the engine with the given name.

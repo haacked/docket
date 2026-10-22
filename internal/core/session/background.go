@@ -18,7 +18,14 @@ import (
 //
 // The id arrives afterwards. claude mints its own for a background session, so
 // the record carries none until the command reports one.
+//
+// It refuses a record that still names a background session. The launch would
+// write over that id. claude would then hold the old session with no record
+// naming it. The caller stops the session and clears the id first.
 func (s *Service) StartBackground(ctx context.Context, rec review.Record) (review.Record, error) {
+	if rec.HasBackgroundSession() {
+		return rec, fmt.Errorf("%s still names background session %s; stop it before starting another", rec.Ref, rec.BGID)
+	}
 	bg, err := background(rec)
 	if err != nil {
 		return rec, err
@@ -87,16 +94,11 @@ func (s *Service) Restart(ctx context.Context, rec review.Record) (review.Record
 	if rec.State != review.StateNotStarted {
 		return rec, fmt.Errorf("%s is %s, so there is no refused launch to start again", rec.Ref, rec.State)
 	}
-	pull, err := s.openPR(ctx, rec.Ref)
+	ready, _, err := s.readyAgain(ctx, rec)
 	if err != nil {
 		return rec, err
 	}
-	rec.PRState = pull.State
-	rec, err = s.snapshot(ctx, rec)
-	if err != nil {
-		return rec, err
-	}
-	return s.StartBackground(ctx, rec)
+	return s.StartBackground(ctx, ready)
 }
 
 // ExplainRestart is the command Restart would run, without recording anything.
@@ -108,6 +110,9 @@ func (s *Service) ExplainRestart(ctx context.Context, rec review.Record) (exec.C
 	}
 	bg, err := background(rec)
 	if err != nil {
+		return exec.CommandSpec{}, err
+	}
+	if rec, _, err = s.freshAccount(rec); err != nil {
 		return exec.CommandSpec{}, err
 	}
 	return bg.StartBackground(rec, s.enginePaths(rec.ClaudeConfigDir)), nil
@@ -165,7 +170,7 @@ func (s *Service) PollBackground(ctx context.Context) ([]review.Record, map[stri
 			if running {
 				status.Progress = bg.Progress(rec.BGID, paths)
 				if status.Idle {
-					rec, running = s.settleIdle(ctx, rec, status)
+					rec, running = s.settleIdle(ctx, rec, status, bg, paths)
 				} else {
 					s.forgetIdle(rec.BGID)
 				}
@@ -278,8 +283,10 @@ func (s *Service) applyStatus(ctx context.Context, rec review.Record, found map[
 // settleIdle settles a session that has ended its turn, and reports whether the
 // session is still running. It reads GitHub once for each stretch the session
 // stays idle, keyed on the time the agent last updated its account, because a
-// session stays idle until the user answers it.
-func (s *Service) settleIdle(ctx context.Context, rec review.Record, status engine.BGStatus) (review.Record, bool) {
+// session stays idle until the user answers it. A session that posted nothing
+// and is waiting because the agent refused its turn for the account's usage
+// limit starts again under another account.
+func (s *Service) settleIdle(ctx context.Context, rec review.Record, status engine.BGStatus, bg engine.BackgroundEngine, paths engine.Paths) (review.Record, bool) {
 	s.idleMu.Lock()
 	seen, checked := s.idleSeen[rec.BGID]
 	if checked && seen.Equal(status.Progress.UpdatedAt) {
@@ -293,6 +300,14 @@ func (s *Service) settleIdle(ctx context.Context, rec review.Record, status engi
 	s.idleMu.Unlock()
 
 	settled, running, err := s.settle(ctx, rec)
+	if err == nil && running && status.Waiting() {
+		if limit, ok := bg.UsageLimit(rec.SessionID, paths); ok {
+			// The status the poll holds belongs to the refused session. The next
+			// poll lists the session that replaced it.
+			settled, err = s.startElsewhere(ctx, rec, limit)
+			running = false
+		}
+	}
 	if err != nil || !running {
 		// A failure is tried again on the next poll. A record that moved on
 		// may come back to running when the user opens its session, and the
