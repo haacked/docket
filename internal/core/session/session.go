@@ -109,10 +109,11 @@ func (s *Service) newID() string {
 // claudeConfig, which is the record's ClaudeConfigDir.
 func (s *Service) enginePaths(claudeConfig string) engine.Paths {
 	return engine.Paths{
-		Grant:         s.Cfg.AgentDirs(),
-		CodexSessions: s.Cfg.CodexSessionsDir,
-		ClaudeConfig:  claudeConfig,
-		ClaudeJobs:    s.Cfg.ClaudeJobsDir(claudeConfig),
+		Grant:          s.Cfg.AgentDirs(),
+		CodexSessions:  s.Cfg.CodexSessionsDir,
+		ClaudeConfig:   claudeConfig,
+		ClaudeJobs:     s.Cfg.ClaudeJobsDir(claudeConfig),
+		ClaudeProjects: s.Cfg.ClaudeProjectsDir(claudeConfig),
 	}
 }
 
@@ -441,6 +442,18 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 	if err != nil {
 		return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
 	}
+	claudeDir := s.Cfg.ClaudeConfigDir
+	if rotatesAccounts(eng.Name()) {
+		// Every account can be over its limit. The review starts under the one
+		// that resets first all the same. A limit raised since claude reported
+		// it then costs nothing, and a limit still in force sends the review to
+		// Did not start once the poll reads the refusal.
+		choice, err := s.newAccount()
+		if err != nil {
+			return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
+		}
+		claudeDir = choice.Account
+	}
 
 	entries := reposconf.ParseFile(s.Cfg.ReposConfPath())
 	decided, localClone := tier.Decide(ref, entries, func(path string) bool {
@@ -487,7 +500,7 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		// dry run on an install that has never cached a login therefore leaves
 		// --self off the command it prints.
 		OwnPR:           ownPR(info.Author.Login, s.Config().GitHubUser),
-		ClaudeConfigDir: s.Cfg.ClaudeConfigDir,
+		ClaudeConfigDir: claudeDir,
 	}
 	return rec, plan, info, eng, nil
 }
@@ -626,6 +639,7 @@ func (s *Service) AfterExit(ctx context.Context, rec review.Record, childErr err
 		return s.afterBackgroundExit(ctx, rec)
 	}
 	rec = s.captureSessionID(rec)
+	rec = s.noteLimit(rec, rec.SessionID)
 	return s.detect(ctx, rec)
 }
 
@@ -724,6 +738,7 @@ func (s *Service) AfterAsk(ctx context.Context, rec review.Record, childErr erro
 	} else if id != "" {
 		current.AskSessionID = id
 	}
+	current = s.noteLimit(current, current.AskSessionID)
 
 	switch current.State {
 	case review.StateDrafted, review.StateReviewed, review.StateUnreviewed:
@@ -888,6 +903,10 @@ func (s *Service) rearm(rec review.Record, intent review.Intent, mode review.Mod
 		if _, ok := engine.Background(rec.Engine); !ok {
 			return rec, fmt.Errorf("%s cannot run a review in the background", rec.Engine)
 		}
+	}
+	rec, _, err := s.freshAccount(rec)
+	if err != nil {
+		return rec, err
 	}
 	rec.Intent = intent
 	rec.Mode = mode

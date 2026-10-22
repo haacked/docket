@@ -236,8 +236,8 @@ func TestPollAsksEachAccountAboutItsOwnSessions(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	sequentialIDs(svc, "rec-a", "rec-b")
 	runner := &exec.Fake{Results: map[string]exec.Result{
-		"-u CLAUDE_CONFIG_DIR claude agents":                 {Stdout: bgListing("bbbbbbbb", "bbbbbbbb-0000-4000-8000-000000000002", "stopped", false)},
-		"CLAUDE_CONFIG_DIR=" + automation + " claude agents": {Stdout: bgListing("bbbbbbbb", "bbbbbbbb-0000-4000-8000-000000000002", "working", true)},
+		"-u CLAUDE_CONFIG_DIR claude agents": {Stdout: bgListing("bbbbbbbb", "bbbbbbbb-0000-4000-8000-000000000002", "stopped", false)},
+		underAccount(automation, "agents"):   {Stdout: bgListing("bbbbbbbb", "bbbbbbbb-0000-4000-8000-000000000002", "working", true)},
 	}}
 	runner.Results["--bg"] = exec.Result{Stdout: "backgrounded · aaaaaaaa\n"}
 	a, err := launchBackground(t, svc, runner, unlisted)
@@ -282,7 +282,7 @@ func TestAPollRecoversALostSessionFromItsRecordsAccount(t *testing.T) {
 	svc, runner, rec := startedUnderAutomation(t, &fakeGH{login: "haacked", info: prInfo()}, "working")
 	lostLaunch(t, svc, rec)
 	delete(runner.Results, "agents")
-	runner.Results["CLAUDE_CONFIG_DIR="+automation+" claude agents"] = exec.Result{Stdout: lostListing(rec)}
+	runner.Results[underAccount(automation, "agents")] = exec.Result{Stdout: lostListing(rec)}
 
 	records, _, err := svc.PollBackground(context.Background())
 	if err != nil {

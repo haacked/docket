@@ -49,6 +49,15 @@ claude_config_dir = "~/.claude-work"
 
 Each review keeps the account it started under, so a change to this setting applies only to new reviews. docket still resumes, attaches to, and stops the open ones under their own account. Each account keeps its own list of trusted directories, so the first background review under a new account shows the trust prompt again.
 
+To keep reviewing when an account runs out of usage, list the accounts to fall back to, in the order to try them. `~/.claude` names claude's default login:
+
+```toml
+claude_config_dir = "~/.claude-work"
+claude_fallback_config_dirs = ["~/.claude"]
+```
+
+When claude refuses a background review because its account is over a usage limit, and the session has posted nothing, docket stops that session and starts the review again under the next account in the list. New reviews then run under that account until it hits a limit too, and docket then moves on to the next account whose limit has reset, coming back round to the first. When every account is over its limit, the review waits under "Did not start" with the time the first limit resets, and `enter` starts it again. A review you run in this terminal shows you claude's refusal itself. docket records the limit when the session ends, so `u` and the next review move to another account. docket keeps the limits claude reported in `~/.docket/limits.jsonl`.
+
 ## Review requests
 
 `i` on the dashboard lists the open pull requests waiting on your review. The first section holds the ones that name you, and each team you choose gets a section of its own. `t` on that screen lists the teams GitHub says you belong to: `space` checks a team, `enter` saves the checked ones and searches again, and `esc` goes back without saving. Listing your teams needs the `read:org` scope, which `gh auth refresh -s read:org` grants. The choice is saved to `config.toml`, which you can also edit by hand, for instance to add a team you do not belong to:
