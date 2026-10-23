@@ -161,12 +161,14 @@ type teamsSavedMsg struct {
 // batchCheckedMsg reports what review each pull request in a batch already has,
 // in the order the rows are drawn. failed holds one line per pull request the
 // check could not read, which the batch leaves out. err is a failure that stops
-// the whole batch before the check reads anything.
+// the whole batch before the check reads anything. assign carries
+// msg.StartBatch.Assign.
 type batchCheckedMsg struct {
 	engine string
 	items  []batchItem
 	failed []string
 	err    error
+	assign bool
 }
 
 type batchItem struct {
@@ -194,12 +196,16 @@ func (b batchCheckedMsg) resolve(answer review.Intent) batchCheckedMsg {
 	return b
 }
 
-// batchStartedMsg reports a batch of background reviews. failed holds one line
-// per pull request that did not start. untrusted holds the records the agent
-// refused because it does not trust their directories yet. retry marks the
-// report of the launches that follow a trust prompt.
+// batchStartedMsg reports a batch of background reviews. assigned counts the
+// pull requests GitHub lists the user as assigned to after the batch asked,
+// including any the user was assigned to already. failed holds one line
+// per pull request that did not start or that GitHub did not assign the user
+// to. untrusted holds the records the agent refused because it does not trust
+// their directories yet. retry marks the report of the launches that follow a
+// trust prompt.
 type batchStartedMsg struct {
 	started   int
+	assigned  int
 	failed    []string
 	untrusted []review.Record
 	retry     bool

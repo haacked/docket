@@ -435,3 +435,123 @@ func TestAnUnrelatedErrorDuringTheCheckKeepsTheBatchBusy(t *testing.T) {
 		t.Error("an unrelated error let a second enter send the batch again")
 	}
 }
+
+// checkAssigning is check with the user's answer to assign themselves.
+func checkAssigning(t *testing.T, a App, urls []string, assign bool) (App, tea.Cmd) {
+	t.Helper()
+	next, cmd := a.Update(msg.StartBatch{URLs: urls, Engine: "claude", Assign: assign})
+	next, cmd = next.(App).Update(only[batchCheckedMsg](t, cmd))
+	return next.(App), cmd
+}
+
+func assignCalls(runner *exec.Fake) []string {
+	var calls []string
+	for _, line := range runner.Lines() {
+		if strings.Contains(line, "/assignees") {
+			calls = append(calls, line)
+		}
+	}
+	return calls
+}
+
+func TestABatchAssignsTheUserToEachPullRequestItStarts(t *testing.T) {
+	svc, runner := cloningService(t)
+	runner.Results["/assignees"] = exec.Result{Stdout: `{"assignees":[{"login":"haacked"}]}`}
+	other := "https://github.com/haacked/docket/pull/9"
+
+	_, cmd := checkAssigning(t, New(svc, svc.Cfg, "", false), []string{freshURL, other}, true)
+	got := only[batchStartedMsg](t, cmd)
+
+	if got.started != 2 || got.assigned != 2 || len(got.failed) != 0 {
+		t.Errorf("started %d, assigned %d, failed %q, want 2, 2, and none", got.started, got.assigned, got.failed)
+	}
+	calls := assignCalls(runner)
+	if len(calls) != 2 || !strings.Contains(calls[0], "issues/8/assignees") || !strings.Contains(calls[0], "assignees[]=haacked") || !strings.Contains(calls[1], "issues/9/assignees") {
+		t.Errorf("assign calls = %q, want #8 and #9", calls)
+	}
+}
+
+func TestABatchTheUserDidNotAskToBeAssignedToAssignsNobody(t *testing.T) {
+	svc, runner := cloningService(t)
+
+	_, cmd := checkAssigning(t, New(svc, svc.Cfg, "", false), []string{freshURL}, false)
+	only[batchStartedMsg](t, cmd)
+
+	if calls := assignCalls(runner); len(calls) != 0 {
+		t.Errorf("assign calls = %q, want none", calls)
+	}
+}
+
+// A pull request whose review did not start is not the user's to review yet.
+func TestABatchDoesNotAssignAPullRequestThatDidNotStart(t *testing.T) {
+	svc, runner := cloningService(t)
+	runner.Errs = map[string]error{"--bg": errors.New("claude exited 1")}
+
+	_, cmd := checkAssigning(t, New(svc, svc.Cfg, "", false), []string{freshURL}, true)
+	if got := only[batchStartedMsg](t, cmd); got.started != 0 || len(got.failed) != 1 {
+		t.Fatalf("started %d with failures %q, want the start to fail", got.started, got.failed)
+	}
+
+	if calls := assignCalls(runner); len(calls) != 0 {
+		t.Errorf("assign calls = %q, want none for a pull request that did not start", calls)
+	}
+}
+
+// GitHub answers 201 to an assignee it cannot add. The review still started, so
+// the report counts it and says what went wrong.
+func TestABatchReportsAnAssignmentGitHubRefused(t *testing.T) {
+	svc, runner := cloningService(t)
+	runner.Results["/assignees"] = exec.Result{Stdout: `{"assignees":[]}`}
+
+	_, cmd := checkAssigning(t, New(svc, svc.Cfg, "", false), []string{freshURL}, true)
+	got := only[batchStartedMsg](t, cmd)
+
+	if got.started != 1 || got.assigned != 0 {
+		t.Errorf("started %d and assigned %d, want 1 and 0", got.started, got.assigned)
+	}
+	if len(got.failed) != 1 || !strings.Contains(got.failed[0], "could not assign you") {
+		t.Errorf("failed = %q, want one line saying the assignment failed", got.failed)
+	}
+}
+
+// The count includes a pull request you were assigned to before the batch,
+// because GitHub keeps an assignee it is asked to add again.
+func TestABatchReportSaysHowManyPullRequestsYouAreAssignedTo(t *testing.T) {
+	next, _ := app().Update(batchStartedMsg{started: 2, assigned: 1})
+
+	if view := next.(App).View().Content; !strings.Contains(view, "Started 2 background reviews. You are now assigned to 1 pull request in the batch") {
+		t.Errorf("the view does not count the assignments:\n%s", view)
+	}
+}
+
+func TestADryRunBatchSaysItWouldAssignYouAndAssignsNobody(t *testing.T) {
+	svc, runner := batchService(t)
+	svc.Cfg.GitHubUser = "haacked"
+	a := New(svc, config.Config{DefaultEngine: "claude"}, "", true)
+
+	_, cmd := checkAssigning(t, a, []string{freshURL}, true)
+	report := only[statusMsg](t, cmd)
+
+	if !strings.Contains(report.text, "Would assign you to haacked/docket#8") {
+		t.Errorf("report = %q, want it to say it would assign you", report.text)
+	}
+	if calls := assignCalls(runner); len(calls) != 0 {
+		t.Errorf("a dry run assigned: %q", calls)
+	}
+}
+
+// A dry run says it would assign you only where the real run would, which is
+// after a review starts.
+func TestADryRunBatchDoesNotOfferToAssignYouToAPullRequestItWouldRefuse(t *testing.T) {
+	svc, runner := batchService(t)
+	svc.Cfg.GitHubUser = "haacked"
+	runner.Results["pr view"] = exec.Result{Stdout: `{"number":8,"title":"Add a thing","headRefName":"haacked/a-thing","state":"MERGED","author":{"login":"someone"}}`}
+	a := New(svc, config.Config{DefaultEngine: "claude"}, "", true)
+
+	_, cmd := checkAssigning(t, a, []string{freshURL}, true)
+	report := only[statusMsg](t, cmd)
+
+	if strings.Contains(report.text, "Would assign") {
+		t.Errorf("report = %q, want no assignment for a pull request the review refuses", report.text)
+	}
+}

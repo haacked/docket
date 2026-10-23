@@ -52,6 +52,17 @@ type fakeGH struct {
 	reviewsFor map[pr.Ref][]review.GHReview
 	// reviewErrs fails Reviews for one pull request, ahead of reviewsFor.
 	reviewErrs map[pr.Ref]error
+	// members and membersErrs answer TeamMembers, keyed by team.
+	members     map[string][]string
+	membersErrs map[string]error
+	// firstAssignees answers FirstAssignee for one pull request, and
+	// firstAssigneeErrs fails it. eventReads counts the calls.
+	firstAssignees    map[pr.Ref]string
+	firstAssigneeErrs map[pr.Ref]error
+	eventReads        int
+	// assigns records each Assign call as "ref login".
+	assigns   []string
+	assignErr error
 }
 
 // submitCall is one POST to the reviews events endpoint.
@@ -93,6 +104,20 @@ func (f *fakeGH) Teams(context.Context) ([]string, error) { return f.teams, f.te
 func (f *fakeGH) ReviewRequests(_ context.Context, query string) ([]requests.PR, error) {
 	f.searches = append(f.searches, query)
 	return f.requested[query], f.requestErrs[query]
+}
+
+func (f *fakeGH) TeamMembers(_ context.Context, team string) ([]string, error) {
+	return f.members[team], f.membersErrs[team]
+}
+
+func (f *fakeGH) FirstAssignee(_ context.Context, ref pr.Ref, _ string) (string, error) {
+	f.eventReads++
+	return f.firstAssignees[ref], f.firstAssigneeErrs[ref]
+}
+
+func (f *fakeGH) Assign(_ context.Context, ref pr.Ref, login string) error {
+	f.assigns = append(f.assigns, ref.String()+" "+login)
+	return f.assignErr
 }
 
 // SubmitReview records the call and, on success, leaves the review the way
@@ -1352,5 +1377,166 @@ func TestATeamSearchThatFailsKeepsEverySearchThatSucceeded(t *testing.T) {
 	}
 	if f.Teams[2].Err != nil || len(f.Teams[2].PRs) != 1 {
 		t.Errorf("team after the failure = %+v, want it searched", f.Teams[2])
+	}
+}
+
+// botPR is a pull request PostHog's self-driving bot opened. person marks one a
+// person started from the inbox.
+func botPR(number int, person bool) requests.PR {
+	return requests.PR{Ref: pr.Ref{Org: "o", Repo: "r", Number: number}, Author: "posthog[bot]", Bot: true, PersonStarted: person}
+}
+
+func TestRequestsReadsTheMembersOfEachTeamWithRows(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a", "PostHog/team-b"}
+	fake.requested = map[string][]requests.PR{
+		teamQuery("PostHog/team-a"): {{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}},
+	}
+	fake.members = map[string][]string{"PostHog/team-a": {"alice"}, "PostHog/team-b": {"bob"}}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if !slices.Equal(f.Teams[0].Members, []string{"alice"}) {
+		t.Errorf("team-a members = %v, want alice", f.Teams[0].Members)
+	}
+	if f.Teams[1].Members != nil {
+		t.Errorf("team-b members = %v, want none read for a team with no rows", f.Teams[1].Members)
+	}
+}
+
+func TestATeamWhoseMembersCannotBeReadKeepsItsRowsAndSaysWhy(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a"}
+	fake.requested = map[string][]requests.PR{
+		teamQuery("PostHog/team-a"): {{Ref: pr.Ref{Org: "o", Repo: "r", Number: 1}}},
+	}
+	failure := errors.New("HTTP 403: needs read:org")
+	fake.membersErrs = map[string]error{"PostHog/team-a": failure}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if !errors.Is(f.Teams[0].Err, failure) || len(f.Teams[0].PRs) != 1 {
+		t.Errorf("team = %+v, want its row kept and the failure on it", f.Teams[0])
+	}
+}
+
+// The bot assigns the person who started the pull request when it opens it. A
+// pull request the bot started by itself needs no read, because no person owns
+// it.
+func TestRequestsReadsWhoStartedEachBotPullRequestAPersonStarted(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a", "PostHog/team-b"}
+	started, auto := botPR(1, true), botPR(2, false)
+	fake.requested = map[string][]requests.PR{
+		teamQuery("PostHog/team-a"): {started, auto},
+		teamQuery("PostHog/team-b"): {started},
+	}
+	fake.firstAssignees = map[pr.Ref]string{started.Ref: "pauldambra"}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if got := f.Teams[0].PRs[0].StartedBy; got != "pauldambra" {
+		t.Errorf("started by = %q, want the first user the bot assigned", got)
+	}
+	if got := f.Teams[1].PRs[0].StartedBy; got != "pauldambra" {
+		t.Errorf("second team's started by = %q, want pauldambra", got)
+	}
+	if got := f.Teams[0].PRs[1].StartedBy; got != "" {
+		t.Errorf("auto-started pull request started by = %q, want nobody", got)
+	}
+	if fake.eventReads != 1 {
+		t.Errorf("read the events %d times, want once for the pull request a person started", fake.eventReads)
+	}
+}
+
+// CODEOWNERS asks the team of whoever started a bot's pull request to review it,
+// as it does for an author's own pull request.
+func TestRequestsLeavesOutABotPullRequestTheUserStarted(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a"}
+	mine, theirs := botPR(1, true), botPR(2, true)
+	fake.requested = map[string][]requests.PR{teamQuery("PostHog/team-a"): {mine, theirs}}
+	fake.firstAssignees = map[pr.Ref]string{mine.Ref: "Haacked", theirs.Ref: "pauldambra"}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if len(f.Teams[0].PRs) != 1 || f.Teams[0].PRs[0].Ref != theirs.Ref {
+		t.Errorf("team rows = %+v, want only #2", f.Teams[0].PRs)
+	}
+}
+
+func TestATeamWhoseStarterCannotBeReadKeepsItsRowsAndSaysWhy(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a"}
+	broken, later := botPR(1, true), botPR(2, true)
+	fake.requested = map[string][]requests.PR{teamQuery("PostHog/team-a"): {broken, later}}
+	failure := errors.New("HTTP 502")
+	fake.firstAssigneeErrs = map[pr.Ref]error{broken.Ref: failure}
+
+	f, err := svc.Requests(context.Background())
+	if err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	team := f.Teams[0]
+	if !errors.Is(team.Err, failure) || !strings.Contains(team.Err.Error(), broken.Ref.String()) {
+		t.Errorf("error = %v, want the failure naming %s", team.Err, broken.Ref)
+	}
+	if len(team.PRs) != 2 || team.PRs[0].StartedBy != "" || team.PRs[1].StartedBy != "" {
+		t.Errorf("rows = %+v, want both kept with no starter", team.PRs)
+	}
+	if fake.eventReads != 1 {
+		t.Errorf("read the events %d times, want the reads to stop at the first failure", fake.eventReads)
+	}
+}
+
+func TestAssignAddsTheSignedInUser(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+
+	if err := svc.Assign(context.Background(), listed); err != nil {
+		t.Fatalf("Assign: %v", err)
+	}
+
+	if want := []string{listed.String() + " haacked"}; !slices.Equal(fake.assigns, want) {
+		t.Errorf("assigns = %v, want %v", fake.assigns, want)
+	}
+}
+
+// requests.Group lists a pull request that also names the user as the user's,
+// so who started it changes nothing on the screen.
+func TestRequestsReadsNoStarterForAPullRequestThatNamesTheUser(t *testing.T) {
+	fake := &fakeGH{login: "haacked"}
+	svc, _ := newService(t, fake, newFakeGit())
+	svc.Cfg.Teams = []string{"PostHog/team-a"}
+	both := botPR(1, true)
+	fake.requested = map[string][]requests.PR{
+		"user-review-requested:haacked": {both},
+		teamQuery("PostHog/team-a"):     {both},
+	}
+
+	if _, err := svc.Requests(context.Background()); err != nil {
+		t.Fatalf("Requests: %v", err)
+	}
+
+	if fake.eventReads != 0 {
+		t.Errorf("read the events %d times, want none", fake.eventReads)
 	}
 }

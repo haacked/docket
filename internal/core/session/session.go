@@ -166,7 +166,12 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 // carries the error and the other searches still run. GitHub answers 422 to a
 // team it cannot resolve, so one misspelled slug would otherwise hide every
 // request. A team search leaves out the user's own pull requests, because
-// CODEOWNERS asks the author's team to review them.
+// CODEOWNERS asks the author's team to review them. For the same reason it also
+// leaves out a bot's pull request that the user started.
+//
+// Each team that has rows also reads its members and who started each of its
+// bots' pull requests, which requests.Group needs to tell who reviews what. A
+// failed read puts its reason on Team.Err and keeps the rows.
 func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 	me, err := s.peekLogin(ctx)
 	if err != nil {
@@ -178,17 +183,67 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 	}
 	f := requests.Fetched{Login: me, Mine: mine}
 	check := caughtUpCheck{s: s, me: me, skip: refsOf(mine)}
-	for _, team := range s.Config().Teams {
-		query := "team-review-requested:" + team + " -author:" + me
-		prs, err := s.GH.ReviewRequests(ctx, query)
-		if err == nil {
-			if prs, err = check.drop(ctx, prs); err != nil {
-				err = fmt.Errorf("could not tell which of these you already reviewed: %w", err)
+	starters := map[pr.Ref]string{}
+	for _, slug := range s.Config().Teams {
+		team := requests.Team{Slug: slug}
+		prs, err := s.GH.ReviewRequests(ctx, "team-review-requested:"+slug+" -author:"+me)
+		if err != nil {
+			team.Err = err
+			f.Teams = append(f.Teams, team)
+			continue
+		}
+		var errs []error
+		if prs, err = check.drop(ctx, prs); err != nil {
+			errs = append(errs, fmt.Errorf("could not tell which of these you already reviewed: %w", err))
+		}
+		if prs, err = s.fillStarters(ctx, prs, mine, starters); err != nil {
+			errs = append(errs, err)
+		}
+		prs = slices.DeleteFunc(prs, func(p requests.PR) bool { return ownPR(p.Owner(), me) })
+		if len(prs) > 0 {
+			if team.Members, err = s.GH.TeamMembers(ctx, slug); err != nil {
+				errs = append(errs, fmt.Errorf("could not read the team's members, so no pull request shows as covered by one: %w", err))
 			}
 		}
-		f.Teams = append(f.Teams, requests.Team{Slug: team, PRs: prs, Err: err})
+		team.PRs, team.Err = prs, errors.Join(errs...)
+		f.Teams = append(f.Teams, team)
 	}
 	return f, nil
+}
+
+// fillStarters sets StartedBy on each bot's pull request that a person started,
+// from the first user the bot assigned to it. It skips the pull requests in
+// mine, because requests.Group lists those as the user's whoever started them.
+// known holds the starters already read, so a pull request that two teams'
+// searches return is read once. The first read that fails ends the reads. The
+// pull requests it did not reach keep an empty StartedBy.
+func (s *Service) fillStarters(ctx context.Context, prs, mine []requests.PR, known map[pr.Ref]string) ([]requests.PR, error) {
+	prs = slices.Clone(prs)
+	for i, p := range prs {
+		if !p.PersonStarted || slices.ContainsFunc(mine, func(m requests.PR) bool { return m.Ref.Equal(p.Ref) }) {
+			continue
+		}
+		starter, ok := known[p.Ref]
+		if !ok {
+			var err error
+			if starter, err = s.GH.FirstAssignee(ctx, p.Ref, p.Author); err != nil {
+				return prs, fmt.Errorf("could not tell who started %s: %w", p.Ref, err)
+			}
+			known[p.Ref] = starter
+		}
+		prs[i].StartedBy = starter
+	}
+	return prs, nil
+}
+
+// Assign adds the user to the pull request's assignees, which tells the user's
+// teammates that the user took its review.
+func (s *Service) Assign(ctx context.Context, ref pr.Ref) error {
+	me, err := s.Login(ctx)
+	if err != nil {
+		return err
+	}
+	return s.GH.Assign(ctx, ref, me)
 }
 
 // caughtUpCheck leaves out of each team's search the pull requests the user has

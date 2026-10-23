@@ -27,14 +27,18 @@ type Styles struct {
 }
 
 type Model struct {
-	// Sections is what the screen draws: every section SetSections was given,
-	// less the draft pull requests while ShowDrafts is false.
+	// Sections is what the screen draws: every section SetList was given, less
+	// the draft pull requests while ShowDrafts is false. The covered section
+	// keeps its rows while ShowCovered is false, so its heading can count them.
 	Sections []requests.Section
-	all      []requests.Section
+	all      requests.List
 	// ShowDrafts is false until the user presses d, so the list starts with only
 	// the pull requests that are ready for review.
 	ShowDrafts bool
-	Cursor     int
+	// ShowCovered is false until the user presses c, so the list starts with
+	// only the pull requests nobody on the team has taken.
+	ShowCovered bool
+	Cursor      int
 	// Marked holds the URLs the user marked with space. A key on the URL rather
 	// than the cursor position keeps each mark on its pull request when a
 	// refresh reorders the rows.
@@ -46,6 +50,9 @@ type Model struct {
 	// Busy is true from the enter that sends a batch until the root answers.
 	// A second enter in that time does nothing.
 	Busy bool
+	// Unassigned is how many marked pull requests you are not assigned to
+	// while the screen asks whether to assign you. It is zero otherwise.
+	Unassigned int
 	// Existing lists the marked pull requests that already have a review of
 	// yours while the screen asks what to do with them. It is empty otherwise.
 	Existing []Existing
@@ -69,14 +76,14 @@ func New(styles Styles, engine string) Model {
 	return Model{Styles: styles, Engine: engine, Marked: map[string]bool{}}
 }
 
-// SetSections replaces the list and keeps the cursor on the pull request it was
-// on. A mark is dropped when its pull request has left the list or now has an
-// open record, because a batch would skip it and the mark would claim otherwise.
-func (m Model) SetSections(sections []requests.Section) Model {
+// SetList replaces the list and keeps the cursor on the pull request it was on.
+// A mark is dropped when its pull request has left the list or now has an open
+// record, because a batch would skip it and the mark would claim otherwise.
+func (m Model) SetList(list requests.List) Model {
 	selected, had := m.Selected()
-	m.all, m.Sections = sections, sections
+	m.all, m.Sections = list, list.Sections
 	if !m.ShowDrafts {
-		m.Sections = withoutDrafts(sections)
+		m.Sections = withoutDrafts(list.Sections)
 	}
 
 	rows := m.rows()
@@ -84,6 +91,12 @@ func (m Model) SetSections(sections []requests.Section) Model {
 		if !slices.ContainsFunc(rows, func(r requests.Row) bool { return r.Ref.URL() == url && r.State == "" }) {
 			delete(m.Marked, url)
 		}
+	}
+	// A reload can drop marks while the screen asks whether to assign you. The
+	// question then counts the marks that are left. It closes when no marked
+	// pull request is left that you are not assigned to.
+	if m.Unassigned > 0 {
+		m.Unassigned = m.unassigned()
 	}
 	if had {
 		if i := slices.IndexFunc(rows, func(r requests.Row) bool { return r.Ref.Equal(selected.Ref) }); i >= 0 {
@@ -95,21 +108,12 @@ func (m Model) SetSections(sections []requests.Section) Model {
 	return m
 }
 
-// withoutDrafts drops the draft pull requests from sections, and any group
-// they leave empty. It keeps every section, so a section's index is the same in
-// both lists.
+// withoutDrafts drops the draft pull requests from sections. It keeps every
+// section, so a section's index is the same in both lists.
 func withoutDrafts(sections []requests.Section) []requests.Section {
 	out := make([]requests.Section, 0, len(sections))
 	for _, s := range sections {
-		var groups []requests.AssigneeGroup
-		for _, g := range s.Groups {
-			rows := slices.DeleteFunc(slices.Clone(g.Rows), func(r requests.Row) bool { return r.IsDraft })
-			if len(rows) > 0 {
-				g.Rows = rows
-				groups = append(groups, g)
-			}
-		}
-		s.Groups = groups
+		s.Rows = slices.DeleteFunc(slices.Clone(s.Rows), func(r requests.Row) bool { return r.IsDraft })
 		out = append(out, s)
 	}
 	return out
@@ -117,10 +121,15 @@ func withoutDrafts(sections []requests.Section) []requests.Section {
 
 // hiddenIn counts the drafts that withoutDrafts dropped from section i.
 func (m Model) hiddenIn(i int) int {
-	if m.ShowDrafts || i >= len(m.all) {
+	if m.ShowDrafts || i >= len(m.all.Sections) {
 		return 0
 	}
-	return len(m.all[i].Rows()) - len(m.Sections[i].Rows())
+	return len(m.all.Sections[i].Rows) - len(m.Sections[i].Rows)
+}
+
+// shows reports whether the screen draws the rows of s.
+func (m Model) shows(s requests.Section) bool {
+	return s.Kind != requests.Covered || m.ShowCovered
 }
 
 // SetExisting switches the screen to asking what to do with the marked pull
@@ -131,9 +140,10 @@ func (m Model) SetExisting(found []Existing, others int) Model {
 	return m
 }
 
-// Asking reports whether the screen is asking what to do with the marked pull
-// requests that already have a review.
-func (m Model) Asking() bool { return len(m.Existing) > 0 }
+// Asking reports whether the screen is asking a question about the marked pull
+// requests: whether to assign you, or what to do with the ones that already have
+// a review.
+func (m Model) Asking() bool { return m.Unassigned > 0 || len(m.Existing) > 0 }
 
 // Selected is the row under the cursor.
 func (m Model) Selected() (requests.Row, bool) {
@@ -147,7 +157,9 @@ func (m Model) Selected() (requests.Row, bool) {
 func (m Model) rows() []requests.Row {
 	var rows []requests.Row
 	for _, s := range m.Sections {
-		rows = append(rows, s.Rows()...)
+		if m.shows(s) {
+			rows = append(rows, s.Rows...)
+		}
 	}
 	return rows
 }
@@ -156,6 +168,9 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 	key, ok := message.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
+	}
+	if m.Unassigned > 0 {
+		return m.confirmAssign(key)
 	}
 	if m.Asking() {
 		return m.choose(key)
@@ -189,6 +204,9 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		if urls := m.markedURLs(); len(urls) > 0 {
+			if m.Unassigned = m.unassigned(); m.Unassigned > 0 {
+				return m, nil
+			}
 			m.Busy = true
 			return m, msg.Send(msg.StartBatch{URLs: urls, Engine: m.Engine})
 		}
@@ -216,7 +234,10 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		return m, msg.Send(msg.RefreshRequests{})
 	case "d":
 		m.ShowDrafts = !m.ShowDrafts
-		return m.SetSections(m.all), nil
+		return m.SetList(m.all), nil
+	case "c":
+		m.ShowCovered = !m.ShowCovered
+		return m.SetList(m.all), nil
 	case "t":
 		return m, msg.Send(msg.OpenTeams{})
 	case "esc":
@@ -225,6 +246,22 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		return m, msg.Send(msg.OpenHelp{})
 	}
 	return m, nil
+}
+
+// confirmAssign handles the keys of the step that asks whether to assign you to
+// the marked pull requests you are not assigned to. Either answer starts every
+// marked pull request.
+func (m Model) confirmAssign(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.Unassigned = 0
+		return m, nil
+	case "y", "n":
+	default:
+		return m, nil
+	}
+	m.Unassigned, m.Busy = 0, true
+	return m, msg.Send(msg.StartBatch{URLs: m.markedURLs(), Engine: m.Engine, Assign: key.String() == "y"})
 }
 
 // choose handles the keys of the step that asks what to do with the marked pull
@@ -254,19 +291,35 @@ func (m Model) choose(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, msg.Send(msg.AnswerBatch{Intent: string(intent)})
 }
 
-// markedURLs lists the marks in the order the rows are drawn, so a batch starts
-// the pull requests top to bottom.
+// markedRows lists the marked rows in the order they are drawn, so a batch
+// starts the pull requests top to bottom.
+func (m Model) markedRows() []requests.Row {
+	return slices.DeleteFunc(m.rows(), func(row requests.Row) bool { return !m.Marked[row.Ref.URL()] })
+}
+
+// unassigned counts the marked pull requests you are not assigned to.
+func (m Model) unassigned() int {
+	n := 0
+	for _, row := range m.markedRows() {
+		if !row.AssignedMe {
+			n++
+		}
+	}
+	return n
+}
+
 func (m Model) markedURLs() []string {
 	var urls []string
-	for _, row := range m.rows() {
-		if m.Marked[row.Ref.URL()] {
-			urls = append(urls, row.Ref.URL())
-		}
+	for _, row := range m.markedRows() {
+		urls = append(urls, row.Ref.URL())
 	}
 	return urls
 }
 
 func (m Model) View() string {
+	if m.Unassigned > 0 {
+		return m.assignView()
+	}
 	if m.Asking() {
 		return m.existingView()
 	}
@@ -275,34 +328,45 @@ func (m Model) View() string {
 	}
 
 	var lines []string
+	for _, err := range m.all.Errs {
+		lines = append(lines, m.Styles.Dim.Render(format.Truncate(format.OneLine(err), format.Width(m.Width))))
+	}
+	if len(lines) > 0 {
+		lines = append(lines, "")
+	}
 	cursorLine := 0
 	index := 0
 	for i, s := range m.Sections {
-		title := "Requested of me"
-		if s.Team != "" {
-			title = s.Team
+		count, hidden := len(s.Rows), m.hiddenIn(i)
+		// Only a team's request can need a reviewer or be covered.
+		noTeam := s.Kind != requests.Yours && m.all.Teams == 0
+		emptyCovered := s.Kind == requests.Covered && count == 0 && hidden == 0
+		if noTeam || emptyCovered {
+			continue
 		}
-		count, hidden := len(s.Rows()), m.hiddenIn(i)
-		heading := m.Styles.Group.Render(fmt.Sprintf("%s (%d)", title, count))
+		heading := m.Styles.Group.Render(fmt.Sprintf("%s (%d)", title(s.Kind), count))
 		if hidden > 0 {
 			heading += m.Styles.Dim.Render(fmt.Sprintf(" · %d %s hidden", hidden, format.Plural(hidden, "draft")))
 		}
+		if !m.shows(s) && count > 0 {
+			heading += m.Styles.Dim.Render(" · hidden")
+		}
 		lines = append(lines, heading)
-		switch {
-		case s.Err != nil:
-			lines = append(lines, m.Styles.Dim.Render(format.Truncate("  "+format.OneLine(s.Err), format.Width(m.Width))))
-		case count == 0 && hidden == 0:
+		if count == 0 && hidden == 0 {
 			lines = append(lines, m.Styles.Dim.Render("  none"))
 		}
-		for _, g := range s.Groups {
-			lines = append(lines, m.Styles.Assignee.Render(fmt.Sprintf("  %s (%d)", assignedTo(g), len(g.Rows))))
-			for _, row := range g.Rows {
-				if index == m.Cursor {
-					cursorLine = len(lines)
-				}
-				lines = append(lines, m.row(row, index == m.Cursor))
-				index++
+		for j, row := range s.Rows {
+			if !m.shows(s) {
+				break
 			}
+			if s.Kind == requests.NeedsReviewer && (j == 0 || row.Teammate != s.Rows[j-1].Teammate) {
+				lines = append(lines, m.Styles.Assignee.Render(fmt.Sprintf("  %s (%d)", whose(row.Teammate), countTeammate(s.Rows, row.Teammate))))
+			}
+			if index == m.Cursor {
+				cursorLine = len(lines)
+			}
+			lines = append(lines, m.row(s.Kind, row, index == m.Cursor))
+			index++
 		}
 		lines = append(lines, "")
 	}
@@ -310,14 +374,33 @@ func (m Model) View() string {
 	return format.Pane(m.header(), lines, cursorLine, m.Height)
 }
 
-func assignedTo(g requests.AssigneeGroup) string {
-	switch {
-	case g.Mine:
-		return "Assigned to me"
-	case g.Assignee == "":
-		return "Unassigned"
+func title(kind requests.Kind) string {
+	switch kind {
+	case requests.Yours:
+		return "Yours"
+	case requests.NeedsReviewer:
+		return "Needs a reviewer"
 	}
-	return "Assigned to " + g.Assignee
+	return "Covered by a teammate"
+}
+
+// whose names the group of pull requests that need a reviewer by whether a
+// member of the team that asked owns them.
+func whose(teammate bool) string {
+	if teammate {
+		return "Your team"
+	}
+	return "Everyone else"
+}
+
+func countTeammate(rows []requests.Row, teammate bool) int {
+	n := 0
+	for _, r := range rows {
+		if r.Teammate == teammate {
+			n++
+		}
+	}
+	return n
 }
 
 // header says what a mark does, because space and enter do something different
@@ -335,6 +418,29 @@ func (m Model) header() string {
 		header += m.Styles.Dim.Render(" · ") + m.Spinner.Render("refreshing")
 	}
 	return header
+}
+
+func (m Model) assignView() string {
+	width := format.Width(m.Width)
+	n, marked := m.Unassigned, len(m.Marked)
+	question := fmt.Sprintf("Assign yourself on GitHub to the %d marked pull requests?", n)
+	switch {
+	case n < marked:
+		question = fmt.Sprintf("Assign yourself on GitHub to %d of the %d marked pull requests?", n, marked)
+	case n == 1:
+		question = "Assign yourself on GitHub to the marked pull request?"
+	}
+	lines := []string{m.Styles.Group.Render(format.Truncate(question, width))}
+	if n < marked {
+		lines = append(lines, m.Styles.Dim.Render(format.Truncate(fmt.Sprintf("You are already assigned to the other %d.", marked-n), width)))
+	}
+	return strings.Join(append(lines,
+		m.Styles.Dim.Render(format.Truncate("Your teammates' lists then show that you took the review.", width)),
+		"",
+		"y  yes: assign you once each review starts",
+		"n  no: start the reviews without assigning you",
+		"esc  back to the list",
+	), "\n")
 }
 
 func (m Model) existingView() string {
@@ -360,7 +466,7 @@ func (m Model) existingView() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m Model) row(row requests.Row, selected bool) string {
+func (m Model) row(kind requests.Kind, row requests.Row, selected bool) string {
 	cursor := "  "
 	style := m.Styles.Row
 	if selected {
@@ -379,18 +485,46 @@ func (m Model) row(row requests.Row, selected bool) string {
 	}
 
 	head := fmt.Sprintf("%s%s %s  ", cursor, mark, row.Ref)
-	meta := []string{row.Author, m.age(row.UpdatedAt)}
+	author := row.Author
+	if row.StartedBy != "" {
+		author += " for " + row.StartedBy
+	}
+	meta := []string{author, m.age(row.UpdatedAt)}
 	if row.IsDraft {
 		meta = append(meta, "draft")
 	}
-	if row.State != "" {
-		meta = append(meta, row.State.Label())
+	if why := why(kind, row); why != "" {
+		meta = append(meta, why)
+	}
+	if m.all.Teams > 1 && !row.AskedMe() {
+		_, team, _ := strings.Cut(row.Team, "/")
+		meta = append(meta, team)
 	}
 	left, fitted := format.Row(head, row.Title, "· "+strings.Join(meta, " · "), format.Width(m.Width))
 	if fitted == "" {
 		return style.Render(left)
 	}
 	return style.Render(left) + " " + m.Styles.Dim.Render(fitted)
+}
+
+// why says what put the row in its section, beyond what the section's heading
+// says.
+func why(kind requests.Kind, row requests.Row) string {
+	switch {
+	case row.State != "":
+		return row.State.Label()
+	case kind == requests.Covered:
+		return "assigned to " + row.Reviewer
+	case kind == requests.NeedsReviewer && row.Reviewer != "":
+		return row.Reviewer + " assigned, not on the team"
+	case kind != requests.Yours:
+		return ""
+	case row.AskedMe():
+		return "asked you"
+	case row.AssignedMe:
+		return "assigned to you"
+	}
+	return ""
 }
 
 func (m Model) age(t time.Time) string {

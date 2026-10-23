@@ -266,3 +266,17 @@ func TestTheReportAfterATrustPromptKeepsWhatTheBatchFailed(t *testing.T) {
 		}
 	}
 }
+
+// A launch that waits on the trust prompt keeps its record, so the review is the
+// user's whatever the prompt's answer.
+func TestABatchAssignsAPullRequestWhoseLaunchWaitsOnTheTrustPrompt(t *testing.T) {
+	a, runner := untrustedService(t)
+	runner.Results["/assignees"] = exec.Result{Stdout: `{"assignees":[{"login":"haacked"}]}`}
+
+	_, cmd := checkAssigning(t, *a, []string{freshURL}, true)
+	got := only[batchStartedMsg](t, cmd)
+
+	if len(got.untrusted) != 1 || got.assigned != 1 {
+		t.Errorf("untrusted %d and assigned %d, want 1 and 1", len(got.untrusted), got.assigned)
+	}
+}

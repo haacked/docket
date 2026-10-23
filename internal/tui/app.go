@@ -317,7 +317,7 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return a.stillWorking(), nil
 		}
 		a = a.startWork(fmt.Sprintf("Checking %d pull %s for a review of yours", len(message.URLs), format.Plural(len(message.URLs), "request")))
-		return a, a.checkBatch(message.URLs, message.Engine)
+		return a, a.checkBatch(message)
 
 	case batchCheckedMsg:
 		a.working = ""
@@ -352,6 +352,9 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case batchStartedMsg:
 		a.working = ""
 		status := fmt.Sprintf("Started %d background %s", message.started, format.Plural(message.started, "review"))
+		if message.assigned > 0 {
+			status += fmt.Sprintf(". You are now assigned to %d pull %s in the batch", message.assigned, format.Plural(message.assigned, "request"))
+		}
 		if len(message.failed) > 0 {
 			status += "\n" + failures(message.failed)
 		}
@@ -1156,19 +1159,19 @@ func teamList(teams []string) string {
 // append or overwrite. Without that answer, review-code asks the question in a
 // background session where nobody can answer it. The check writes nothing, so
 // a dry run runs it too and asks the same question.
-func (a App) checkBatch(urls []string, engineName string) tea.Cmd {
+func (a App) checkBatch(start msg.StartBatch) tea.Cmd {
 	svc, dryRun := a.svc, a.dryRun
 	return func() tea.Msg {
 		// Looking the binary up here is what keeps a missing one from costing
 		// the user an answer and then a tier-2 clone.
 		if !dryRun {
-			if err := checkEngine(engineName); err != nil {
+			if err := checkEngine(start.Engine); err != nil {
 				return batchCheckedMsg{err: err}
 			}
 		}
 		ctx := context.Background()
-		checked := batchCheckedMsg{engine: engineName}
-		for _, url := range urls {
+		checked := batchCheckedMsg{engine: start.Engine, assign: start.Assign}
+		for _, url := range start.URLs {
 			ref, err := pr.ParseRef(url, "")
 			if err != nil {
 				checked.failed = append(checked.failed, err.Error())
@@ -1213,13 +1216,23 @@ func (a App) startBatch(checked batchCheckedMsg) tea.Cmd {
 		done := batchStartedMsg{failed: checked.failed}
 		for _, item := range checked.items {
 			rec, err := startOne(ctx, svc, item.ref, checked.engine, item.intent)
+			untrusted := errors.Is(err, session.ErrUntrusted)
 			switch {
-			case errors.Is(err, session.ErrUntrusted):
+			case untrusted:
 				done.untrusted = append(done.untrusted, rec)
 			case err != nil:
 				done.failed = append(done.failed, err.Error())
 			default:
 				done.started++
+			}
+			// A launch that waits on the trust prompt still has its record, so
+			// the review is the user's whatever the prompt's answer.
+			if checked.assign && (err == nil || untrusted) {
+				if err := svc.Assign(ctx, item.ref); err != nil {
+					done.failed = append(done.failed, fmt.Sprintf("%s: could not assign you: %v", item.ref, err))
+				} else {
+					done.assigned++
+				}
 			}
 		}
 		return done
@@ -1316,25 +1329,31 @@ func (a App) explainBatch(checked batchCheckedMsg) tea.Cmd {
 	return func() tea.Msg {
 		var lines []string
 		for _, item := range checked.items {
-			lines = append(lines, explainOne(svc, item.ref, checked.engine, item.intent))
+			line, err := explainOne(svc, item.ref, checked.engine, item.intent)
+			lines = append(lines, line)
+			if checked.assign && err == nil {
+				lines = append(lines, "Would assign you to "+item.ref.String())
+			}
 		}
 		return statusMsg{text: strings.Join(append(lines, checked.failed...), "\n")}
 	}
 }
 
-func explainOne(svc *session.Service, ref pr.Ref, engineName string, intent review.Intent) string {
+// explainOne returns the line a dry run reports for one pull request, and the
+// error that would stop its review from starting.
+func explainOne(svc *session.Service, ref pr.Ref, engineName string, intent review.Intent) (string, error) {
 	plan, spec, err := svc.Explain(context.Background(), ref, engineName, review.ModeBackground, intent)
 	if err != nil {
-		return fmt.Sprintf("%s: %v", ref, err)
+		return fmt.Sprintf("%s: %v", ref, err), err
 	}
-	return ref.String() + ": " + explainLine(plan, spec)
+	return ref.String() + ": " + explainLine(plan, spec), nil
 }
 
 // regroup rebuilds the requests screen from the last search and the records as
 // they now stand. It does nothing before the first search.
 func (a App) regroup() App {
 	if a.fetched != nil {
-		a.reqs = a.reqs.SetSections(requests.Group(*a.fetched, a.dash.Records))
+		a.reqs = a.reqs.SetList(requests.Group(*a.fetched, a.dash.Records))
 	}
 	return a
 }
