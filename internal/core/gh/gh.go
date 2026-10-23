@@ -256,7 +256,8 @@ func (c *CLI) TeamMembers(ctx context.Context, team string) ([]string, error) {
 // FirstAssignee returns the first user that assigner assigned to the pull
 // request, or "" when assigner assigned nobody. It reads the issue events API,
 // which lists events and none of the comments the timeline also carries. That
-// API names the assigner in "assigner" and the assignee as "actor".
+// API puts the assignee in both "assignee" and "actor", so only "assigner" says
+// who made the assignment.
 func (c *CLI) FirstAssignee(ctx context.Context, ref pr.Ref, assigner string) (string, error) {
 	path := fmt.Sprintf("repos/%s/%s/issues/%d/events", ref.Org, ref.Repo, ref.Number)
 	res, err := c.run(ctx, "api", "-X", "GET", "--paginate", "--slurp", path, "-f", "per_page=100")
@@ -301,7 +302,7 @@ func (c *CLI) Assign(ctx context.Context, ref pr.Ref, login string) error {
 		return fmt.Errorf("parse the answer to assigning %s to %s: %w", login, ref, err)
 	}
 	if !slices.ContainsFunc(issue.Assignees, func(a review.GHUser) bool { return strings.EqualFold(a.Login, login) }) {
-		return fmt.Errorf("GitHub did not assign %s to %s, which it does for a user without push access", login, ref)
+		return fmt.Errorf("GitHub left %s out of the assignees of %s, as it does for a user without push access", login, ref)
 	}
 	return nil
 }

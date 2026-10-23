@@ -256,13 +256,11 @@ func (m Model) confirmAssign(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
 		m.Unassigned = 0
-		return m, nil
 	case "y", "n":
-	default:
-		return m, nil
+		m.Unassigned, m.Busy = 0, true
+		return m, msg.Send(msg.StartBatch{URLs: m.markedURLs(), Engine: m.Engine, Assign: key.String() == "y"})
 	}
-	m.Unassigned, m.Busy = 0, true
-	return m, msg.Send(msg.StartBatch{URLs: m.markedURLs(), Engine: m.Engine, Assign: key.String() == "y"})
+	return m, nil
 }
 
 // choose handles the keys of the step that asks what to do with the marked pull

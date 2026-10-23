@@ -556,6 +556,16 @@ func TestABatchReportSaysHowManyPullRequestsYouAreAssignedTo(t *testing.T) {
 	}
 }
 
+// A batch the user answered no to assigns nobody, so its report says nothing
+// about assignments.
+func TestABatchReportThatAssignedNobodySaysNothingAboutAssignments(t *testing.T) {
+	next, _ := app().Update(batchStartedMsg{started: 2})
+
+	if view := next.(App).View().Content; strings.Contains(view, "assigned") {
+		t.Errorf("the view mentions assignments for a batch that made none:\n%s", view)
+	}
+}
+
 func TestADryRunBatchSaysItWouldAssignYouAndAssignsNobody(t *testing.T) {
 	svc, runner := batchService(t)
 	svc.Cfg.GitHubUser = "haacked"

@@ -456,6 +456,16 @@ func TestAssignAddsTheUserToTheAssignees(t *testing.T) {
 	}
 }
 
+// The user types github_user in config.toml by hand, so its case can differ
+// from the login GitHub answers with.
+func TestAssignMatchesTheLoginWithoutCase(t *testing.T) {
+	fake := &exec.Fake{Results: map[string]exec.Result{"assignees": {Stdout: `{"assignees":[{"login":"Haacked"}]}`}}}
+
+	if err := New(fake).Assign(context.Background(), ref, "haacked"); err != nil {
+		t.Errorf("Assign: %v, want GitHub's Haacked to match haacked", err)
+	}
+}
+
 // GitHub answers 201 to an assignee it cannot add and leaves the assignee out.
 func TestAssignFailsWhenGitHubLeavesTheUserOut(t *testing.T) {
 	fake := &exec.Fake{Results: map[string]exec.Result{"assignees": {Stdout: `{"assignees":[{"login":"vdekrijger"}]}`}}}
