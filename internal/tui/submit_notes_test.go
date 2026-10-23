@@ -472,11 +472,11 @@ func TestTheDashboardFooterPlacesTheArchivedToggleBeforeHelpAndQuit(t *testing.T
 }
 
 // The root cuts the requests screen's header at the terminal's width. The
-// footer wraps instead, so the drafts toggle goes there.
-func TestTheRequestsFooterPlacesTheDraftsToggleBeforeHelpAndBack(t *testing.T) {
+// footer wraps instead, so the toggles go there.
+func TestTheRequestsFooterPlacesTheTogglesBeforeHelpAndBack(t *testing.T) {
 	a := app()
 	a.screen, a.width = msg.Requests, 400
-	want := "space mark · enter start · o github · r refresh · t teams · d show drafts · ? help · esc back · ctrl+c quit"
+	want := "space mark · enter start · o github · r refresh · t teams · d show drafts · c show covered · ? help · esc back · ctrl+c quit"
 	if got := ansi.Strip(a.footer()); got != want {
 		t.Errorf("footer = %q, want %q", got, want)
 	}
@@ -485,6 +485,12 @@ func TestTheRequestsFooterPlacesTheDraftsToggleBeforeHelpAndBack(t *testing.T) {
 	want = strings.Replace(want, "d show drafts", "d hide drafts", 1)
 	if got := ansi.Strip(a.footer()); got != want {
 		t.Errorf("footer with drafts shown = %q, want %q", got, want)
+	}
+
+	a.reqs.ShowCovered = true
+	want = strings.Replace(want, "c show covered", "c hide covered", 1)
+	if got := ansi.Strip(a.footer()); got != want {
+		t.Errorf("footer with covered shown = %q, want %q", got, want)
 	}
 }
 

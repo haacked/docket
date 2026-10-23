@@ -87,10 +87,12 @@ type RefreshRequests struct{}
 
 // StartBatch starts a background review of each pull request under Engine. The
 // root first reads what review each one already has. When any has one, the root
-// asks the requests screen for an AnswerBatch before it starts anything.
+// asks the requests screen for an AnswerBatch before it starts anything. Assign
+// asks for the user to be assigned to each pull request once its review starts.
 type StartBatch struct {
 	URLs   []string
 	Engine string
+	Assign bool
 }
 
 // AnswerBatch says what to do with the pull requests in a batch that already have

@@ -34,18 +34,41 @@ func row(number int, state review.State) requests.Row {
 	return r
 }
 
-// section is a section whose rows are all in one group of unassigned pull
-// requests.
-func section(team string, rows ...requests.Row) requests.Section {
-	return requests.Section{Team: team, Groups: []requests.AssigneeGroup{{Rows: rows}}}
+// teamRow is a row the team o/team asked for.
+func teamRow(number int) requests.Row {
+	r := row(number, "")
+	r.Team = "o/team"
+	return r
 }
 
-// newModel draws "me" with #1 and #2, then a team with #3. #2 has an open record.
+// list builds what requests.Group returns after a search of the team o/team.
+func list(yours, needs, covered []requests.Row) requests.List {
+	return requests.List{
+		Sections: []requests.Section{
+			{Kind: requests.Yours, Rows: yours},
+			{Kind: requests.NeedsReviewer, Rows: needs},
+			{Kind: requests.Covered, Rows: covered},
+		},
+		Teams: 1,
+	}
+}
+
+func rows(r ...requests.Row) []requests.Row { return r }
+
+// newModel draws #1 asked of me and #2, which has an open record, under Yours.
+// It then draws the team's #3, which needs a reviewer.
 func newModel() Model {
-	return New(Styles{}, "claude").SetSections([]requests.Section{
-		section("", row(1, ""), row(2, review.StateReviewing)),
-		section("o/team", row(3, "")),
-	})
+	return New(Styles{}, "claude").SetList(list(rows(row(1, ""), row(2, review.StateReviewing)), rows(teamRow(3)), nil))
+}
+
+// startMarked presses enter and answers no if the screen asks whether to
+// assign you.
+func startMarked(m Model) (Model, tea.Cmd) {
+	m, cmd := m.Update(enter)
+	if m.Unassigned > 0 {
+		return m.Update(key("n"))
+	}
+	return m, cmd
 }
 
 func sent(t *testing.T, cmd tea.Cmd) tea.Msg {
@@ -90,7 +113,7 @@ func TestEnterWithMarksStartsABatchOfOnlyTheMarked(t *testing.T) {
 	m, _ = m.Update(space)
 	m, _ = m.Update(key("g"))
 
-	_, cmd := m.Update(enter)
+	_, cmd := startMarked(m)
 
 	got, ok := sent(t, cmd).(msg.StartBatch)
 	if !ok {
@@ -107,7 +130,7 @@ func TestABatchListsTheMarkedRowsTopToBottom(t *testing.T) {
 	m, _ = m.Update(key("g"))
 	m, _ = m.Update(space)
 
-	_, cmd := m.Update(enter)
+	_, cmd := startMarked(m)
 
 	got, ok := sent(t, cmd).(msg.StartBatch)
 	if !ok {
@@ -123,32 +146,25 @@ func TestABatchListsTheMarkedRowsTopToBottom(t *testing.T) {
 func TestTheCursorFollowsItsPullRequestWhenTheRowsAreReplaced(t *testing.T) {
 	m, _ := newModel().Update(key("G"))
 
-	m = m.SetSections([]requests.Section{
-		section("", row(3, ""), row(1, "")),
-	})
+	m = m.SetList(list(rows(teamRow(3), row(1, "")), nil, nil))
 
 	if selected, ok := m.Selected(); !ok || selected.Ref.Number != 3 {
 		t.Errorf("selected = %v (ok=%v), want #3", selected.Ref, ok)
 	}
 }
 
-// grouped draws one team whose #1 is assigned to me, #2 to nobody, and #3 to
-// alice.
+// grouped draws #1 under Yours, then the teammate's #2 and the outsider's #3,
+// which both need a reviewer, then #4, which a teammate covers.
 func grouped() Model {
-	return New(Styles{}, "claude").SetSections([]requests.Section{{
-		Team: "o/team",
-		Groups: []requests.AssigneeGroup{
-			{Mine: true, Rows: []requests.Row{row(1, "")}},
-			{Rows: []requests.Row{row(2, "")}},
-			{Assignee: "alice", Rows: []requests.Row{row(3, "")}},
-		},
-	}})
+	mate := teamRow(2)
+	mate.Teammate = true
+	return New(Styles{}, "claude").SetList(list(rows(row(1, "")), rows(mate, teamRow(3)), rows(teamRow(4))))
 }
 
-func TestTheViewHeadsEachGroupWithItsAssignee(t *testing.T) {
+func TestTheViewHeadsEachSectionAndSplitsTheOnesThatNeedAReviewerByTeam(t *testing.T) {
 	view := grouped().View()
 
-	want := []string{"o/team (3)", "Assigned to me (1)", "o/r#1", "Unassigned (1)", "o/r#2", "Assigned to alice (1)", "o/r#3"}
+	want := []string{"Yours (1)", "o/r#1", "Needs a reviewer (2)", "Your team (1)", "o/r#2", "Everyone else (1)", "o/r#3", "Covered by a teammate (1) · hidden"}
 	at := 0
 	for _, w := range want {
 		i := strings.Index(view[at:], w)
@@ -159,36 +175,132 @@ func TestTheViewHeadsEachGroupWithItsAssignee(t *testing.T) {
 	}
 }
 
-// A reload can move a row to another group. Its mark goes with it.
-func TestAMarkFollowsItsPullRequestWhenTheRowsAreReplaced(t *testing.T) {
-	m, _ := grouped().Update(key("j"))
-	m, _ = m.Update(space)
+// A group of the pull requests that need a reviewer heads itself only when it
+// has rows.
+func TestTheViewDrawsNoHeadingForAnEmptyTeamGroup(t *testing.T) {
+	view := New(Styles{}, "claude").SetList(list(nil, rows(teamRow(3)), nil)).View()
 
-	m = m.SetSections([]requests.Section{{
-		Team:   "o/team",
-		Groups: []requests.AssigneeGroup{{Mine: true, Rows: []requests.Row{row(1, ""), row(2, "")}}},
-	}})
-
-	if !m.Marked[row(2, "").Ref.URL()] {
-		t.Errorf("marked = %v, want #2 kept", m.Marked)
-	}
-	if selected, ok := m.Selected(); !ok || selected.Ref.Number != 2 {
-		t.Errorf("selected = %v (ok=%v), want #2", selected.Ref, ok)
+	if strings.Contains(view, "Your team") || !strings.Contains(view, "Everyone else (1)") {
+		t.Errorf("want only the group with rows:\n%s", view)
 	}
 }
 
-// withDraft draws "me" with the draft #1 and the ready #2. It then draws a team
-// whose only row is the draft #3, assigned to alice.
+// A row whose team's members docket could not read may be a teammate's, and its
+// assignee may be a member.
+func TestTheViewClaimsNothingAboutTheTeamWhenItsMembersAreUnknown(t *testing.T) {
+	unknown := teamRow(3)
+	unknown.MembersUnknown, unknown.Reviewer = true, "gustavohstrassburger"
+
+	view := New(Styles{}, "claude").SetList(list(nil, rows(unknown), nil)).View()
+
+	if strings.Contains(view, "not on the team") || strings.Contains(view, "Everyone else") || !strings.Contains(view, "gustavohstrassburger assigned") {
+		t.Errorf("want the assignee named with no claim about the team:\n%s", view)
+	}
+}
+
+// With no team configured, only a request that names you can list, so the two
+// sections about a team's requests have nothing to say.
+func TestTheViewDrawsOnlyYoursWhenNoTeamWasSearched(t *testing.T) {
+	l := list(rows(row(1, "")), nil, nil)
+	l.Teams = 0
+
+	view := New(Styles{}, "claude").SetList(l).View()
+
+	if strings.Contains(view, "Needs a reviewer") || strings.Contains(view, "Covered") {
+		t.Errorf("the view draws a team's sections with no team searched:\n%s", view)
+	}
+}
+
+func TestTheViewLeavesOutAnEmptyCoveredSection(t *testing.T) {
+	view := newModel().View()
+
+	if strings.Contains(view, "Covered") {
+		t.Errorf("the view draws an empty covered section:\n%s", view)
+	}
+	if !strings.Contains(view, "Needs a reviewer (1)") {
+		t.Errorf("the view does not draw the pull requests that need a reviewer:\n%s", view)
+	}
+}
+
+func TestTheViewSaysNoneUnderAnEmptySection(t *testing.T) {
+	view := New(Styles{}, "claude").SetList(list(rows(row(1, "")), nil, nil)).View()
+
+	if !strings.Contains(view, "Needs a reviewer (0)\n  none") {
+		t.Errorf("the view does not say no pull request needs a reviewer:\n%s", view)
+	}
+}
+
+// The covered pull requests are hidden until c, because a teammate has taken
+// them.
+func TestCoveredPullRequestsAreHiddenUntilC(t *testing.T) {
+	m, _ := grouped().Update(key("G"))
+
+	if strings.Contains(m.View(), "o/r#4") {
+		t.Errorf("the view shows the covered #4 before c:\n%s", m.View())
+	}
+	if selected, _ := m.Selected(); selected.Ref.Number != 3 {
+		t.Errorf("selected = %v, want the last row shown, #3", selected.Ref)
+	}
+
+	m, _ = m.Update(key("c"))
+	m, _ = m.Update(key("G"))
+
+	view := m.View()
+	if !strings.Contains(view, "Covered by a teammate (1)\n") || !strings.Contains(view, "o/r#4") {
+		t.Errorf("the view does not show the covered #4 after c:\n%s", view)
+	}
+	if selected, _ := m.Selected(); selected.Ref.Number != 4 {
+		t.Errorf("selected = %v, want #4", selected.Ref)
+	}
+}
+
+// Hiding the covered rows drops their marks, because a batch would otherwise
+// start a row the user cannot see.
+func TestHidingTheCoveredRowsDropsTheirMarks(t *testing.T) {
+	m, _ := grouped().Update(key("c"))
+	m, _ = m.Update(key("G"))
+	m, _ = m.Update(space)
+
+	m, _ = m.Update(key("c"))
+
+	if len(m.Marked) != 0 {
+		t.Errorf("marked = %v, want the hidden row's mark dropped", m.Marked)
+	}
+}
+
+func TestShownCoveredRowsStayShownWhenTheRowsAreReplaced(t *testing.T) {
+	m, _ := grouped().Update(key("c"))
+
+	m = m.SetList(grouped().all)
+
+	if !strings.Contains(m.View(), "o/r#4") {
+		t.Errorf("the covered row is hidden again after a reload:\n%s", m.View())
+	}
+}
+
+// A reload can move a row to another section. Its mark goes with it.
+func TestAMarkFollowsItsPullRequestWhenTheRowsAreReplaced(t *testing.T) {
+	m, _ := newModel().Update(key("G"))
+	m, _ = m.Update(space)
+
+	m = m.SetList(list(rows(row(1, ""), teamRow(3)), nil, nil))
+
+	if !m.Marked[row(3, "").Ref.URL()] {
+		t.Errorf("marked = %v, want #3 kept", m.Marked)
+	}
+	if selected, ok := m.Selected(); !ok || selected.Ref.Number != 3 {
+		t.Errorf("selected = %v (ok=%v), want #3", selected.Ref, ok)
+	}
+}
+
+// withDraft draws the draft #1 and the ready #2 under Yours, and the draft #3
+// under the pull requests that need a reviewer.
 func withDraft() Model {
-	draft := func(number int) requests.Row {
-		r := row(number, "")
+	draft := func(r requests.Row) requests.Row {
 		r.IsDraft = true
 		return r
 	}
-	return New(Styles{Dim: lipgloss.NewStyle().Faint(true)}, "claude").SetSections([]requests.Section{
-		section("", draft(1), row(2, "")),
-		{Team: "o/team", Groups: []requests.AssigneeGroup{{Assignee: "alice", Rows: []requests.Row{draft(3)}}}},
-	})
+	return New(Styles{Dim: lipgloss.NewStyle().Faint(true)}, "claude").SetList(list(rows(draft(row(1, "")), row(2, "")), rows(draft(teamRow(3))), nil))
 }
 
 // The list leaves out a draft until the user presses d, because a draft is not
@@ -197,12 +309,12 @@ func TestDraftsAreHiddenUntilD(t *testing.T) {
 	m := withDraft()
 
 	view := ansi.Strip(m.View())
-	for _, hidden := range []string{"o/r#1", "o/r#3", "alice"} {
+	for _, hidden := range []string{"o/r#1", "o/r#3"} {
 		if strings.Contains(view, hidden) {
 			t.Errorf("the view shows %q while drafts are hidden:\n%s", hidden, view)
 		}
 	}
-	for _, heading := range []string{"Requested of me (1) · 1 draft hidden", "o/team (0) · 1 draft hidden"} {
+	for _, heading := range []string{"Yours (1) · 1 draft hidden", "Needs a reviewer (0) · 1 draft hidden"} {
 		if !strings.Contains(view, heading) {
 			t.Errorf("the view does not head a section %q:\n%s", heading, view)
 		}
@@ -217,7 +329,7 @@ func TestDraftsAreHiddenUntilD(t *testing.T) {
 	m, _ = m.Update(key("d"))
 
 	view = ansi.Strip(m.View())
-	for _, shown := range []string{"o/r#1", "o/r#3", "Assigned to alice (1)"} {
+	for _, shown := range []string{"o/r#1", "o/r#3"} {
 		if !strings.Contains(view, shown) {
 			t.Errorf("the view does not show %q after d:\n%s", shown, view)
 		}
@@ -279,7 +391,7 @@ func TestADraftCanBeMarkedWhileShownAndHidingItDropsTheMark(t *testing.T) {
 func TestShownDraftsStayShownWhenTheRowsAreReplaced(t *testing.T) {
 	m, _ := withDraft().Update(key("d"))
 
-	m = m.SetSections(withDraft().all)
+	m = m.SetList(withDraft().all)
 
 	if !strings.Contains(m.View(), "o/r#1") {
 		t.Errorf("the draft is hidden again after a reload:\n%s", m.View())
@@ -291,9 +403,7 @@ func TestReplacingTheRowsDropsMarksThatCanNoLongerStart(t *testing.T) {
 	m, _ = m.Update(key("G"))
 	m, _ = m.Update(space)
 
-	m = m.SetSections([]requests.Section{
-		section("", row(1, review.StateReviewing), row(2, review.StateReviewing)),
-	})
+	m = m.SetList(list(rows(row(1, review.StateReviewing), row(2, review.StateReviewing)), nil, nil))
 
 	if len(m.Marked) != 0 {
 		t.Errorf("marked = %v, want #1 dropped for its record and #3 for leaving the list", m.Marked)
@@ -311,7 +421,7 @@ func TestEnterWithNothingMarkedPrefillsTheNewReviewScreen(t *testing.T) {
 }
 
 // The cursor moves over pull requests only. Stepping off the last row of one
-// section lands on the first row of the next, never on the team's heading.
+// section lands on the first row of the next, never on its heading.
 func TestCursorSkipsSectionHeaders(t *testing.T) {
 	m, _ := newModel().Update(key("j"))
 	m, _ = m.Update(key("j"))
@@ -356,7 +466,7 @@ func TestEnterOnARowWithARecordResumesIt(t *testing.T) {
 }
 
 func TestEnterOnAnEmptyListSendsNothing(t *testing.T) {
-	m := New(Styles{}, "claude").SetSections([]requests.Section{{}})
+	m := New(Styles{}, "claude").SetList(list(nil, nil, nil))
 
 	if _, cmd := m.Update(enter); cmd != nil {
 		t.Errorf("enter on an empty list sent %#v", cmd())
@@ -384,7 +494,7 @@ func TestOOnARowWithARecordOpensItsReview(t *testing.T) {
 }
 
 func TestOOnAnEmptyListSendsNothing(t *testing.T) {
-	m := New(Styles{}, "claude").SetSections([]requests.Section{{}})
+	m := New(Styles{}, "claude").SetList(list(nil, nil, nil))
 
 	if _, cmd := m.Update(key("o")); cmd != nil {
 		t.Errorf("o on an empty list sent %#v", cmd())
@@ -405,7 +515,7 @@ func TestSpaceMarksNothingWhenNoEngineHasABackgroundMode(t *testing.T) {
 func TestEnterSendsTheBatchWithTheScreensEngine(t *testing.T) {
 	m, _ := newModel().Update(space)
 
-	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, cmd := startMarked(m)
 
 	got, ok := sent(t, cmd).(msg.StartBatch)
 	if !ok || got.Engine != "claude" {
@@ -425,12 +535,12 @@ func TestTheViewMarksRowsAndCountsTheMarks(t *testing.T) {
 	}
 }
 
-// A team whose rows docket could not check shows them under the reason, so the
-// user knows the list may hold pull requests they already reviewed.
-func TestTheViewShowsATeamsRowsUnderItsError(t *testing.T) {
-	team := section("o/team", row(1, ""))
-	team.Err = errors.New("could not tell which of these you already reviewed")
-	m := New(Styles{}, "claude").SetSections([]requests.Section{{}, team})
+// A team whose rows docket could not check shows the reason above the rows, so
+// the user knows the list may hold pull requests they already reviewed.
+func TestTheViewShowsATeamsErrorAboveTheRows(t *testing.T) {
+	l := list(nil, rows(teamRow(1)), nil)
+	l.Errs = []error{errors.New("o/team: could not tell which of these you already reviewed")}
+	m := New(Styles{}, "claude").SetList(l)
 
 	view := m.View()
 
@@ -440,13 +550,12 @@ func TestTheViewShowsATeamsRowsUnderItsError(t *testing.T) {
 	}
 }
 
-// A team GitHub cannot resolve keeps its heading, so the user can see which
-// entry in the config to fix.
+// A team GitHub cannot resolve names itself, so the user can see which entry in
+// the config to fix.
 func TestTheViewShowsATeamsSearchError(t *testing.T) {
-	m := New(Styles{}, "claude").SetSections([]requests.Section{
-		section("", row(1, "")),
-		{Team: "o/typo", Err: errors.New("search team-review-requested:o/typo: HTTP 422")},
-	})
+	l := list(rows(row(1, "")), nil, nil)
+	l.Errs = []error{errors.New("o/typo: search team-review-requested:o/typo: HTTP 422")}
+	m := New(Styles{}, "claude").SetList(l)
 
 	view := m.View()
 
@@ -455,6 +564,82 @@ func TestTheViewShowsATeamsSearchError(t *testing.T) {
 	}
 	if !strings.Contains(view, "o/r#1") {
 		t.Errorf("the view dropped the search that succeeded:\n%s", view)
+	}
+}
+
+func TestEachRowSaysWhatPutItInItsSection(t *testing.T) {
+	asked := row(1, "")
+	assigned := teamRow(2)
+	assigned.AssignedMe = true
+	recorded := teamRow(3)
+	recorded.State, recorded.RecordID = review.StateDrafted, "rec-3"
+	outsider := teamRow(4)
+	outsider.Reviewer = "ioannisj"
+	nobody := teamRow(5)
+	covered := teamRow(6)
+	covered.Reviewer = "gustavohstrassburger"
+	m, _ := New(Styles{}, "claude").SetList(list(rows(asked, assigned, recorded), rows(outsider, nobody), rows(covered))).Update(key("c"))
+
+	lines := strings.Split(m.View(), "\n")
+	line := func(n int) string {
+		for _, l := range lines {
+			if strings.Contains(l, fmt.Sprintf("o/r#%d ", n)) {
+				return l
+			}
+		}
+		t.Fatalf("no line for #%d:\n%s", n, strings.Join(lines, "\n"))
+		return ""
+	}
+	for n, want := range map[int]string{
+		1: "asked you",
+		2: "assigned to you",
+		3: "drafted",
+		4: "ioannisj assigned, not on the team",
+		6: "assigned to gustavohstrassburger",
+	} {
+		if got := line(n); !strings.HasSuffix(got, want) {
+			t.Errorf("#%d = %q, want it to end with %q", n, got, want)
+		}
+	}
+	if got := line(5); strings.Contains(got, "assigned") {
+		t.Errorf("#5 = %q, want no assignee named", got)
+	}
+}
+
+// PostHog's bot opens the pull request, so the person who started it is who
+// owns it.
+func TestABotsRowNamesThePersonWhoStartedIt(t *testing.T) {
+	r := teamRow(1)
+	r.Author, r.Bot, r.StartedBy = "posthog[bot]", true, "pauldambra"
+
+	view := New(Styles{}, "claude").SetList(list(nil, rows(r), nil)).View()
+
+	if !strings.Contains(view, "posthog[bot] for pauldambra") {
+		t.Errorf("the row does not name who started it:\n%s", view)
+	}
+}
+
+// With one team every row is that team's. With two, each row says which team
+// asked.
+func TestARowNamesItsTeamOnlyWhenSeveralWereSearched(t *testing.T) {
+	line := func(l requests.List) string {
+		for _, line := range strings.Split(New(Styles{}, "claude").SetList(l).View(), "\n") {
+			if strings.Contains(line, "o/r#1 ") {
+				return line
+			}
+		}
+		t.Fatal("no line for #1")
+		return ""
+	}
+	l := list(nil, rows(teamRow(1)), nil)
+	if got := line(l); strings.HasSuffix(got, "· team") {
+		t.Errorf("a single team's row names its team: %q", got)
+	}
+
+	l.Teams = 2
+
+	if got := line(l); !strings.HasSuffix(got, "· team") {
+		t.Errorf("the row does not name its team: %q", got)
 	}
 }
 
@@ -492,9 +677,7 @@ func TestAOneLinePaneStillShowsOnlyTheCursorsRow(t *testing.T) {
 }
 
 func TestARowWithNoReviewPostedSaysSo(t *testing.T) {
-	m := New(Styles{}, "claude").SetSections([]requests.Section{
-		section("", row(1, review.StateUnreviewed)),
-	})
+	m := New(Styles{}, "claude").SetList(list(rows(row(1, review.StateUnreviewed)), nil, nil))
 
 	view := m.View()
 	if !strings.Contains(view, "no review posted") || strings.Contains(view, "unreviewed") {
@@ -510,7 +693,7 @@ func asking() Model {
 	m, _ := newModel().Update(space)
 	m, _ = m.Update(key("G"))
 	m, _ = m.Update(space)
-	m, _ = m.Update(enter)
+	m, _ = startMarked(m)
 	return m.SetExisting([]Existing{{Ref: "o/r#1", Found: review.Found{NotesAt: notesWritten, Submitted: true}}}, 1)
 }
 
@@ -518,7 +701,7 @@ func asking() Model {
 // second enter in that time would check and start the same batch twice.
 func TestASecondEnterWhileTheBatchIsCheckedSendsNothing(t *testing.T) {
 	m, _ := newModel().Update(space)
-	m, _ = m.Update(enter)
+	m, _ = startMarked(m)
 
 	if _, cmd := m.Update(enter); cmd != nil {
 		t.Errorf("the second enter sent %#v", cmd())
@@ -592,7 +775,7 @@ func TestEscFromTheChoiceKeepsTheMarks(t *testing.T) {
 	if len(m.Marked) != 2 {
 		t.Errorf("marked = %v, want both marks kept", m.Marked)
 	}
-	if _, cmd := m.Update(enter); cmd == nil {
+	if _, cmd := startMarked(m); cmd == nil {
 		t.Error("enter after esc did not start the batch again")
 	}
 }
@@ -653,5 +836,137 @@ func TestTOpensTheTeamsScreen(t *testing.T) {
 func TestTSendsNothingDuringTheChoice(t *testing.T) {
 	if _, cmd := asking().Update(key("t")); cmd != nil {
 		t.Errorf("t sent %#v during the choice", cmd())
+	}
+}
+
+// confirming is the screen asking whether to assign you to #1 and #3, two of
+// the three marked pull requests. You are assigned to the third, #4.
+func confirming(t *testing.T) Model {
+	t.Helper()
+	mine := teamRow(4)
+	mine.AssignedMe = true
+	m := New(Styles{}, "claude").SetList(list(rows(row(1, ""), mine), rows(teamRow(3)), nil))
+	for range 3 {
+		m, _ = m.Update(space)
+		m, _ = m.Update(key("j"))
+	}
+
+	m, cmd := m.Update(enter)
+
+	if cmd != nil {
+		t.Fatalf("enter sent %#v before the answer", cmd())
+	}
+	if !m.Asking() {
+		t.Fatal("enter did not ask whether to assign you")
+	}
+	return m
+}
+
+func TestEnterAsksWhetherToAssignYouToTheMarkedPullRequestsYouAreNotAssignedTo(t *testing.T) {
+	view := confirming(t).View()
+
+	for _, want := range []string{"Assign yourself on GitHub to 2 of the 3 marked pull requests?", "already assigned to the other 1."} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the question does not show %q:\n%s", want, view)
+		}
+	}
+}
+
+// GitHub keeps an assignee it is asked to add again, so the batch asks to
+// assign you to all three.
+func TestYesStartsTheBatchAndAssignsYou(t *testing.T) {
+	_, cmd := confirming(t).Update(key("y"))
+
+	got, ok := sent(t, cmd).(msg.StartBatch)
+	if !ok || len(got.URLs) != 3 || !got.Assign {
+		t.Errorf("y sent %#v, want all three marked and you assigned", cmd())
+	}
+}
+
+func TestNoStartsTheBatchWithoutAssigningYou(t *testing.T) {
+	_, cmd := confirming(t).Update(key("n"))
+
+	got, ok := sent(t, cmd).(msg.StartBatch)
+	if !ok || len(got.URLs) != 3 || got.Assign {
+		t.Errorf("n sent %#v, want all three marked and nobody assigned", cmd())
+	}
+}
+
+func TestEscFromTheAssignQuestionKeepsTheMarks(t *testing.T) {
+	m, cmd := confirming(t).Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if cmd != nil {
+		t.Errorf("esc sent %#v", cmd())
+	}
+	if m.Asking() || len(m.Marked) != 3 {
+		t.Errorf("asking = %v with marks %v, want the list back with all three marks", m.Asking(), m.Marked)
+	}
+}
+
+func TestOtherKeysDoNothingDuringTheAssignQuestion(t *testing.T) {
+	before := confirming(t)
+	for _, k := range []tea.KeyPressMsg{space, enter, key("a"), key("j"), key("c")} {
+		m, cmd := before.Update(k)
+		if cmd != nil {
+			t.Errorf("%q sent %#v during the question", k.String(), cmd())
+		}
+		if !m.Asking() || len(m.Marked) != 3 || m.Cursor != before.Cursor {
+			t.Errorf("%q changed the screen during the question", k.String())
+		}
+	}
+}
+
+// The root answers the batch once it has checked it. A second key before then
+// would start the same batch twice.
+func TestASecondAnswerToTheAssignQuestionSendsNothing(t *testing.T) {
+	m, _ := confirming(t).Update(key("y"))
+
+	if _, cmd := m.Update(key("n")); cmd != nil {
+		t.Errorf("the second answer sent %#v", cmd())
+	}
+	if _, cmd := m.Update(enter); cmd != nil {
+		t.Errorf("enter after the answer sent %#v", cmd())
+	}
+}
+
+func TestEnterAsksNothingWhenYouAreAssignedToEveryMarkedPullRequest(t *testing.T) {
+	mine := teamRow(4)
+	mine.AssignedMe = true
+	m, _ := New(Styles{}, "claude").SetList(list(rows(mine), nil, nil)).Update(space)
+
+	m, cmd := m.Update(enter)
+
+	if m.Asking() {
+		t.Error("enter asked whether to assign you to a pull request you are assigned to")
+	}
+	if got, ok := sent(t, cmd).(msg.StartBatch); !ok || got.Assign {
+		t.Errorf("enter sent %#v, want a batch that assigns nobody", cmd())
+	}
+}
+
+// The index watcher can reload the list while the question is up, and a reload
+// drops the mark of a row that now has a record.
+func TestAReloadDuringTheAssignQuestionCountsTheMarksThatAreLeft(t *testing.T) {
+	m := confirming(t)
+	mine := teamRow(4)
+	mine.AssignedMe = true
+
+	m = m.SetList(list(rows(row(1, review.StateReviewing), mine), rows(teamRow(3)), nil))
+
+	if m.Unassigned != 1 || !strings.Contains(m.View(), "Assign yourself on GitHub to 1 of the 2 marked pull requests?") {
+		t.Errorf("unassigned = %d, want the question to count #3 alone:\n%s", m.Unassigned, m.View())
+	}
+}
+
+func TestAReloadThatLeavesNothingToAssignClosesTheQuestion(t *testing.T) {
+	m := confirming(t)
+
+	m = m.SetList(list(rows(row(1, review.StateReviewing)), rows(row(3, review.StateReviewing)), nil))
+
+	if m.Asking() {
+		t.Errorf("the question is still up with no mark left: unassigned = %d", m.Unassigned)
+	}
+	if _, cmd := m.Update(key("y")); cmd != nil {
+		t.Errorf("y sent %#v with nothing marked", cmd())
 	}
 }

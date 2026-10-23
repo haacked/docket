@@ -40,6 +40,9 @@ type GitHub interface {
 	SubmitReview(ctx context.Context, ref pr.Ref, reviewID int64, event, body string) error
 	ReviewRequests(ctx context.Context, query string) ([]requests.PR, error)
 	Teams(ctx context.Context) ([]string, error)
+	TeamMembers(ctx context.Context, team string) ([]string, error)
+	FirstAssignee(ctx context.Context, ref pr.Ref, assigner string) (string, error)
+	Assign(ctx context.Context, ref pr.Ref, login string) error
 }
 
 // CLI talks to GitHub through the gh command.
@@ -128,8 +131,10 @@ type searchItem struct {
 	HTMLURL string `json:"html_url"`
 	Title   string `json:"title"`
 	Draft   bool   `json:"draft"`
+	Body    string `json:"body"`
 	User    struct {
 		Login string `json:"login"`
+		Type  string `json:"type"`
 	} `json:"user"`
 	Assignees []struct {
 		Login string `json:"login"`
@@ -174,13 +179,16 @@ func (c *CLI) ReviewRequests(ctx context.Context, query string) ([]requests.PR, 
 			for _, a := range item.Assignees {
 				assignees = append(assignees, a.Login)
 			}
+			bot := item.User.Type == "Bot"
 			prs = append(prs, requests.PR{
-				Ref:       ref,
-				Title:     item.Title,
-				Author:    item.User.Login,
-				Assignees: assignees,
-				IsDraft:   item.Draft,
-				UpdatedAt: item.UpdatedAt,
+				Ref:           ref,
+				Title:         item.Title,
+				Author:        item.User.Login,
+				Bot:           bot,
+				PersonStarted: bot && requests.StartedByAPerson(item.Body),
+				Assignees:     assignees,
+				IsDraft:       item.Draft,
+				UpdatedAt:     item.UpdatedAt,
 			})
 		}
 	}
@@ -216,4 +224,85 @@ func (c *CLI) Teams(ctx context.Context) ([]string, error) {
 		}
 	}
 	return teams, nil
+}
+
+// TeamMembers lists the logins of an "org/team" team's members. It needs the
+// token's read:org scope, as Teams does.
+func (c *CLI) TeamMembers(ctx context.Context, team string) ([]string, error) {
+	org, slug, ok := strings.Cut(team, "/")
+	if !ok {
+		return nil, fmt.Errorf("team %q is not org/team", team)
+	}
+	res, err := c.run(ctx, "api", "-X", "GET", "--paginate", "--slurp", "orgs/"+org+"/teams/"+slug+"/members", "-f", "per_page=100")
+	if err != nil {
+		return nil, fmt.Errorf("gh api members of %s: %w", team, err)
+	}
+	out := strings.TrimSpace(res.Stdout)
+	if out == "" {
+		return nil, nil
+	}
+
+	var pages [][]review.GHUser
+	if err := json.Unmarshal([]byte(out), &pages); err != nil {
+		return nil, fmt.Errorf("parse the members of %s: %w", team, err)
+	}
+	var members []string
+	for _, m := range slices.Concat(pages...) {
+		members = append(members, m.Login)
+	}
+	return members, nil
+}
+
+// FirstAssignee returns the first user that assigner assigned to the pull
+// request, or "" when assigner assigned nobody. It reads the issue events API,
+// which lists events and none of the comments the timeline also carries. That
+// API puts the assignee in both "assignee" and "actor", so only "assigner" says
+// who made the assignment.
+func (c *CLI) FirstAssignee(ctx context.Context, ref pr.Ref, assigner string) (string, error) {
+	path := fmt.Sprintf("repos/%s/%s/issues/%d/events", ref.Org, ref.Repo, ref.Number)
+	res, err := c.run(ctx, "api", "-X", "GET", "--paginate", "--slurp", path, "-f", "per_page=100")
+	if err != nil {
+		return "", fmt.Errorf("gh api events of %s: %w", ref, err)
+	}
+	out := strings.TrimSpace(res.Stdout)
+	if out == "" {
+		return "", nil
+	}
+
+	var pages [][]struct {
+		Event    string        `json:"event"`
+		Assigner review.GHUser `json:"assigner"`
+		Assignee review.GHUser `json:"assignee"`
+	}
+	if err := json.Unmarshal([]byte(out), &pages); err != nil {
+		return "", fmt.Errorf("parse the events of %s: %w", ref, err)
+	}
+	for _, e := range slices.Concat(pages...) {
+		if e.Event == "assigned" && strings.EqualFold(e.Assigner.Login, assigner) {
+			return e.Assignee.Login, nil
+		}
+	}
+	return "", nil
+}
+
+// Assign adds login to the pull request's assignees and keeps the ones already
+// there. GitHub answers 201 and leaves out a user it cannot assign, such as one
+// without push access to the repository. Assign therefore reads the assignees
+// GitHub answers with and fails when login is not among them.
+func (c *CLI) Assign(ctx context.Context, ref pr.Ref, login string) error {
+	path := fmt.Sprintf("repos/%s/%s/issues/%d/assignees", ref.Org, ref.Repo, ref.Number)
+	res, err := c.run(ctx, "api", "-X", "POST", path, "-f", "assignees[]="+login)
+	if err != nil {
+		return fmt.Errorf("assign %s to %s: %w", login, ref, err)
+	}
+	var issue struct {
+		Assignees []review.GHUser `json:"assignees"`
+	}
+	if err := json.Unmarshal([]byte(res.Stdout), &issue); err != nil {
+		return fmt.Errorf("parse the answer to assigning %s to %s: %w", login, ref, err)
+	}
+	if !slices.ContainsFunc(issue.Assignees, func(a review.GHUser) bool { return strings.EqualFold(a.Login, login) }) {
+		return fmt.Errorf("GitHub left %s out of the assignees of %s, as it does for a user without push access", login, ref)
+	}
+	return nil
 }

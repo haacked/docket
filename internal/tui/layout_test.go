@@ -114,7 +114,7 @@ func TestANarrowTerminalWrapsTheFooterBetweenHints(t *testing.T) {
 	a := sizedTo(app(), width, 24)
 	view := ansi.Strip(a.View().Content)
 
-	for _, e := range helpFor(msg.Dashboard, false, false, false) {
+	for _, e := range helpFor(msg.Dashboard, toggles{}, false) {
 		if hint := e.Key + " " + e.Short; !strings.Contains(view, hint) {
 			t.Errorf("the footer is missing %q or splits it:\n%s", hint, view)
 		}
@@ -172,7 +172,7 @@ func TestAnEightyColumnTerminalSaysDraftsAreHidden(t *testing.T) {
 	next, _ := sizedTo(loaded.(App), 80, 24).Update(msg.OpenRequests{})
 	view := ansi.Strip(next.(App).View().Content)
 
-	for _, want := range []string{"Requested of me (1) · 1 draft hidden", "d show drafts"} {
+	for _, want := range []string{"Yours (1) · 1 draft hidden", "d show drafts"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the view does not show %q:\n%s", want, view)
 		}

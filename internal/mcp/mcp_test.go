@@ -72,6 +72,12 @@ func (f *fakeGitHub) ReviewRequests(context.Context, string) ([]requests.PR, err
 
 func (f *fakeGitHub) Teams(context.Context) ([]string, error) { return nil, nil }
 
+func (f *fakeGitHub) TeamMembers(context.Context, string) ([]string, error) { return nil, nil }
+
+func (f *fakeGitHub) FirstAssignee(context.Context, pr.Ref, string) (string, error) { return "", nil }
+
+func (f *fakeGitHub) Assign(context.Context, pr.Ref, string) error { return nil }
+
 func (f *fakeGitHub) post(r review.GHReview) {
 	r.User.Login = me
 	f.reviews = append(f.reviews, r)
