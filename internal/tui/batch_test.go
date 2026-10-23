@@ -255,12 +255,12 @@ const (
 )
 
 // askingApp has notes for #7 and nothing for #8, and the root has checked a
-// batch of both.
-func askingApp(t *testing.T, dryRun bool) (App, *session.Service, *exec.Fake) {
+// batch of both. assign is the user's answer to assigning themselves.
+func askingApp(t *testing.T, dryRun, assign bool) (App, *session.Service, *exec.Fake) {
 	t.Helper()
 	svc, runner := cloningService(t)
 	writeNotes(t, svc, 7)
-	a, cmd := check(t, New(svc, svc.Cfg, "", dryRun), reviewedURL, freshURL)
+	a, cmd := checkAssigning(t, New(svc, svc.Cfg, "", dryRun), []string{reviewedURL, freshURL}, assign)
 	if cmd != nil {
 		t.Fatalf("the batch ran %#v before the user answered", drain(cmd))
 	}
@@ -271,7 +271,7 @@ func askingApp(t *testing.T, dryRun bool) (App, *session.Service, *exec.Fake) {
 // leave review-code asking whether to append or overwrite in a session nobody
 // watches. The batch starts nothing until the user answers.
 func TestABatchAsksBeforeStartingAPullRequestThatAlreadyHasAReview(t *testing.T) {
-	a, svc, _ := askingApp(t, false)
+	a, svc, _ := askingApp(t, false, false)
 
 	if a.screen != msg.Requests {
 		t.Errorf("screen = %v, want the requests screen asking", a.screen)
@@ -291,7 +291,7 @@ func TestABatchAsksBeforeStartingAPullRequestThatAlreadyHasAReview(t *testing.T)
 }
 
 func TestAnAnsweredBatchStartsEachPullRequestWithItsIntent(t *testing.T) {
-	a, svc, runner := askingApp(t, false)
+	a, svc, runner := askingApp(t, false, false)
 
 	next, cmd := a.Update(msg.AnswerBatch{Intent: string(review.IntentAppend)})
 	got := only[batchStartedMsg](t, cmd)
@@ -315,7 +315,7 @@ func TestAnAnsweredBatchStartsEachPullRequestWithItsIntent(t *testing.T) {
 }
 
 func TestSkippingStartsOnlyThePullRequestsWithNoReview(t *testing.T) {
-	a, svc, _ := askingApp(t, false)
+	a, svc, _ := askingApp(t, false, false)
 
 	_, cmd := a.Update(msg.AnswerBatch{})
 	got := only[batchStartedMsg](t, cmd)
@@ -329,10 +329,42 @@ func TestSkippingStartsOnlyThePullRequestsWithNoReview(t *testing.T) {
 	}
 }
 
+// The root holds the batch while it asks about the existing review, and the
+// answer to assigning the user has to survive that wait.
+func TestAnAnsweredBatchAssignsTheUserToEachPullRequestItStarts(t *testing.T) {
+	cases := []struct {
+		name   string
+		answer msg.AnswerBatch
+		want   []string
+	}{
+		{"append", msg.AnswerBatch{Intent: string(review.IntentAppend)}, []string{"issues/7/assignees", "issues/8/assignees"}},
+		{"skip", msg.AnswerBatch{}, []string{"issues/8/assignees"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, _, runner := askingApp(t, false, true)
+			runner.Results["/assignees"] = exec.Result{Stdout: `{"assignees":[{"login":"haacked"}]}`}
+
+			_, cmd := a.Update(c.answer)
+			got := only[batchStartedMsg](t, cmd)
+
+			calls := assignCalls(runner)
+			if got.assigned != len(c.want) || len(calls) != len(c.want) {
+				t.Fatalf("assigned %d with calls %q, want %q", got.assigned, calls, c.want)
+			}
+			for i, want := range c.want {
+				if !strings.Contains(calls[i], want) {
+					t.Errorf("assign call %d = %q, want %s", i, calls[i], want)
+				}
+			}
+		})
+	}
+}
+
 // The check reads GitHub, which a dry run may do, so a dry run asks the same
 // question and then explains the commands the answer would run.
 func TestADryRunBatchAsksAndExplainsTheAnswer(t *testing.T) {
-	a, svc, runner := askingApp(t, true)
+	a, svc, runner := askingApp(t, true, false)
 
 	_, cmd := a.Update(msg.AnswerBatch{Intent: string(review.IntentOverwrite)})
 	status := only[statusMsg](t, cmd)

@@ -185,6 +185,19 @@ func TestTheViewDrawsNoHeadingForAnEmptyTeamGroup(t *testing.T) {
 	}
 }
 
+// A row whose team's members docket could not read may be a teammate's, and its
+// assignee may be a member.
+func TestTheViewClaimsNothingAboutTheTeamWhenItsMembersAreUnknown(t *testing.T) {
+	unknown := teamRow(3)
+	unknown.MembersUnknown, unknown.Reviewer = true, "gustavohstrassburger"
+
+	view := New(Styles{}, "claude").SetList(list(nil, rows(unknown), nil)).View()
+
+	if strings.Contains(view, "not on the team") || strings.Contains(view, "Everyone else") || !strings.Contains(view, "gustavohstrassburger assigned") {
+		t.Errorf("want the assignee named with no claim about the team:\n%s", view)
+	}
+}
+
 // With no team configured, only a request that names you can list, so the two
 // sections about a team's requests have nothing to say.
 func TestTheViewDrawsOnlyYoursWhenNoTeamWasSearched(t *testing.T) {

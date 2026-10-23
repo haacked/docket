@@ -801,8 +801,8 @@ func (a App) View() tea.View {
 	return view
 }
 
-// choosing reports whether the screen on show is asking what to do with a review
-// that already exists.
+// choosing reports whether the screen on show is asking a question, such as
+// whether to assign the user or what to do with a review that already exists.
 func (a App) choosing() bool {
 	switch a.screen {
 	case msg.NewReview:

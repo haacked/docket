@@ -148,6 +148,26 @@ func TestGroupKeepsEachTeamsOriginalErrorReachable(t *testing.T) {
 	}
 }
 
+// A team's Err joins every read of it that failed, and each reason needs a line
+// of its own on the screen.
+func TestGroupSplitsATeamsJoinedErrorIntoOneEntryPerReason(t *testing.T) {
+	search, read := errors.New("search failed"), errors.New("403")
+	f := Fetched{Login: me, Teams: []Team{{Slug: "o/team", Err: errors.Join(search, read)}}}
+
+	errs := Group(f, nil).Errs
+
+	var got []string
+	for _, err := range errs {
+		got = append(got, err.Error())
+	}
+	if want := []string{"o/team: search failed", "o/team: 403"}; !slices.Equal(got, want) {
+		t.Fatalf("errs = %q, want %q", got, want)
+	}
+	if !errors.Is(errs[0], search) || !errors.Is(errs[1], read) {
+		t.Errorf("errs = %v, want them to wrap the search and read errors in turn", errs)
+	}
+}
+
 func TestGroupReportsNoErrorsWhenEveryTeamSearchSucceeded(t *testing.T) {
 	f := Fetched{Login: me, Mine: []PR{request("o", "r", 1, 0)}, Teams: []Team{{Slug: "o/a"}, {Slug: "o/b"}}}
 
@@ -362,6 +382,24 @@ func TestGroupLeavesAPullRequestAssignedOutsideTheTeamNeedingAReviewer(t *testin
 				t.Errorf("#1 is in %s with reviewer %q, want NeedsReviewer with dave", kindNames[kind], row.Reviewer)
 			}
 		})
+	}
+}
+
+// Without the members, a member's assignment looks like an outsider's, so the
+// row has to say that its team's members are unknown.
+func TestGroupMarksTheRowsOfATeamWhoseMembersAreUnknown(t *testing.T) {
+	f := Fetched{Login: me, Teams: []Team{
+		{Slug: "o/unread", MembersUnknown: true, PRs: []PR{assigned(by(request("o", "r", 1, 0), "alice"), "bob")}},
+		{Slug: "o/team", Members: members, PRs: []PR{assigned(by(request("o", "r", 2, 0), "carol"), "dave")}},
+	}}
+
+	list := Group(f, nil)
+
+	if _, row := place(t, list, 1); !row.MembersUnknown || row.Teammate {
+		t.Errorf("#1 = %+v, want its members unknown and no teammate claimed", row)
+	}
+	if _, row := place(t, list, 2); row.MembersUnknown {
+		t.Errorf("#2 = %+v, want its members known", row)
 	}
 }
 

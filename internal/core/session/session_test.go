@@ -56,10 +56,12 @@ type fakeGH struct {
 	members     map[string][]string
 	membersErrs map[string]error
 	// firstAssignees answers FirstAssignee for one pull request, and
-	// firstAssigneeErrs fails it. eventReads counts the calls.
+	// firstAssigneeErrs fails it. eventReads counts the calls. assigners
+	// records the assigner each call asked about.
 	firstAssignees    map[pr.Ref]string
 	firstAssigneeErrs map[pr.Ref]error
 	eventReads        int
+	assigners         []string
 	// assigns records each Assign call as "ref login".
 	assigns   []string
 	assignErr error
@@ -110,8 +112,9 @@ func (f *fakeGH) TeamMembers(_ context.Context, team string) ([]string, error) {
 	return f.members[team], f.membersErrs[team]
 }
 
-func (f *fakeGH) FirstAssignee(_ context.Context, ref pr.Ref, _ string) (string, error) {
+func (f *fakeGH) FirstAssignee(_ context.Context, ref pr.Ref, assigner string) (string, error) {
 	f.eventReads++
+	f.assigners = append(f.assigners, assigner)
 	return f.firstAssignees[ref], f.firstAssigneeErrs[ref]
 }
 
@@ -1136,9 +1139,9 @@ func TestRequestsSearchesForReviewedPullRequestsOnceForAllTeams(t *testing.T) {
 	}
 }
 
-// requests.Group lists a pull request only under the first section that has
-// it, so a check of one in the user's own section or in an earlier team's search
-// would cost calls and change nothing on the screen.
+// requests.Group counts a pull request only under the first search that
+// returned it, so a check of one the user's own search or an earlier team's
+// search returned would cost calls and change nothing on the screen.
 func TestRequestsChecksAPullRequestOnceAndNeverOneAskedOfTheUser(t *testing.T) {
 	fake := &fakeGH{login: "haacked"}
 	svc, _ := newService(t, fake, newFakeGit())
@@ -1423,8 +1426,8 @@ func TestATeamWhoseMembersCannotBeReadKeepsItsRowsAndSaysWhy(t *testing.T) {
 		t.Fatalf("Requests: %v", err)
 	}
 
-	if !errors.Is(f.Teams[0].Err, failure) || len(f.Teams[0].PRs) != 1 {
-		t.Errorf("team = %+v, want its row kept and the failure on it", f.Teams[0])
+	if !errors.Is(f.Teams[0].Err, failure) || len(f.Teams[0].PRs) != 1 || !f.Teams[0].MembersUnknown {
+		t.Errorf("team = %+v, want its row kept, the failure on it, and its members unknown", f.Teams[0])
 	}
 }
 
@@ -1458,6 +1461,9 @@ func TestRequestsReadsWhoStartedEachBotPullRequestAPersonStarted(t *testing.T) {
 	}
 	if fake.eventReads != 1 {
 		t.Errorf("read the events %d times, want once for the pull request a person started", fake.eventReads)
+	}
+	if want := []string{"posthog[bot]"}; !slices.Equal(fake.assigners, want) {
+		t.Errorf("asked about the assignments of %q, want the bot that opened the pull request", fake.assigners)
 	}
 }
 

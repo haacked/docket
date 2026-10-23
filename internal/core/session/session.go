@@ -202,6 +202,7 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 		prs = slices.DeleteFunc(prs, func(p requests.PR) bool { return ownPR(p.Owner(), me) })
 		if len(prs) > 0 {
 			if team.Members, err = s.GH.TeamMembers(ctx, slug); err != nil {
+				team.MembersUnknown = true
 				errs = append(errs, fmt.Errorf("could not read the team's members, so no pull request shows as covered by one: %w", err))
 			}
 		}
@@ -249,9 +250,10 @@ func (s *Service) Assign(ctx context.Context, ref pr.Ref) error {
 // caughtUpCheck leaves out of each team's search the pull requests the user has
 // reviewed at their current head. A team's request can outlast the user's
 // review or arrive after it, so the team search alone lists pull requests with
-// nothing new to review. requests.Group lists a pull request only under the
-// first section that has it. So a pull request in the user's own section is
-// never checked, and one in two teams' searches is checked once.
+// nothing new to review. requests.Group counts a pull request only under the
+// first search that returned it: the user's own, then each team in order. So a
+// pull request the user's own search returned is never checked, and one that
+// two teams' searches returned is checked once.
 //
 // GitHub allows 30 searches a minute, so one reviewed-by search serves every
 // team. It runs when the first team has rows, and a failure of it stands for

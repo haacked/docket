@@ -35,8 +35,9 @@ type Model struct {
 	// ShowDrafts is false until the user presses d, so the list starts with only
 	// the pull requests that are ready for review.
 	ShowDrafts bool
-	// ShowCovered is false until the user presses c, so the list starts with
-	// only the pull requests nobody on the team has taken.
+	// ShowCovered is false until the user presses c, so the list starts without
+	// the pull requests that a member of the team other than the owner is
+	// assigned to.
 	ShowCovered bool
 	Cursor      int
 	// Marked holds the URLs the user marked with space. A key on the URL rather
@@ -344,34 +345,46 @@ func (m Model) View() string {
 		if noTeam || emptyCovered {
 			continue
 		}
-		heading := m.Styles.Group.Render(fmt.Sprintf("%s (%d)", title(s.Kind), count))
-		if hidden > 0 {
-			heading += m.Styles.Dim.Render(fmt.Sprintf(" · %d %s hidden", hidden, format.Plural(hidden, "draft")))
-		}
-		if !m.shows(s) && count > 0 {
-			heading += m.Styles.Dim.Render(" · hidden")
-		}
-		lines = append(lines, heading)
+		lines = append(lines, m.heading(s, count, hidden))
 		if count == 0 && hidden == 0 {
 			lines = append(lines, m.Styles.Dim.Render("  none"))
 		}
-		for j, row := range s.Rows {
-			if !m.shows(s) {
-				break
+		if m.shows(s) {
+			split := splitsByTeammate(s)
+			for j, row := range s.Rows {
+				if split && (j == 0 || row.Teammate != s.Rows[j-1].Teammate) {
+					lines = append(lines, m.Styles.Assignee.Render(fmt.Sprintf("  %s (%d)", whose(row.Teammate), countTeammate(s.Rows, row.Teammate))))
+				}
+				if index == m.Cursor {
+					cursorLine = len(lines)
+				}
+				lines = append(lines, m.row(s.Kind, row, index == m.Cursor))
+				index++
 			}
-			if s.Kind == requests.NeedsReviewer && (j == 0 || row.Teammate != s.Rows[j-1].Teammate) {
-				lines = append(lines, m.Styles.Assignee.Render(fmt.Sprintf("  %s (%d)", whose(row.Teammate), countTeammate(s.Rows, row.Teammate))))
-			}
-			if index == m.Cursor {
-				cursorLine = len(lines)
-			}
-			lines = append(lines, m.row(s.Kind, row, index == m.Cursor))
-			index++
 		}
 		lines = append(lines, "")
 	}
 
 	return format.Pane(m.header(), lines, cursorLine, m.Height)
+}
+
+// heading is a section's title and count, with what the screen hides from it.
+func (m Model) heading(s requests.Section, count, hidden int) string {
+	heading := m.Styles.Group.Render(fmt.Sprintf("%s (%d)", title(s.Kind), count))
+	if hidden > 0 {
+		heading += m.Styles.Dim.Render(fmt.Sprintf(" · %d %s hidden", hidden, format.Plural(hidden, "draft")))
+	}
+	if !m.shows(s) && count > 0 {
+		heading += m.Styles.Dim.Render(" · hidden")
+	}
+	return heading
+}
+
+// splitsByTeammate reports whether the section draws its rows under "Your team"
+// and "Everyone else". It does not when docket could not read the members of a
+// row's team, because it cannot tell whether that row's owner is a teammate.
+func splitsByTeammate(s requests.Section) bool {
+	return s.Kind == requests.NeedsReviewer && !slices.ContainsFunc(s.Rows, func(r requests.Row) bool { return r.MembersUnknown })
 }
 
 func title(kind requests.Kind) string {
@@ -515,6 +528,8 @@ func why(kind requests.Kind, row requests.Row) string {
 		return row.State.Label()
 	case kind == requests.Covered:
 		return "assigned to " + row.Reviewer
+	case kind == requests.NeedsReviewer && row.Reviewer != "" && row.MembersUnknown:
+		return row.Reviewer + " assigned"
 	case kind == requests.NeedsReviewer && row.Reviewer != "":
 		return row.Reviewer + " assigned, not on the team"
 	case kind != requests.Yours:

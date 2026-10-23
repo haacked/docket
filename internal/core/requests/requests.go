@@ -64,8 +64,10 @@ type Team struct {
 	Slug string
 	// Members are the logins of the team's members.
 	Members []string
-	PRs     []PR
-	Err     error
+	// MembersUnknown is true when the read of Members failed.
+	MembersUnknown bool
+	PRs            []PR
+	Err            error
 }
 
 // Fetched is what one refresh read from GitHub: the requests that name the user
@@ -85,10 +87,11 @@ const (
 	// Yours holds the pull requests whose review is the user's: the request
 	// names the user, the user is assigned, or docket has an open record.
 	Yours Kind = iota
-	// NeedsReviewer holds the pull requests that no member of the team has
-	// taken.
+	// NeedsReviewer holds the team's pull requests that no member of the team
+	// other than the owner is assigned to.
 	NeedsReviewer
-	// Covered holds the pull requests that a member of the team has taken.
+	// Covered holds the team's pull requests that a member of the team other
+	// than the owner is assigned to.
 	Covered
 )
 
@@ -108,6 +111,9 @@ type Row struct {
 	// member of Team who took the review. On a row that needs a reviewer it is
 	// someone outside Team, or empty when nobody else is assigned.
 	Reviewer string
+	// MembersUnknown marks a row whose team's members docket could not read.
+	// Teammate is then false and Reviewer may be a member of Team.
+	MembersUnknown bool
 }
 
 // AskedMe reports whether the request names the user rather than a team.
@@ -120,8 +126,8 @@ type Section struct {
 }
 
 // List is what the requests screen draws: one section of each Kind in Kind
-// order, how many teams were searched, and each team's Err prefixed with the
-// team's slug.
+// order, how many teams were searched, and each reason in a team's Err prefixed
+// with the team's slug.
 type List struct {
 	Sections []Section
 	Teams    int
@@ -140,27 +146,27 @@ type List struct {
 func Group(f Fetched, records []review.Record) List {
 	var seen []pr.Ref
 	rows := make([][]Row, Covered+1)
-	add := func(team string, members []string, prs []PR) {
-		for _, p := range prs {
+	add := func(t Team) {
+		for _, p := range t.PRs {
 			if slices.ContainsFunc(seen, p.Ref.Equal) {
 				continue
 			}
 			seen = append(seen, p.Ref)
-			row := Row{PR: p, Team: team, AssignedMe: has(p.Assignees, f.Login)}
+			row := Row{PR: p, Team: t.Slug, AssignedMe: has(p.Assignees, f.Login), MembersUnknown: t.MembersUnknown}
 			if rec, ok := review.OpenRecord(records, p.Ref); ok {
 				row.State, row.RecordID = rec.State, rec.ID
 			}
-			kind := classify(&row, members)
+			kind := classify(&row, t.Members)
 			rows[kind] = append(rows[kind], row)
 		}
 	}
 
-	add("", nil, f.Mine)
+	add(Team{PRs: f.Mine})
 	list := List{Teams: len(f.Teams)}
 	for _, t := range f.Teams {
-		add(t.Slug, t.Members, t.PRs)
-		if t.Err != nil {
-			list.Errs = append(list.Errs, fmt.Errorf("%s: %w", t.Slug, t.Err))
+		add(t)
+		for _, err := range reasons(t.Err) {
+			list.Errs = append(list.Errs, fmt.Errorf("%s: %w", t.Slug, err))
 		}
 	}
 
@@ -178,6 +184,19 @@ func Group(f Fetched, records []review.Record) List {
 		list.Sections = append(list.Sections, Section{Kind: Kind(kind), Rows: section})
 	}
 	return list
+}
+
+// reasons splits an error that errors.Join built into the errors it joined. The
+// screen draws each error on one line cut to its width, so a joined error would
+// hide every reason after the first.
+func reasons(err error) []error {
+	if err == nil {
+		return nil
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		return joined.Unwrap()
+	}
+	return []error{err}
 }
 
 // classify sets the row's Teammate and Reviewer from members, the logins of the
