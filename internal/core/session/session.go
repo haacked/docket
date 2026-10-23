@@ -171,7 +171,7 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 //
 // Each team that has rows also reads its members and who started each of its
 // bots' pull requests, which requests.Group needs to tell who reviews what. A
-// failed read puts its reason on Team.Err and keeps the rows.
+// failed read adds its reason to Team.Errs and keeps the rows.
 func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 	me, err := s.peekLogin(ctx)
 	if err != nil {
@@ -188,7 +188,7 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 		team := requests.Team{Slug: slug}
 		prs, err := s.GH.ReviewRequests(ctx, "team-review-requested:"+slug+" -author:"+me)
 		if err != nil {
-			team.Err = err
+			team.Errs = []error{err}
 			f.Teams = append(f.Teams, team)
 			continue
 		}
@@ -206,7 +206,7 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 				errs = append(errs, fmt.Errorf("could not read the team's members, so no pull request shows as covered by one: %w", err))
 			}
 		}
-		team.PRs, team.Err = prs, errors.Join(errs...)
+		team.PRs, team.Errs = prs, errs
 		f.Teams = append(f.Teams, team)
 	}
 	return f, nil

@@ -1089,7 +1089,7 @@ func TestTeamSearchesLeaveOutThePullRequestsTheUserIsCaughtUpOn(t *testing.T) {
 		t.Fatalf("Requests: %v", err)
 	}
 
-	if len(f.Teams) != 1 || f.Teams[0].Err != nil {
+	if len(f.Teams) != 1 || errors.Join(f.Teams[0].Errs...) != nil {
 		t.Fatalf("teams = %+v, want one with no error", f.Teams)
 	}
 	var got []int
@@ -1208,8 +1208,8 @@ func TestATeamWhoseCheckFailsKeepsItsRowsAndSaysWhy(t *testing.T) {
 			if len(f.Teams) != 1 || len(f.Teams[0].PRs) != 1 {
 				t.Fatalf("teams = %+v, want the row kept", f.Teams)
 			}
-			if !errors.Is(f.Teams[0].Err, failure) {
-				t.Errorf("err = %v, want the check's failure", f.Teams[0].Err)
+			if !errors.Is(errors.Join(f.Teams[0].Errs...), failure) {
+				t.Errorf("err = %v, want the check's failure", errors.Join(f.Teams[0].Errs...))
 			}
 		})
 	}
@@ -1237,7 +1237,7 @@ func TestAFailedCheckStillLeavesOutThePullRequestsFoundCaughtUp(t *testing.T) {
 		t.Fatalf("Requests: %v", err)
 	}
 
-	if len(f.Teams) != 1 || !errors.Is(f.Teams[0].Err, failure) {
+	if len(f.Teams) != 1 || !errors.Is(errors.Join(f.Teams[0].Errs...), failure) {
 		t.Fatalf("teams = %+v, want one with the check's failure", f.Teams)
 	}
 	if rows := f.Teams[0].PRs; len(rows) != 1 || !rows[0].Ref.Equal(failing.Ref) {
@@ -1274,7 +1274,7 @@ func TestAPullRequestWhoseCheckFailedIsNotCheckedAgain(t *testing.T) {
 	if len(f.Teams) != 2 {
 		t.Fatalf("teams = %+v, want two", f.Teams)
 	}
-	if b := f.Teams[1]; b.Err != nil || len(b.PRs) != 1 || !b.PRs[0].Ref.Equal(failing.Ref) {
+	if b := f.Teams[1]; len(b.Errs) != 0 || len(b.PRs) != 1 || !b.PRs[0].Ref.Equal(failing.Ref) {
 		t.Errorf("team-b = %+v, want #1 kept, #2 left out, and no error", b)
 	}
 }
@@ -1301,7 +1301,7 @@ func TestAFailedReviewedSearchStandsForEveryTeam(t *testing.T) {
 		t.Fatalf("teams = %+v, want two", f.Teams)
 	}
 	for _, team := range f.Teams {
-		if len(team.PRs) != 1 || !errors.Is(team.Err, failure) {
+		if len(team.PRs) != 1 || !errors.Is(errors.Join(team.Errs...), failure) {
 			t.Errorf("%s = %+v, want its row and the search's failure", team.Slug, team)
 		}
 	}
@@ -1375,10 +1375,10 @@ func TestATeamSearchThatFailsKeepsEverySearchThatSucceeded(t *testing.T) {
 	if len(f.Teams) != 3 {
 		t.Fatalf("teams = %+v, want all three", f.Teams)
 	}
-	if !errors.Is(f.Teams[1].Err, failure) || f.Teams[1].Slug != "PostHog/typo" {
+	if !errors.Is(errors.Join(f.Teams[1].Errs...), failure) || f.Teams[1].Slug != "PostHog/typo" {
 		t.Errorf("typo team = %+v, want it to carry the failure", f.Teams[1])
 	}
-	if f.Teams[2].Err != nil || len(f.Teams[2].PRs) != 1 {
+	if errors.Join(f.Teams[2].Errs...) != nil || len(f.Teams[2].PRs) != 1 {
 		t.Errorf("team after the failure = %+v, want it searched", f.Teams[2])
 	}
 }
@@ -1426,7 +1426,7 @@ func TestATeamWhoseMembersCannotBeReadKeepsItsRowsAndSaysWhy(t *testing.T) {
 		t.Fatalf("Requests: %v", err)
 	}
 
-	if !errors.Is(f.Teams[0].Err, failure) || len(f.Teams[0].PRs) != 1 || !f.Teams[0].MembersUnknown {
+	if !errors.Is(errors.Join(f.Teams[0].Errs...), failure) || len(f.Teams[0].PRs) != 1 || !f.Teams[0].MembersUnknown {
 		t.Errorf("team = %+v, want its row kept, the failure on it, and its members unknown", f.Teams[0])
 	}
 }
@@ -1502,8 +1502,8 @@ func TestATeamWhoseStarterCannotBeReadKeepsItsRowsAndSaysWhy(t *testing.T) {
 	}
 
 	team := f.Teams[0]
-	if !errors.Is(team.Err, failure) || !strings.Contains(team.Err.Error(), broken.Ref.String()) {
-		t.Errorf("error = %v, want the failure naming %s", team.Err, broken.Ref)
+	if !errors.Is(errors.Join(team.Errs...), failure) || !strings.Contains(errors.Join(team.Errs...).Error(), broken.Ref.String()) {
+		t.Errorf("error = %v, want the failure naming %s", errors.Join(team.Errs...), broken.Ref)
 	}
 	if len(team.PRs) != 2 || team.PRs[0].StartedBy != "" || team.PRs[1].StartedBy != "" {
 		t.Errorf("rows = %+v, want both kept with no starter", team.PRs)

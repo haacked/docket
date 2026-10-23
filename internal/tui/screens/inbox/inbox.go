@@ -528,9 +528,10 @@ func why(kind requests.Kind, row requests.Row) string {
 		return row.State.Label()
 	case kind == requests.Covered:
 		return "assigned to " + row.Reviewer
-	case kind == requests.NeedsReviewer && row.Reviewer != "" && row.MembersUnknown:
-		return row.Reviewer + " assigned"
 	case kind == requests.NeedsReviewer && row.Reviewer != "":
+		if row.MembersUnknown {
+			return row.Reviewer + " assigned"
+		}
 		return row.Reviewer + " assigned, not on the team"
 	case kind != requests.Yours:
 		return ""

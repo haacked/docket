@@ -55,11 +55,10 @@ func StartedByAPerson(body string) bool {
 	return strings.Contains(body, personStarted)
 }
 
-// Team is what one team's search returned. Err is set when the search failed,
-// and PRs is then empty. Err is also set when docket could not tell which pull
-// requests the user already reviewed, who started a bot's pull request, or who
-// belongs to the team, and PRs then keeps every pull request it could not rule
-// out.
+// Team is what one team's search returned. Errs holds the search's failure, and
+// PRs is then empty. Errs also holds a failure to tell which pull requests the
+// user already reviewed, who started a bot's pull request, or who belongs to the
+// team. PRs then keeps every pull request docket could not rule out.
 type Team struct {
 	Slug string
 	// Members are the logins of the team's members.
@@ -67,7 +66,7 @@ type Team struct {
 	// MembersUnknown is true when the read of Members failed.
 	MembersUnknown bool
 	PRs            []PR
-	Err            error
+	Errs           []error
 }
 
 // Fetched is what one refresh read from GitHub: the requests that name the user
@@ -126,8 +125,8 @@ type Section struct {
 }
 
 // List is what the requests screen draws: one section of each Kind in Kind
-// order, how many teams were searched, and each reason in a team's Err prefixed
-// with the team's slug.
+// order, how many teams were searched, and each team's Errs prefixed with the
+// team's slug.
 type List struct {
 	Sections []Section
 	Teams    int
@@ -165,7 +164,7 @@ func Group(f Fetched, records []review.Record) List {
 	list := List{Teams: len(f.Teams)}
 	for _, t := range f.Teams {
 		add(t)
-		for _, err := range reasons(t.Err) {
+		for _, err := range t.Errs {
 			list.Errs = append(list.Errs, fmt.Errorf("%s: %w", t.Slug, err))
 		}
 	}
@@ -184,19 +183,6 @@ func Group(f Fetched, records []review.Record) List {
 		list.Sections = append(list.Sections, Section{Kind: Kind(kind), Rows: section})
 	}
 	return list
-}
-
-// reasons splits an error that errors.Join built into the errors it joined. The
-// screen draws each error on one line cut to its width, so a joined error would
-// hide every reason after the first.
-func reasons(err error) []error {
-	if err == nil {
-		return nil
-	}
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		return joined.Unwrap()
-	}
-	return []error{err}
 }
 
 // classify sets the row's Teammate and Reviewer from members, the logins of the

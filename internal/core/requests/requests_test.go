@@ -121,9 +121,9 @@ func TestGroupAlwaysReturnsOneSectionOfEachKindInKindOrder(t *testing.T) {
 
 func TestGroupPrefixesEachTeamsErrorWithItsSlugInTeamOrder(t *testing.T) {
 	f := Fetched{Login: me, Teams: []Team{
-		{Slug: "o/zeta", Err: errors.New("422")},
+		{Slug: "o/zeta", Errs: []error{errors.New("422")}},
 		{Slug: "o/fine"},
-		{Slug: "o/alpha", Err: errors.New("timeout")},
+		{Slug: "o/alpha", Errs: []error{errors.New("timeout")}},
 	}}
 
 	errs := Group(f, nil).Errs
@@ -139,7 +139,7 @@ func TestGroupPrefixesEachTeamsErrorWithItsSlugInTeamOrder(t *testing.T) {
 
 func TestGroupKeepsEachTeamsOriginalErrorReachable(t *testing.T) {
 	zeta, alpha := errors.New("422"), errors.New("timeout")
-	f := Fetched{Login: me, Teams: []Team{{Slug: "o/zeta", Err: zeta}, {Slug: "o/alpha", Err: alpha}}}
+	f := Fetched{Login: me, Teams: []Team{{Slug: "o/zeta", Errs: []error{zeta}}, {Slug: "o/alpha", Errs: []error{alpha}}}}
 
 	errs := Group(f, nil).Errs
 
@@ -148,11 +148,11 @@ func TestGroupKeepsEachTeamsOriginalErrorReachable(t *testing.T) {
 	}
 }
 
-// A team's Err joins every read of it that failed, and each reason needs a line
-// of its own on the screen.
-func TestGroupSplitsATeamsJoinedErrorIntoOneEntryPerReason(t *testing.T) {
+// The screen draws each error on one line cut to its width, so each of a team's
+// failures needs an entry of its own.
+func TestGroupGivesEachOfATeamsFailuresItsOwnEntry(t *testing.T) {
 	search, read := errors.New("search failed"), errors.New("403")
-	f := Fetched{Login: me, Teams: []Team{{Slug: "o/team", Err: errors.Join(search, read)}}}
+	f := Fetched{Login: me, Teams: []Team{{Slug: "o/team", Errs: []error{search, read}}}}
 
 	errs := Group(f, nil).Errs
 
@@ -180,7 +180,7 @@ func TestGroupReportsNoErrorsWhenEveryTeamSearchSucceeded(t *testing.T) {
 // pull request the check could not rule out.
 func TestGroupStillListsThePullRequestsOfATeamThatReportedAnError(t *testing.T) {
 	f := teamAsked(request("o", "r", 1, 0))
-	f.Teams[0].Err = errors.New("could not read reviews")
+	f.Teams[0].Errs = []error{errors.New("could not read reviews")}
 
 	place(t, Group(f, nil), 1)
 }
