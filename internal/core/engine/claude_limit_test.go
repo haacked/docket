@@ -28,9 +28,17 @@ var (
 
 const userTurn = `{"type":"user","isSidechain":false,"timestamp":"2026-10-22T16:10:00.000Z","message":{"role":"user","content":"continue"}}`
 
+// queuedTurn is a message a person sent while a turn ran.
+const queuedTurn = `{"type":"user","isSidechain":false,"promptSource":"queued","origin":{"kind":"human"},"timestamp":"2026-10-22T16:10:00.000Z","message":{"role":"user","content":"continue"}}`
+
 const promptTurn = `{"type":"user","isSidechain":false,"timestamp":"2026-10-22T16:00:00.000Z","message":{"role":"user","content":"/review-code https://github.com/PostHog/posthog/pull/121510 --draft --append --force"}}`
 
 const replyTurn = `{"parentUuid":"3a4b5c6d-7e8f-4a0b-9c1d-2e3f4a5b6c7d","isSidechain":false,"type":"assistant","uuid":"4b5c6d7e-8f9a-4b1c-8d2e-3f4a5b6c7d8e","timestamp":"2026-10-22T16:20:00.000Z","message":{"model":"claude-opus-4-1","role":"assistant","content":[{"type":"text","text":"Posted the draft review."}]},"sessionId":"823735c4-c8ff-4e82-9dc4-82e0e1356c92"}`
+
+// taskNotification is the line Claude Code 2.1.310 wrote 30 ms after a refused
+// turn, when a background sub-agent finished. claude queued it and ran no turn
+// for it.
+const taskNotification = `{"isSidechain":false,"type":"user","timestamp":"2026-10-22T16:04:08.752Z","promptSource":"system","origin":{"kind":"task-notification","producer":"session-task"},"queueTranscriptOnly":true,"message":{"role":"user","content":"<task-notification>\n<task-id>a2f57c85855be31c5</task-id>\n<status>completed</status>\n<summary>Agent \"Gather architectural context\" finished</summary>\n</task-notification>"}}`
 
 // bookkeeping are the lines claude writes after a turn that are not part of
 // the conversation.
@@ -47,6 +55,11 @@ var bookkeeping = []string{
 // take.
 func refusal(old, replacement string) string {
 	return strings.Replace(refusedTurn, old, replacement, 1)
+}
+
+// notification is taskNotification with one string replaced.
+func notification(old, replacement string) string {
+	return strings.Replace(taskNotification, old, replacement, 1)
 }
 
 // sidechain marks a conversation line as a sub-agent's.
@@ -171,6 +184,20 @@ func TestUsageLimitSkipsASubAgentsLinesAfterTheRefusal(t *testing.T) {
 	}
 }
 
+// claude writes messages of its own into the conversation, such as a notice that
+// a background sub-agent finished. One can follow the refusal with no turn of its
+// own.
+func TestUsageLimitSkipsAMessageClaudeQueuesWithoutATurn(t *testing.T) {
+	got, ok := usageLimit(t, lines(promptTurn, refusedTurn, taskNotification))
+
+	if !ok {
+		t.Fatal("claude's own message hid the session's refusal")
+	}
+	if !got.At.Equal(refusedAt) {
+		t.Errorf("at = %v, want %v", got.At, refusedAt)
+	}
+}
+
 // Only a refusal that ended the session's last turn moves the review to another
 // account. Each of these sessions is waiting for some other reason.
 func TestUsageLimitIsNoneUnlessTheLastTurnIsARefusal(t *testing.T) {
@@ -178,6 +205,11 @@ func TestUsageLimitIsNoneUnlessTheLastTurnIsARefusal(t *testing.T) {
 		"a normal reply":                        lines(with([]string{promptTurn, replyTurn}, bookkeeping...)...),
 		"the user continued after a refusal":    lines(with([]string{promptTurn, refusedTurn}, with(bookkeeping, userTurn)...)...),
 		"a reply after a refusal":               lines(promptTurn, refusedTurn, userTurn, replyTurn),
+		"a queued message after a refusal":      lines(promptTurn, refusedTurn, queuedTurn),
+		"a notification after a queued message": lines(promptTurn, refusedTurn, queuedTurn, taskNotification),
+		"a notification claude runs a turn for": lines(promptTurn, refusedTurn, notification(`"queueTranscriptOnly":true,`, "")),
+		"a person's message with no turn":       lines(promptTurn, refusedTurn, notification(`"promptSource":"system"`, `"promptSource":"queued"`)),
+		"an assistant line with no turn":        lines(promptTurn, refusedTurn, notification(`"type":"user"`, `"type":"assistant"`)),
 		"another API error":                     lines(promptTurn, refusal(`"error":"rate_limit"`, `"error":"authentication_failed"`)),
 		"a rate limit with no API error flag":   lines(promptTurn, refusal(`"isApiErrorMessage":true`, `"isApiErrorMessage":false`)),
 		"a rate limit on a user entry":          lines(promptTurn, refusal(`"type":"assistant"`, `"type":"user"`)),
@@ -199,8 +231,10 @@ func TestUsageLimitIsNoneUnlessTheLastTurnIsARefusal(t *testing.T) {
 // user continuing, so it must not let the earlier refusal answer for it.
 func TestUsageLimitIsNoneWhenALaterTurnDoesNotDecode(t *testing.T) {
 	for name, line := range map[string]string{
-		"a timestamp that is a number": `{"type":"user","isSidechain":false,"timestamp":1792839600000,"message":{"role":"user","content":"continue"}}`,
-		"an error that is an object":   `{"type":"assistant","isSidechain":false,"timestamp":"2026-10-22T16:20:00.000Z","error":{"type":"overloaded"},"message":{"role":"assistant","content":[]}}`,
+		"a timestamp that is a number":                           `{"type":"user","isSidechain":false,"timestamp":1792839600000,"message":{"role":"user","content":"continue"}}`,
+		"an error that is an object":                             `{"type":"assistant","isSidechain":false,"timestamp":"2026-10-22T16:20:00.000Z","error":{"type":"overloaded"},"message":{"role":"assistant","content":[]}}`,
+		"a source that is an object":                             strings.Replace(userTurn, `"isSidechain":false,`, `"isSidechain":false,"promptSource":{"kind":"system"},`, 1),
+		"claude's own message with a timestamp that is a number": notification(`"timestamp":"2026-10-22T16:04:08.752Z"`, `"timestamp":1792857848752`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got, ok := usageLimit(t, lines(promptTurn, refusedTurn, line)); ok {
