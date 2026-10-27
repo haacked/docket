@@ -42,17 +42,30 @@ func (l transcriptLine) turn() bool {
 	return !l.IsSidechain && (l.Type == "user" || l.Type == "assistant")
 }
 
+// systemSource is the promptSource claude gives a message it writes into the
+// conversation for a sub-agent, a background task, or another session.
+const systemSource = "system"
+
 // transcriptEntry is the part of a message that UsageLimit reads.
 type transcriptEntry struct {
 	transcriptLine
-	Timestamp         time.Time `json:"timestamp"`
-	IsAPIErrorMessage bool      `json:"isApiErrorMessage"`
-	Error             string    `json:"error"`
-	APIErrorParams    struct {
+	PromptSource        string    `json:"promptSource"`
+	QueueTranscriptOnly bool      `json:"queueTranscriptOnly"`
+	Timestamp           time.Time `json:"timestamp"`
+	IsAPIErrorMessage   bool      `json:"isApiErrorMessage"`
+	Error               string    `json:"error"`
+	APIErrorParams      struct {
 		RateLimitInfo struct {
 			ResetsAt int64 `json:"resetsAt"`
 		} `json:"rate_limit_info"`
 	} `json:"apiErrorParams"`
+}
+
+// queuedWithoutTurn reports whether claude wrote the message itself and runs no
+// turn for it. claude runs a turn for most of its own messages. It sets
+// queueTranscriptOnly on the ones it does not.
+func (e transcriptEntry) queuedWithoutTurn() bool {
+	return e.Type == "user" && e.PromptSource == systemSource && e.QueueTranscriptOnly
 }
 
 // UsageLimit reads the session's transcript. claude names the transcript's
@@ -78,10 +91,12 @@ func (Claude) UsageLimit(sessionID string, paths Paths) (UsageLimit, bool) {
 	return limit, true
 }
 
-// lastTurn returns the last message of the session's own conversation. It
-// reports false when the tail it reads holds no whole message, when claude is
-// still writing the last line, or when the last message has a shape docket does
-// not know. An earlier message must never answer for a later one.
+// lastTurn returns the last message of the session's own conversation, passing
+// over a message that claude wrote itself and runs no turn for. claude can write
+// one after a refused turn. lastTurn reports false when the tail it reads holds
+// no whole message, when claude is still writing the last line, or when the last
+// message has a shape docket does not know. An earlier message must never answer
+// for a later one.
 func lastTurn(path string) (transcriptEntry, bool) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -115,6 +130,9 @@ func lastTurn(path string) (transcriptEntry, bool) {
 		var entry transcriptEntry
 		if json.Unmarshal(line, &entry) != nil {
 			return transcriptEntry{}, false
+		}
+		if entry.queuedWithoutTurn() {
+			continue
 		}
 		return entry, true
 	}
