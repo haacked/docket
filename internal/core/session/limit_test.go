@@ -350,7 +350,7 @@ func TestALimitWithNoResetTimeStillCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(limits) != 1 || !account.Limited("/a", limits, svc.now().Add(unknownReset/2)) {
+	if len(limits) != 1 || !account.Limited("/a", account.Login{}, limits, svc.now().Add(unknownReset/2)) {
 		t.Errorf("limits = %+v, want /a limited for a while after the refusal", limits)
 	}
 }
@@ -470,5 +470,107 @@ func TestACodexReviewDoesNotReadTheLimitsLog(t *testing.T) {
 	}
 	if _, _, err := svc.Prepare(context.Background(), pr.Ref{Org: "haacked", Repo: "docket", Number: 8}, "claude", review.ModeInteractive, review.IntentReview); err == nil {
 		t.Error("Prepare(claude) ignored a limits log it could not read")
+	}
+}
+
+var (
+	// teamSeat is a login the user signs two config dirs in to.
+	teamSeat = account.Login{AccountUUID: "4f6f73cc-a2c3-4aef-adfd-615b0d6ede86", OrganizationUUID: "b94d544b-7e01-43e9-9fa2-0f99539bc5d1"}
+	// ownOrg is the same person's account in another organization.
+	ownOrg = account.Login{AccountUUID: teamSeat.AccountUUID, OrganizationUUID: "2bb69dd2-45b3-40ef-80fe-d40827cc4cd5"}
+)
+
+// writeLogin writes login where claude keeps it, in the .claude.json at path.
+func writeLogin(t *testing.T, path string, login account.Login) {
+	t.Helper()
+	body := fmt.Sprintf(`{"oauthAccount":{"accountUuid":%q,"organizationUuid":%q}}`, login.AccountUUID, login.OrganizationUUID)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// twins is a service whose rotation runs primary, then twin, then other.
+// primary and twin are signed in to one login, and other to another.
+func twins(t *testing.T) (svc *Service, primary, twin, other string) {
+	t.Helper()
+	svc, _ = newService(t, &fakeGH{login: "haacked", info: prInfo()}, newFakeGit())
+	primary, twin, other = t.TempDir(), t.TempDir(), t.TempDir()
+	writeLogin(t, filepath.Join(primary, ".claude.json"), teamSeat)
+	writeLogin(t, filepath.Join(twin, ".claude.json"), teamSeat)
+	writeLogin(t, filepath.Join(other, ".claude.json"), ownOrg)
+	svc.Cfg.ClaudeConfigDir = primary
+	svc.Cfg.ClaudeFallbackConfigDirs = []string{twin, other}
+	return svc, primary, twin, other
+}
+
+// The user can /login a dir to another login later. The log keeps the login
+// the dir held when claude refused it.
+func TestALimitRecordsTheLoginItsDirWasSignedInTo(t *testing.T) {
+	svc, primary, _, _ := twins(t)
+
+	if err := svc.recordLimit(review.Record{ClaudeConfigDir: primary}, engine.UsageLimit{At: svc.now(), Resets: svc.now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	limits, err := account.Load(svc.Paths.Limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limits) != 1 || limits[0].Login != teamSeat {
+		t.Errorf("limits = %+v, want one on the team seat's login", limits)
+	}
+}
+
+// claude refuses every dir signed in to a login that is over its limit. The
+// next review skips them all.
+func TestANewReviewSkipsEveryDirSignedInToALimitedLogin(t *testing.T) {
+	svc, primary, _, other := twins(t)
+	if err := svc.recordLimit(review.Record{ClaudeConfigDir: primary}, engine.UsageLimit{At: svc.now(), Resets: svc.now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := prepareWith(t, svc, unlisted, "claude", review.IntentReview)
+
+	if rec.ClaudeConfigDir != other {
+		t.Errorf("account = %q, want %q, the one dir on another login", rec.ClaudeConfigDir, other)
+	}
+}
+
+// A record under twin moves although claude refused primary, because both are
+// signed in to the same login.
+func TestAFreshStartMovesOffADirWhoseLoginIsLimitedUnderAnotherDir(t *testing.T) {
+	svc, primary, twin, other := twins(t)
+	if err := svc.recordLimit(review.Record{ClaudeConfigDir: primary}, engine.UsageLimit{At: svc.now(), Resets: svc.now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, choice, err := svc.freshAccount(review.Record{Engine: "claude", ClaudeConfigDir: twin})
+	if err != nil {
+		t.Fatalf("freshAccount: %v", err)
+	}
+
+	if got.ClaudeConfigDir != other || choice.Limited() {
+		t.Errorf("record moved to %q with %+v, want %q under its limits", got.ClaudeConfigDir, choice, other)
+	}
+}
+
+// claude keeps the default account's login in ~/.claude.json, not in
+// ~/.claude.
+func TestALimitOnTheDefaultAccountRecordsTheLoginInTheHomeDirectory(t *testing.T) {
+	svc, _ := newService(t, &fakeGH{login: "haacked", info: prInfo()}, newFakeGit())
+	home := t.TempDir()
+	svc.Cfg.ClaudeDefaultDir = filepath.Join(home, ".claude")
+	writeLogin(t, filepath.Join(home, ".claude.json"), teamSeat)
+
+	if err := svc.recordLimit(review.Record{ClaudeConfigDir: ""}, engine.UsageLimit{At: svc.now(), Resets: svc.now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	limits, err := account.Load(svc.Paths.Limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limits) != 1 || limits[0].Login != teamSeat {
+		t.Errorf("limits = %+v, want one on the team seat's login", limits)
 	}
 }

@@ -32,7 +32,22 @@ func (s *Service) newAccount() (account.Choice, error) {
 	if err != nil {
 		return account.Choice{}, err
 	}
-	return account.Pick(s.Cfg.ClaudeAccounts(), limits, s.now()), nil
+	return s.pick(limits), nil
+}
+
+// pick runs the rotation over the accounts config.toml names.
+func (s *Service) pick(limits []account.Limit) account.Choice {
+	accounts := s.Cfg.ClaudeAccounts()
+	logins := make(map[string]account.Login, len(accounts))
+	for _, dir := range accounts {
+		logins[dir] = s.claudeLogin(dir)
+	}
+	return account.Pick(accounts, logins, limits, s.now())
+}
+
+// claudeLogin is the login the account dir is signed in to now.
+func (s *Service) claudeLogin(dir string) account.Login {
+	return account.ReadLogin(s.Cfg.ClaudeLoginFile(dir))
 }
 
 // freshAccount puts rec on the claude account a fresh start of it runs under,
@@ -54,8 +69,8 @@ func (s *Service) freshAccount(rec review.Record) (review.Record, account.Choice
 	if err != nil {
 		return rec, account.Choice{}, err
 	}
-	if account.Limited(rec.ClaudeConfigDir, limits, s.now()) {
-		choice = account.Pick(s.Cfg.ClaudeAccounts(), limits, s.now())
+	if account.Limited(rec.ClaudeConfigDir, s.claudeLogin(rec.ClaudeConfigDir), limits, s.now()) {
+		choice = s.pick(limits)
 	}
 	if choice.Account != rec.ClaudeConfigDir {
 		rec.ClaudeConfigDir = choice.Account
@@ -66,9 +81,11 @@ func (s *Service) freshAccount(rec review.Record) (review.Record, account.Choice
 }
 
 // recordLimit adds the limit that a session under rec's account ran into to the
-// log the rotation reads. It skips a refusal that the log already holds. The
-// poll reads the same refusal again after a stop that fails. Each exit from an
-// interactive session that claude refused reads it again too.
+// log the rotation reads, with the login the account is signed in to. The user
+// can sign the dir in to another login later. docket therefore reads the login
+// when it records the limit. It skips a refusal that the log already holds.
+// The poll reads the same refusal again after a stop that fails. Each exit from
+// an interactive session that claude refused reads it again too.
 func (s *Service) recordLimit(rec review.Record, limit engine.UsageLimit) error {
 	limits, err := account.Load(s.Paths.Limits)
 	if err != nil {
@@ -83,7 +100,7 @@ func (s *Service) recordLimit(rec review.Record, limit engine.UsageLimit) error 
 	if until.IsZero() {
 		until = limit.At.Add(unknownReset)
 	}
-	return account.Append(s.Paths.Limits, account.Limit{Account: rec.ClaudeConfigDir, At: limit.At, Until: until})
+	return account.Append(s.Paths.Limits, account.Limit{Account: rec.ClaudeConfigDir, Login: s.claudeLogin(rec.ClaudeConfigDir), At: limit.At, Until: until})
 }
 
 // noteLimit records the usage limit that an interactive session ran into, so the

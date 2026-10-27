@@ -380,6 +380,34 @@ func TestAConfigLoadDidNotFillInHasNoProjectsDirForTheDefaultAccount(t *testing.
 	}
 }
 
+// claude keeps the default account's login in ~/.claude.json, beside ~/.claude
+// rather than inside it.
+func TestClaudeLoginFileOfTheDefaultAccountIsInTheHomeDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg, err := Load(filepath.Join(t.TempDir(), "config.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	for account, want := range map[string]string{
+		"/Users/me/.claude-automation": "/Users/me/.claude-automation/.claude.json",
+		"":                             filepath.Join(home, ".claude.json"),
+	} {
+		if got := cfg.ClaudeLoginFile(account); got != want {
+			t.Errorf("login file for %q = %q, want %q", account, got, want)
+		}
+	}
+}
+
+// A test that builds its own Config reads no login from the real home
+// directory.
+func TestAConfigLoadDidNotFillInHasNoLoginFileForTheDefaultAccount(t *testing.T) {
+	if got := (Config{}).ClaudeLoginFile(""); got != "" {
+		t.Errorf("login file = %q, want none", got)
+	}
+}
+
 // claude looks up a different login whenever CLAUDE_CONFIG_DIR is set, even to
 // ~/.claude. A fallback that names claude's own directory therefore has to run
 // with the variable unset, which docket writes as "".
