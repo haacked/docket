@@ -136,6 +136,19 @@ func (c Config) ClaudeProjectsDir(configDir string) string {
 	return c.claudeDir(configDir, "projects")
 }
 
+// ClaudeLoginFile is the .claude.json where claude keeps the login of
+// configDir. claude keeps the default account's in ~/.claude.json, beside
+// ~/.claude rather than inside it.
+func (c Config) ClaudeLoginFile(configDir string) string {
+	if configDir != "" {
+		return filepath.Join(configDir, ".claude.json")
+	}
+	if c.ClaudeDefaultDir == "" {
+		return ""
+	}
+	return c.ClaudeDefaultDir + ".json"
+}
+
 func (c Config) claudeDir(configDir, name string) string {
 	dir := cmp.Or(configDir, c.ClaudeDefaultDir)
 	if dir == "" {
