@@ -24,28 +24,22 @@ func at(minutes int) time.Time { return t0.Add(time.Duration(minutes) * time.Min
 
 // The user's own setup: an automation account first, and the default account
 // as the fallback.
-func TestPickStaysOnAnAccountUntilItHitsALimit(t *testing.T) {
+func TestPickReturnsToAnEarlierAccountOnceItsLimitResets(t *testing.T) {
 	accounts := []string{automation, defaultAccount}
 	t1 := at(0)
-	t2 := t1.Add(8 * 24 * time.Hour)
 	var limits []Limit
 
 	if got := Pick(accounts, nil, limits, t1.Add(-time.Hour)); got != (Choice{Account: automation}) {
 		t.Fatalf("with no limits, pick = %+v, want the automation account", got)
 	}
 
-	limits = append(limits, Limit{Account: automation, At: t1, Until: t1.Add(7 * 24 * time.Hour)})
+	limits = append(limits, Limit{Account: automation, At: t1, Until: t1.Add(5 * time.Hour)})
 	if got := Pick(accounts, nil, limits, t1.Add(time.Minute)); got != (Choice{Account: defaultAccount}) {
 		t.Fatalf("after automation hit its limit, pick = %+v, want the default account", got)
 	}
 
-	if got := Pick(accounts, nil, limits, t1.Add(7*24*time.Hour+time.Hour)); got != (Choice{Account: defaultAccount}) {
-		t.Fatalf("after automation's limit reset, pick = %+v, want docket to stay on the default account", got)
-	}
-
-	limits = append(limits, Limit{Account: defaultAccount, At: t2, Until: t2.Add(5 * time.Hour)})
-	if got := Pick(accounts, nil, limits, t2.Add(time.Minute)); got != (Choice{Account: automation}) {
-		t.Fatalf("after the default account hit its limit, pick = %+v, want the automation account again", got)
+	if got := Pick(accounts, nil, limits, t1.Add(5*time.Hour)); got != (Choice{Account: automation}) {
+		t.Fatalf("after automation's limit reset, pick = %+v, want the automation account again", got)
 	}
 }
 
@@ -121,10 +115,9 @@ func TestPickWithASingleAccount(t *testing.T) {
 	}
 }
 
-// Each case lists the accounts in rotation order. The rotation starts after the
-// account that hit a limit most recently, wraps past the end, and skips every
-// account still over a limit.
-func TestPickRotatesFromTheMostRecentlyLimitedAccount(t *testing.T) {
+// Each case lists the accounts in priority order. The pick is the first account
+// that is under its limits, whichever account hit a limit most recently.
+func TestPickTakesTheFirstAccountUnderItsLimits(t *testing.T) {
 	accounts := []string{automation, defaultAccount, work}
 	for _, tc := range []struct {
 		name   string
@@ -144,51 +137,50 @@ func TestPickRotatesFromTheMostRecentlyLimitedAccount(t *testing.T) {
 				{Account: defaultAccount, At: at(20), Until: at(30)},
 			},
 			now:  at(60),
-			want: work,
+			want: automation,
 		},
 		{
-			name: "the next account is free",
+			name: "the first account is limited",
+			limits: []Limit{
+				{Account: automation, At: at(0), Until: at(600)},
+			},
+			now:  at(1),
+			want: defaultAccount,
+		},
+		{
+			name: "a later account is limited",
 			limits: []Limit{
 				{Account: defaultAccount, At: at(0), Until: at(600)},
 			},
 			now:  at(1),
-			want: work,
-		},
-		{
-			name: "the rotation wraps past the last account",
-			limits: []Limit{
-				{Account: work, At: at(0), Until: at(600)},
-			},
-			now:  at(1),
 			want: automation,
 		},
 		{
-			name: "the next account is still limited",
-			limits: []Limit{
-				{Account: work, At: at(0), Until: at(600)},
-				{Account: defaultAccount, At: at(5), Until: at(600)},
-			},
-			now:  at(10),
-			want: automation,
-		},
-		{
-			name: "the most recently limited account is checked last",
+			name: "only the last account is free",
 			limits: []Limit{
 				{Account: automation, At: at(0), Until: at(600)},
 				{Account: defaultAccount, At: at(5), Until: at(600)},
-				{Account: work, At: at(10), Until: at(20)},
 			},
-			now:  at(30),
+			now:  at(10),
 			want: work,
 		},
 		{
-			name: "limits recorded out of order",
+			name: "the most recently limited account has reset",
 			limits: []Limit{
-				{Account: automation, At: at(10), Until: at(20)},
 				{Account: work, At: at(0), Until: at(600)},
+				{Account: automation, At: at(10), Until: at(20)},
 			},
 			now:  at(30),
-			want: defaultAccount,
+			want: automation,
+		},
+		{
+			name: "an earlier account reset while a later one is still limited",
+			limits: []Limit{
+				{Account: automation, At: at(0), Until: at(20)},
+				{Account: defaultAccount, At: at(10), Until: at(600)},
+			},
+			now:  at(30),
+			want: automation,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -202,19 +194,19 @@ func TestPickRotatesFromTheMostRecentlyLimitedAccount(t *testing.T) {
 }
 
 // config.toml can drop an account that docket recorded a limit for. That limit
-// must neither move the rotation nor offer a reset for an account docket no
-// longer runs.
+// must neither block an account docket runs nor offer a reset for an account
+// docket no longer runs.
 func TestPickIgnoresLimitsOnAccountsOutsideTheRotation(t *testing.T) {
 	accounts := []string{automation, defaultAccount, work}
 
 	t.Run("for the order", func(t *testing.T) {
 		limits := []Limit{
-			{Account: defaultAccount, At: at(0), Until: at(10)},
+			{Account: automation, At: at(0), Until: at(600)},
 			{Account: personal, At: at(20), Until: at(600)},
 		}
 
-		if got := Pick(accounts, nil, limits, at(30)); got != (Choice{Account: work}) {
-			t.Errorf("pick = %+v, want work, after the default account that was limited last", got)
+		if got := Pick(accounts, nil, limits, at(30)); got != (Choice{Account: defaultAccount}) {
+			t.Errorf("pick = %+v, want the default account, the first one under its limits", got)
 		}
 	})
 
@@ -483,9 +475,9 @@ func TestALimitMatchesByDirWhenEitherLoginIsUnknown(t *testing.T) {
 	}
 }
 
-// The rotation starts past every dir that the most recent limit applies to. docket
-// therefore stays on the dir it moved to after that limit resets.
-func TestPickStaysOffALoginAfterItsLimitResets(t *testing.T) {
+// Once a login's limit resets, the first dir signed in to it is free again,
+// wherever the other login sits in the order.
+func TestPickReturnsToALoginAfterItsLimitResets(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		accounts []string
@@ -498,26 +490,26 @@ func TestPickStaysOffALoginAfterItsLimitResets(t *testing.T) {
 			logins := map[string]Login{automation: team, defaultAccount: team, personal: ownOrg}
 			limits := []Limit{{Account: defaultAccount, Login: team, At: at(0), Until: at(10)}}
 
-			if got := Pick(tc.accounts, logins, limits, at(30)); got != (Choice{Account: personal}) {
-				t.Errorf("pick = %+v, want personal, which never hit a limit", got)
+			if got := Pick(tc.accounts, logins, limits, at(30)); got != (Choice{Account: tc.accounts[0]}) {
+				t.Errorf("pick = %+v, want %q, the first account", got, tc.accounts[0])
 			}
 		})
 	}
 }
 
 // A limit on a dir that the user has since signed in to another login applies
-// to no dir in the rotation. It must not move the rotation.
+// to no dir in the rotation. It must not block that dir.
 func TestPickIgnoresALimitThatAppliesToNoDirInTheRotation(t *testing.T) {
 	accounts := []string{automation, personal}
 	logins := map[string]Login{automation: team, personal: ownOrg}
 	other := Login{AccountUUID: "ef2621bd-2fb9-4866-8453-6b8e4875b115", OrganizationUUID: "2bb69dd2-45b3-40ef-80fe-d40827cc4cd5"}
 	limits := []Limit{
-		{Account: automation, Login: team, At: at(0), Until: at(10)},
+		{Account: automation, Login: team, At: at(0), Until: at(600)},
 		{Account: personal, Login: other, At: at(20), Until: at(600)},
 	}
 
 	if got := Pick(accounts, logins, limits, at(30)); got != (Choice{Account: personal}) {
-		t.Errorf("pick = %+v, want personal, after automation, which was limited last", got)
+		t.Errorf("pick = %+v, want personal, whose old login's limit is not its own", got)
 	}
 }
 

@@ -46,8 +46,8 @@ type Config struct {
 	// therefore turns ~/.claude in the file into "". It keeps a CLAUDE_CONFIG_DIR
 	// that docket inherited as given, because claude reads that value as given.
 	ClaudeConfigDir string `toml:"claude_config_dir"`
-	// ClaudeFallbackConfigDirs are the accounts a new review moves to once
-	// claude refuses a session for a usage limit, in the order docket tries
+	// ClaudeFallbackConfigDirs are the accounts a new review runs under while
+	// every account before it is over a usage limit, in the order docket tries
 	// them. Load turns ~/.claude into "" here too.
 	ClaudeFallbackConfigDirs []string `toml:"claude_fallback_config_dirs"`
 	// ClaudeDefaultDir is DefaultClaudeConfigDir with the tilde expanded. Load
@@ -157,8 +157,8 @@ func (c Config) claudeDir(configDir, name string) string {
 	return filepath.Join(dir, name)
 }
 
-// ClaudeAccounts are the accounts docket rotates new claude sessions through:
-// ClaudeConfigDir first, then each fallback, each account once.
+// ClaudeAccounts are the accounts new claude sessions run under, in priority
+// order: ClaudeConfigDir first, then each fallback, each account once.
 func (c Config) ClaudeAccounts() []string {
 	accounts := []string{c.ClaudeConfigDir}
 	for _, dir := range c.ClaudeFallbackConfigDirs {
