@@ -29,16 +29,16 @@ func TestPickReturnsToAnEarlierAccountOnceItsLimitResets(t *testing.T) {
 	t1 := at(0)
 	var limits []Limit
 
-	if got := Pick(accounts, nil, limits, t1.Add(-time.Hour)); got != (Choice{Account: automation}) {
+	if got := Pick(accounts, nil, limits, t1.Add(-time.Hour)); got.Account != automation || got.Limited() {
 		t.Fatalf("with no limits, pick = %+v, want the automation account", got)
 	}
 
 	limits = append(limits, Limit{Account: automation, At: t1, Until: t1.Add(5 * time.Hour)})
-	if got := Pick(accounts, nil, limits, t1.Add(time.Minute)); got != (Choice{Account: defaultAccount}) {
+	if got := Pick(accounts, nil, limits, t1.Add(time.Minute)); got.Account != defaultAccount || got.Limited() {
 		t.Fatalf("after automation hit its limit, pick = %+v, want the default account", got)
 	}
 
-	if got := Pick(accounts, nil, limits, t1.Add(5*time.Hour)); got != (Choice{Account: automation}) {
+	if got := Pick(accounts, nil, limits, t1.Add(5*time.Hour)); got.Account != automation || got.Limited() {
 		t.Fatalf("after automation's limit reset, pick = %+v, want the automation account again", got)
 	}
 }
@@ -186,7 +186,7 @@ func TestPickTakesTheFirstAccountUnderItsLimits(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := Pick(accounts, nil, tc.limits, tc.now)
 
-			if got != (Choice{Account: tc.want}) {
+			if got.Account != tc.want || got.Limited() {
 				t.Errorf("pick = %+v, want %q under its limits", got, tc.want)
 			}
 		})
@@ -205,7 +205,7 @@ func TestPickIgnoresLimitsOnAccountsOutsideTheRotation(t *testing.T) {
 			{Account: personal, At: at(20), Until: at(600)},
 		}
 
-		if got := Pick(accounts, nil, limits, at(30)); got != (Choice{Account: defaultAccount}) {
+		if got := Pick(accounts, nil, limits, at(30)); got.Account != defaultAccount || got.Limited() {
 			t.Errorf("pick = %+v, want the default account, the first one under its limits", got)
 		}
 	})
@@ -427,7 +427,7 @@ func TestALimitBlocksEveryDirSignedInToItsLogin(t *testing.T) {
 	if !Limited(automation, team, limits, at(30)) {
 		t.Error("automation reads as free although the default account's login is over its limit")
 	}
-	if got := Pick(accounts, logins, limits, at(30)); got != (Choice{Account: personal}) {
+	if got := Pick(accounts, logins, limits, at(30)); got.Account != personal || got.Limited() {
 		t.Errorf("pick = %+v, want personal, the one dir signed in to another login", got)
 	}
 }
@@ -490,7 +490,7 @@ func TestPickReturnsToALoginAfterItsLimitResets(t *testing.T) {
 			logins := map[string]Login{automation: team, defaultAccount: team, personal: ownOrg}
 			limits := []Limit{{Account: defaultAccount, Login: team, At: at(0), Until: at(10)}}
 
-			if got := Pick(tc.accounts, logins, limits, at(30)); got != (Choice{Account: tc.accounts[0]}) {
+			if got := Pick(tc.accounts, logins, limits, at(30)); got.Account != tc.accounts[0] || got.Limited() {
 				t.Errorf("pick = %+v, want %q, the first account", got, tc.accounts[0])
 			}
 		})
@@ -508,7 +508,7 @@ func TestPickIgnoresALimitThatAppliesToNoDirInTheRotation(t *testing.T) {
 		{Account: personal, Login: other, At: at(20), Until: at(600)},
 	}
 
-	if got := Pick(accounts, logins, limits, at(30)); got != (Choice{Account: personal}) {
+	if got := Pick(accounts, logins, limits, at(30)); got.Account != personal || got.Limited() {
 		t.Errorf("pick = %+v, want personal, whose old login's limit is not its own", got)
 	}
 }
@@ -582,5 +582,63 @@ func TestReadLoginKnowsNoLoginWithoutBothIDs(t *testing.T) {
 				t.Errorf("login = %+v, want none", got)
 			}
 		})
+	}
+}
+
+func TestRecheckIsZeroWhenThePickIsTheFirstAccount(t *testing.T) {
+	accounts := []string{automation, defaultAccount}
+	limits := []Limit{{Account: defaultAccount, At: at(0), Until: at(60)}}
+
+	if got := Pick(accounts, nil, limits, at(10)).Recheck; !got.IsZero() {
+		t.Errorf("recheck = %v, want zero, because a reset cannot move the pick off the first account", got)
+	}
+}
+
+// The pick moves back to an earlier account when that account's limit resets.
+// A limit on an account after the pick does not move it.
+func TestRecheckIsTheSoonestResetAheadOfThePick(t *testing.T) {
+	accounts := []string{automation, personal, work, defaultAccount}
+	limits := []Limit{
+		{Account: automation, At: at(0), Until: at(300)},
+		{Account: personal, At: at(0), Until: at(120)},
+		{Account: defaultAccount, At: at(0), Until: at(30)},
+	}
+
+	got := Pick(accounts, nil, limits, at(10))
+
+	if got.Account != work {
+		t.Fatalf("pick = %+v, want the work account", got)
+	}
+	if !got.Recheck.Equal(at(120)) {
+		t.Errorf("recheck = %v, want the personal account's reset %v", got.Recheck, at(120))
+	}
+}
+
+func TestRecheckIsThePickedResetWhenEveryAccountIsLimited(t *testing.T) {
+	accounts := []string{automation, defaultAccount}
+	limits := []Limit{
+		{Account: automation, At: at(0), Until: at(600)},
+		{Account: defaultAccount, At: at(0), Until: at(90)},
+	}
+
+	if got := Pick(accounts, nil, limits, at(10)).Recheck; !got.Equal(at(90)) {
+		t.Errorf("recheck = %v, want the soonest reset %v", got, at(90))
+	}
+}
+
+func TestNameWritesTheHomeDirectoryAsATilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	cases := map[string]string{
+		"":                                 "default",
+		filepath.Join(home, ".claude-max"): "~/.claude-max",
+		"/opt/claude":                      "/opt/claude",
+	}
+	for dir, want := range cases {
+		if got := Name(dir); got != want {
+			t.Errorf("Name(%q) = %q, want %q", dir, got, want)
+		}
 	}
 }

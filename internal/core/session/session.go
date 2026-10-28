@@ -500,12 +500,12 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
 	}
 	claudeDir := s.Cfg.ClaudeConfigDir
-	if rotatesAccounts(eng.Name()) {
+	if config.UsesClaudeAccount(eng.Name()) {
 		// Every account can be over its limit. The review starts under the one
 		// that resets first all the same. A limit raised since claude reported
 		// it then costs nothing, and a limit still in force sends the review to
 		// Did not start once the poll reads the refusal.
-		choice, err := s.newAccount()
+		choice, err := s.NextAccount()
 		if err != nil {
 			return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
 		}

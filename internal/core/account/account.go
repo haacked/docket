@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -58,6 +60,11 @@ type Choice struct {
 	// is over a limit, and Until is when Account's limit resets, which is the
 	// earliest reset of them all.
 	Until time.Time
+	// Recheck is when the choice can next change while no new limit is
+	// recorded. When every account is over a limit, it is Until. Otherwise it
+	// is the soonest reset among the accounts ahead of Account. It is zero when
+	// Account is the first account and is under its limits.
+	Recheck time.Time
 }
 
 // Limited reports whether every account was over a limit when Pick chose.
@@ -77,12 +84,13 @@ func Pick(accounts []string, logins map[string]Login, limits []Limit, now time.T
 	for _, candidate := range accounts {
 		until := reset(candidate, logins[candidate], limits)
 		if !until.After(now) {
-			return Choice{Account: candidate}
+			return Choice{Account: candidate, Recheck: soonest.Until}
 		}
 		if soonest.Until.IsZero() || until.Before(soonest.Until) {
 			soonest = Choice{Account: candidate, Until: until}
 		}
 	}
+	soonest.Recheck = soonest.Until
 	return soonest
 }
 
@@ -101,6 +109,28 @@ func reset(account string, login Login, limits []Limit) time.Time {
 		}
 	}
 	return until
+}
+
+// Name is how docket shows an account dir: "default" for claude's default
+// account, and otherwise the dir with the home directory written as ~.
+func Name(dir string) string {
+	if dir == "" {
+		return "default"
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if rest, ok := strings.CutPrefix(dir, home+string(filepath.Separator)); ok {
+			return "~/" + rest
+		}
+	}
+	return dir
+}
+
+// When is how docket shows the time a limit resets.
+func When(at time.Time) string {
+	if at.IsZero() {
+		return "claude says it resets"
+	}
+	return at.Local().Format("Jan 2 3:04 PM")
 }
 
 // ReadLogin reads the login that claude keeps in the .claude.json at path. It

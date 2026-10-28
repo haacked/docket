@@ -19,6 +19,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/haacked/docket/internal/core/account"
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/engine"
 	"github.com/haacked/docket/internal/core/exec"
@@ -82,6 +83,9 @@ type App struct {
 	// indexStamp is the index file's state as of the last watch check, so the
 	// next one can tell whether another docket process appended to it.
 	indexStamp index.StatMark
+	// next is the last answer to which claude account a new review runs under,
+	// or nil before the first read answers. The title line shows it.
+	next *accountMsg
 }
 
 // New builds the root model. A non-empty initialInput opens the new review screen
@@ -142,7 +146,7 @@ func (a App) Init() tea.Cmd {
 	// The watch tick is a stat, not a subprocess. It runs during a dry run too,
 	// and whether or not anything else is running.
 	if a.dryRun {
-		return tea.Batch(a.loadRecords(), requestBackground, a.armIndexTick())
+		return tea.Batch(a.loadRecords(), a.loadAccount(), requestBackground, a.armIndexTick())
 	}
 	// A background session outlives the docket that started it, so startup asks
 	// the agent about them straight away rather than waiting out the first tick.
@@ -152,6 +156,7 @@ func (a App) Init() tea.Cmd {
 	// the one that read the index before the others wrote to it.
 	return tea.Batch(
 		tea.Sequence(a.loadRecords(), a.reconcile(), a.pollBackground()),
+		a.loadAccount(),
 		requestBackground,
 		a.armIndexTick(),
 	)
@@ -359,7 +364,7 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			status += "\n" + failures(message.failed)
 		}
 		a = a.report(status, message.retry)
-		cmds := []tea.Cmd{a.loadRecords(), a.pollBackground()}
+		cmds := []tea.Cmd{a.reload(), a.pollBackground()}
 		if len(message.untrusted) > 0 {
 			cmds = append(cmds, a.trust(message.untrusted))
 		}
@@ -369,7 +374,7 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		for _, rec := range message.records {
 			delete(a.dash.Busy, rec.ID)
 		}
-		return a, tea.Batch(a.loadRecords(), a.trust(message.records))
+		return a, tea.Batch(a.reload(), a.trust(message.records))
 
 	case trustExitedMsg:
 		return a.trusted(message)
@@ -606,6 +611,10 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// that this dashboard has no tick outstanding for.
 		return a.armPoll()
 
+	case accountMsg:
+		a.next = &message
+		return a, nil
+
 	case preparedMsg:
 		a.screen = msg.Dashboard
 		a.status = message.status
@@ -641,11 +650,21 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a.applyPoll(message)
 
 	case indexTickMsg:
-		return a, tea.Batch(a.checkIndex(), a.armIndexTick())
+		cmds := []tea.Cmd{a.checkIndex(), a.armIndexTick()}
+		// A limit on an account ahead of the pick has reset. Clearing the time
+		// keeps the next tick from reading the account again before this read
+		// answers.
+		if a.next != nil && !a.next.choice.Recheck.IsZero() && !time.Now().Before(a.next.choice.Recheck) {
+			next := *a.next
+			next.choice.Recheck = time.Time{}
+			a.next = &next
+			cmds = append(cmds, a.loadAccount())
+		}
+		return a, tea.Batch(cmds...)
 
 	case indexChangedMsg:
 		a.indexStamp = message.stamp
-		return a, a.loadRecords()
+		return a, a.reload()
 
 	case detectedMsg:
 		delete(a.dash.Busy, message.record.ID)
@@ -659,9 +678,9 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// Leaving a background session that is still working puts the record back
 		// to running, and nothing else would start watching it again.
 		if message.record.BackgroundRunning() {
-			return a, tea.Batch(a.loadRecords(), a.pollBackground())
+			return a, tea.Batch(a.reload(), a.pollBackground())
 		}
-		return a, a.loadRecords()
+		return a, a.reload()
 
 	case statusMsg:
 		a.screen = msg.Dashboard
@@ -670,7 +689,7 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		a = a.resetBusy(message.err)
-		return a, a.loadRecords()
+		return a, a.reload()
 
 	case bgStartFailedMsg:
 		a = a.resetBusy(message.err)
@@ -680,9 +699,9 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// The status line keeps the failure because the poll never writes to it.
 		if message.record.InBackgroundSession() {
 			a.status = fmt.Sprintf("%s did not start in the background: %v", message.record.Ref, message.err)
-			return a, tea.Batch(a.loadRecords(), a.pollBackground())
+			return a, tea.Batch(a.reload(), a.pollBackground())
 		}
-		return a, a.loadRecords()
+		return a, a.reload()
 	}
 
 	return a.routeToScreen(message)
@@ -820,6 +839,9 @@ func (a App) chrome() (above, below string) {
 	if a.dryRun {
 		above += " " + a.styles.Dim.Render("dry run")
 	}
+	if line := a.accountLine(); line != "" {
+		above += " " + line
+	}
 	status := a.statusLine()
 	if a.err != nil {
 		status = a.styles.Err.Render(wrap(a.err.Error(), a.inner()))
@@ -831,6 +853,21 @@ func (a App) chrome() (above, below string) {
 		below = status + "\n\n" + below
 	}
 	return above + "\n", "\n" + below
+}
+
+// accountLine names the claude account a new review runs under. It is empty
+// until the first read answers.
+func (a App) accountLine() string {
+	next := a.next
+	switch {
+	case next == nil:
+		return ""
+	case next.err != nil:
+		return a.styles.Err.Render("· claude account unknown: " + next.err.Error())
+	case next.choice.Limited():
+		return a.styles.Err.Render(fmt.Sprintf("· every claude account is over its limit until %s", account.When(next.choice.Until)))
+	}
+	return a.styles.Dim.Render("· claude account " + account.Name(next.choice.Account))
 }
 
 // spinner is what every busy marker draws with. Its frame is empty while the
@@ -1019,6 +1056,22 @@ func (a App) loadRecords() tea.Cmd {
 			return errMsg{err: err}
 		}
 		return recordsLoadedMsg{records: records, stamp: stamp}
+	}
+}
+
+// reload reads the index and the claude account a new review runs under.
+// docket records a usage limit only alongside a write to the index, so a reload
+// sees every new limit. The index tick reads the account again when a limit
+// resets.
+func (a App) reload() tea.Cmd {
+	return tea.Batch(a.loadRecords(), a.loadAccount())
+}
+
+func (a App) loadAccount() tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		choice, err := svc.NextAccount()
+		return accountMsg{choice: choice, err: err}
 	}
 }
 
@@ -1294,7 +1347,7 @@ func (a App) trusted(exited trustExitedMsg) (tea.Model, tea.Cmd) {
 			reason = fmt.Sprintf("the trust prompt for %s did not run: %v", dir, exited.err)
 		}
 		a = a.report(fmt.Sprintf("%s, so %d background %s did not start", reason, len(here), format.Plural(len(here), "review")), true)
-		cmds = append(cmds, a.loadRecords())
+		cmds = append(cmds, a.reload())
 	} else {
 		cmds = append(cmds, a.retryBackground(here))
 	}
