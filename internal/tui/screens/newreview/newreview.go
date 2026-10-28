@@ -58,8 +58,8 @@ type Existing struct {
 	review.Found
 }
 
-// CanAsk reports whether view and ask is on offer. It needs notes to ask about.
-// A record already on the dashboard has its own key for it.
+// CanAsk reports whether open is on offer. It needs notes to ask about. enter
+// opens a record already on the dashboard.
 func (e Existing) CanAsk() bool {
 	return e.RecordID == "" && !e.NotesAt.IsZero()
 }
@@ -292,13 +292,13 @@ func (m Model) existingView(found Existing) string {
 
 	choices := []string{"a append", "o overwrite", "esc back"}
 	if found.CanAsk() {
-		choices = slices.Insert(choices, 0, "v view and ask")
+		choices = slices.Insert(choices, 0, "v open")
 	}
 	b.WriteString("\n" + strings.Join(choices, " · ") + "\n")
 	b.WriteString("\n" + m.Styles.Label.Render("Engine") + " " + m.engine() + "\n")
 	b.WriteString(m.Styles.Label.Render("Run") + " " + m.runLine() + "\n")
 	if found.CanAsk() && m.background() {
-		b.WriteString(m.Styles.Dim.Render("view and ask runs in this terminal") + "\n")
+		b.WriteString(m.Styles.Dim.Render("open runs in this terminal") + "\n")
 	}
 	if m.Busy != "" {
 		b.WriteString("\n" + m.Spinner.Render(m.Busy) + "\n")

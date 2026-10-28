@@ -36,14 +36,12 @@ type StartReview struct {
 	RecordID   string
 }
 
-// Ask opens a question-and-answer session about a record's notes.
-type Ask struct{ ID string }
-
 // OpenRereview asks for the choice between appending to a record's review and
 // overwriting it.
 type OpenRereview struct{ ID string }
 
-// Resume reopens the session behind a record.
+// Resume reopens the review session behind a record, or opens a session about
+// its notes when it has none.
 type Resume struct{ ID string }
 
 // Abandon drops a record and cleans up after it.

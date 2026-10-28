@@ -138,16 +138,7 @@ func (m Model) handleKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, msg.Send(msg.OpenRequests{})
 	case "enter":
 		if rec, ok := m.Selected(); ok {
-			// An adopted record has no review session to resume, so enter offers
-			// to review it again instead.
-			if rec.Adopted() {
-				return m, msg.Send(msg.OpenRereview{ID: rec.ID})
-			}
 			return m, msg.Send(msg.Resume{ID: rec.ID})
-		}
-	case "c":
-		if rec, ok := m.Selected(); ok {
-			return m, msg.Send(msg.Ask{ID: rec.ID})
 		}
 	case "u":
 		if rec, ok := m.Selected(); ok {

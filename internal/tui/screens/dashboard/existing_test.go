@@ -30,60 +30,26 @@ func only(rec review.Record) Model {
 	return m
 }
 
-func TestAskAndRereviewKeysEmitIntents(t *testing.T) {
-	tests := []struct {
-		name string
-		key  tea.KeyPressMsg
-		want tea.Msg
-	}{
-		{"ask", key("c"), msg.Ask{ID: "a"}},
-		{"re-review", key("u"), msg.OpenRereview{ID: "a"}},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, cmd := newModel().Update(tc.key)
-			if cmd == nil {
-				t.Fatalf("%s produced no command", tc.name)
-			}
-			if got := cmd(); got != tc.want {
-				t.Errorf("got %#v, want %#v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestAskAndRereviewNeedARecord(t *testing.T) {
-	m := New(Styles{})
-
-	for _, press := range []tea.KeyPressMsg{key("c"), key("u")} {
-		if _, cmd := m.Update(press); cmd != nil {
-			t.Errorf("%s with no records produced %#v", press, cmd())
-		}
-	}
-}
-
-// A plain resume of a row with no review session falls through to a fresh
-// review-code start with no flag, which stops at the prompt the user answered.
-func TestEnterOnAReviewedRowWithNoSessionOffersTheReReview(t *testing.T) {
-	_, cmd := only(adoptedRecord()).Update(named(tea.KeyEnter))
-
+func TestRereviewKeyEmitsItsIntent(t *testing.T) {
+	_, cmd := newModel().Update(key("u"))
 	if cmd == nil {
-		t.Fatal("enter produced no command")
+		t.Fatal("u produced no command")
 	}
-	if got, want := cmd(), (msg.OpenRereview{ID: "d"}); got != want {
+	if got, want := cmd(), (msg.OpenRereview{ID: "a"}); got != want {
 		t.Errorf("got %#v, want %#v", got, want)
 	}
 }
 
-// A row a review ran on keeps enter as a resume, whatever its session id says.
-func TestEnterOnAReviewRowStillResumes(t *testing.T) {
-	rec := adoptedRecord()
-	rec.State = review.StateUnreviewed
-	rec.Intent = review.IntentReview
+func TestRereviewNeedsARecord(t *testing.T) {
+	if _, cmd := New(Styles{}).Update(key("u")); cmd != nil {
+		t.Errorf("u with no records produced %#v", cmd())
+	}
+}
 
-	_, cmd := only(rec).Update(named(tea.KeyEnter))
-
+// The root decides whether enter opens the review session or a session about
+// the notes, so the dashboard sends the same intent for every row.
+func TestEnterResumesTheRow(t *testing.T) {
+	_, cmd := only(adoptedRecord()).Update(named(tea.KeyEnter))
 	if cmd == nil {
 		t.Fatal("enter produced no command")
 	}

@@ -410,26 +410,6 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.err = nil
 		return a, nil
 
-	case msg.Ask:
-		rec, ok := a.record(message.ID)
-		if !ok {
-			return a, nil
-		}
-		if rec.InProgress() {
-			a.status = fmt.Sprintf("%s is still %s; ask once it finishes", rec.Ref, rec.State)
-			return a, nil
-		}
-		if a.dryRun {
-			return a, a.explainAsk(rec)
-		}
-		// A second c before the first session takes the terminal would start
-		// a second session and overwrite the first one's id.
-		if next, busy := a.refuseBusy(rec); busy {
-			return next, nil
-		}
-		a.dash.Busy[rec.ID] = "opening"
-		return a, a.ask(rec)
-
 	case msg.Resume:
 		rec, ok := a.record(message.ID)
 		if !ok {
@@ -455,6 +435,18 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.dash.Busy[rec.ID] = "starting"
 			return a, a.restart(rec)
+		}
+		if session.OpensNotes(rec) {
+			if a.dryRun {
+				return a, a.explainAsk(rec)
+			}
+			// A second enter before the first session takes the terminal would
+			// start a second session and overwrite the first one's id.
+			if next, busy := a.refuseBusy(rec); busy {
+				return next, nil
+			}
+			a.dash.Busy[rec.ID] = "opening"
+			return a, a.ask(rec)
 		}
 		if a.dryRun {
 			return a, a.explainResume(rec)
@@ -1601,13 +1593,19 @@ func describe(rec review.Record) string {
 		if rec.PRState.Closed() {
 			return fmt.Sprintf("%s is %s and your review is still pending. Press s to submit it or x to abandon", rec.Ref, rec.PRState.Label())
 		}
+		if session.OpensNotes(rec) {
+			return fmt.Sprintf("%s has a pending review. Press s to submit it or enter to ask about it", rec.Ref)
+		}
 		if rec.Adopted() {
-			return fmt.Sprintf("%s has a pending review. Press s to submit it or c to ask about it", rec.Ref)
+			return fmt.Sprintf("%s has a pending review. Press s to submit it or u to review it again", rec.Ref)
 		}
 		return fmt.Sprintf("%s has a pending review. Press enter to keep going", rec.Ref)
 	case review.StateReviewed:
-		return fmt.Sprintf("%s has your review notes. Press c to ask about them or u to review it again", rec.Ref)
+		return fmt.Sprintf("%s has your review notes. Press enter to ask about them or u to review it again", rec.Ref)
 	case review.StateUnreviewed:
+		if session.OpensNotes(rec) {
+			return fmt.Sprintf("%s: the session ended without posting a review. Press enter to ask about the notes, u to review again, or x to abandon", rec.Ref)
+		}
 		return fmt.Sprintf("%s: the session ended without posting a review. Press enter to resume it, u to review again, or x to abandon", rec.Ref)
 	case review.StateAbandoned:
 		return fmt.Sprintf("%s abandoned", rec.Ref)

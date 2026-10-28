@@ -39,11 +39,10 @@ var (
 	Dashboard = []Entry{
 		{Key: "n", Short: "new", Long: "start a new review"},
 		{Key: "i", Short: "requests", Long: "list the pull requests waiting on your review"},
-		{Key: "enter", Short: "resume", Long: "resume or open the selected record"},
+		{Key: "enter", Short: "open", Long: "open the review session, or a session about the notes when there is none"},
 		{Key: "s", Short: "submit", Long: "submit your pending review"},
 		{Key: "v", Short: "notes", Long: "view the review notes"},
 		{Key: "o", Short: "github", Long: "open the pull request on GitHub, at your review when it is a draft"},
-		{Key: "c", Short: "ask", Long: "ask questions about the review notes"},
 		{Key: "u", Short: "re-review", Long: "review again, appending to or overwriting the review"},
 		{Key: "x", Short: "abandon", Long: "abandon the selected record"},
 		{Key: "r", Short: "refresh", Long: "refresh the selected record from GitHub"},
@@ -58,7 +57,7 @@ var (
 		{Key: "enter", Short: "start", Long: "start the review"},
 		{Key: "tab", Short: "engine", Long: "change the engine"},
 		{Key: "ctrl+b", Short: "background", Long: "toggle background vs. this terminal"},
-		{Key: "v/a/o", Long: "when a review exists: view and ask, append, or overwrite"},
+		{Key: "v/a/o", Long: "when a review exists: open, append, or overwrite"},
 		{Key: "esc", Short: "back", Long: "back to the dashboard"},
 	}
 	Submit = []Entry{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -398,6 +399,56 @@ func TestResumeSpecRefusesAnAdoptedRecordWithNoReviewSession(t *testing.T) {
 	}
 	if _, err := svc.ExplainResume(rec); err == nil {
 		t.Error("ExplainResume reported a command a real resume refuses")
+	}
+}
+
+// enter opens the review session when there is one and a session about the
+// notes otherwise. A
+// record still in progress or with no notes keeps the resume, which reports why
+// it cannot run.
+func TestOpensNotesWhenThereIsNoReviewSession(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	notesFor(t, svc, unlisted)
+	rec := prepareWith(t, svc, unlisted, "claude", review.IntentAsk)
+	rec.State = review.StateReviewed
+
+	withSession := rec
+	withSession.Intent = review.IntentReview
+	withSession.SessionID = "11111111-2222-3333-4444-555555555555"
+	codex := rec
+	codex.Engine = "codex"
+	running := rec
+	running.State = review.StateReviewing
+	noNotes := rec
+	noNotes.NotesPath = filepath.Join(t.TempDir(), "missing.md")
+	noDir := rec
+	noDir.Dir = filepath.Join(t.TempDir(), "gone")
+	background := rec
+	background.Mode = review.ModeBackground
+	background.BGID = "5cfeaa0a"
+	notStarted := rec
+	notStarted.State = review.StateNotStarted
+
+	for _, tc := range []struct {
+		name string
+		rec  review.Record
+		want bool
+	}{
+		{"adopted", rec, true},
+		{"review session", withSession, false},
+		{"codex with no captured session", codex, true},
+		{"in progress", running, false},
+		{"no notes", noNotes, false},
+		{"no directory", noDir, false},
+		{"background session", background, false},
+		{"not started", notStarted, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := OpensNotes(tc.rec); got != tc.want {
+				t.Errorf("OpensNotes = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

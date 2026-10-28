@@ -78,34 +78,70 @@ func TestReReviewOpensTheChoiceForTheRecord(t *testing.T) {
 	}
 }
 
-func TestARecordInProgressRefusesAskAndReReview(t *testing.T) {
+func TestARecordInProgressRefusesReReview(t *testing.T) {
 	for _, state := range []review.State{review.StateReviewing, review.StatePreparing} {
 		rec := backgroundRecord(state)
 
-		for _, message := range []any{msg.Ask{ID: rec.ID}, msg.OpenRereview{ID: rec.ID}} {
-			next, cmd := withRecords(rec).Update(message)
-			got := next.(App)
-			if cmd != nil {
-				t.Errorf("%s: %T ran a command against a record still in progress", state, message)
-			}
-			if got.screen != msg.Dashboard || !strings.Contains(got.status, "is still "+string(state)) {
-				t.Errorf("%s: %T: screen = %v, status = %q", state, message, got.screen, got.status)
-			}
+		next, cmd := withRecords(rec).Update(msg.OpenRereview{ID: rec.ID})
+		got := next.(App)
+		if cmd != nil {
+			t.Errorf("%s: re-review ran a command against a record still in progress", state)
+		}
+		if got.screen != msg.Dashboard || !strings.Contains(got.status, "is still "+string(state)) {
+			t.Errorf("%s: screen = %v, status = %q", state, got.screen, got.status)
 		}
 	}
 }
 
-// The dashboard stays live while the ask command builds. A second c in that
-// window would start a second session and overwrite the first one's id.
-func TestASecondAskWhileTheFirstOpensIsIgnored(t *testing.T) {
+// withNotes is an adopted record whose notes exist, so enter opens a session
+// about them.
+func withNotes(t *testing.T) review.Record {
+	t.Helper()
 	rec := adopted()
+	rec.Dir = t.TempDir()
+	rec.NotesPath = filepath.Join(rec.Dir, "pr-4.md")
+	if err := os.WriteFile(rec.NotesPath, []byte("# Review\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+// A record with no review session has nothing for enter to resume, so enter
+// opens a session about its notes.
+func TestEnterOnARecordWithNoReviewSessionOpensTheNotes(t *testing.T) {
+	svc, _ := serviceOverIndex(t)
+	rec := withNotes(t)
+	a := New(svc, config.Config{DefaultEngine: "claude"}, "", false)
+	a.dash = a.dash.SetRecords([]review.Record{rec})
+
+	next, cmd := a.Update(msg.Resume{ID: rec.ID})
+	if note := next.(App).dash.Busy[rec.ID]; note != "opening" {
+		t.Errorf("busy = %q, want opening", note)
+	}
+	got := drain(cmd)
+	if len(got) != 1 {
+		t.Fatalf("enter sent %#v, want one launch", got)
+	}
+	launch, ok := got[0].(launchMsg)
+	if !ok {
+		t.Fatalf("enter sent %#v, want a launch", got[0])
+	}
+	if launch.kind != launchAsk {
+		t.Errorf("launch kind = %v, want the Q&A session", launch.kind)
+	}
+}
+
+// The dashboard stays live while the session's command builds. A second enter
+// in that window would start a second session and overwrite the first one's id.
+func TestASecondEnterWhileTheNotesSessionOpensIsIgnored(t *testing.T) {
+	rec := withNotes(t)
 	a := withRecords(rec)
 	a.dash.Busy[rec.ID] = "opening"
 
-	next, cmd := a.Update(msg.Ask{ID: rec.ID})
+	next, cmd := a.Update(msg.Resume{ID: rec.ID})
 
 	if len(drain(cmd)) != 0 {
-		t.Error("a second ask ran a command while the first was opening")
+		t.Error("a second enter ran a command while the first was opening")
 	}
 	if want := rec.Ref.String() + " is still opening"; next.(App).status != want {
 		t.Errorf("status = %q, want %q", next.(App).status, want)
@@ -138,12 +174,7 @@ func TestAnAskSessionExitTakesItsOwnPath(t *testing.T) {
 // session instead.
 func TestAPreparedAskOpensTheQuestionSession(t *testing.T) {
 	svc, _ := serviceOverIndex(t)
-	rec := adopted()
-	rec.Dir = t.TempDir()
-	rec.NotesPath = filepath.Join(rec.Dir, "pr-4.md")
-	if err := os.WriteFile(rec.NotesPath, []byte("# Review\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	rec := withNotes(t)
 	a := New(svc, config.Config{DefaultEngine: "claude"}, "", false)
 
 	_, cmd := a.Update(preparedMsg{record: rec})
@@ -159,9 +190,51 @@ func TestAPreparedAskOpensTheQuestionSession(t *testing.T) {
 	}
 }
 
+// A row with no review session gets a hint that matches what enter opens.
+func TestDescribeARecordWithNoReviewSession(t *testing.T) {
+	rec := withNotes(t)
+	rec.State = review.StateDrafted
+	if got := describe(rec); !strings.Contains(got, "enter to ask") {
+		t.Errorf("describe(drafted) = %q", got)
+	}
+
+	rec.Intent = review.IntentReview
+	rec.Engine = "codex"
+	rec.State = review.StateUnreviewed
+	if got := describe(rec); !strings.Contains(got, "enter to ask about the notes") {
+		t.Errorf("describe(unreviewed) = %q", got)
+	}
+
+	rec.SessionID = "019a"
+	if got := describe(rec); !strings.Contains(got, "enter to resume it") {
+		t.Errorf("describe(unreviewed with a session) = %q", got)
+	}
+}
+
+// A dry run reports the command enter would run and records nothing.
+func TestADryRunEnterReportsTheNotesSession(t *testing.T) {
+	svc, paths := serviceOverIndex(t)
+	rec := withNotes(t)
+	a := New(svc, config.Config{DefaultEngine: "claude"}, "", true)
+	a.dash = a.dash.SetRecords([]review.Record{rec})
+
+	_, cmd := a.Update(msg.Resume{ID: rec.ID})
+	got := drain(cmd)
+	if len(got) != 1 {
+		t.Fatalf("enter sent %#v, want one status", got)
+	}
+	status, ok := got[0].(statusMsg)
+	if !ok || !strings.Contains(status.text, rec.NotesPath) {
+		t.Errorf("enter sent %#v, want the command that reads the notes", got[0])
+	}
+	if info, err := os.Stat(paths.Index); err == nil && info.Size() > 0 {
+		t.Error("a dry run wrote to the index")
+	}
+}
+
 func TestDescribeAnAdoptedRecord(t *testing.T) {
 	rec := adopted()
-	if got := describe(rec); !strings.Contains(got, "c to ask") {
+	if got := describe(rec); !strings.Contains(got, "enter to ask") {
 		t.Errorf("describe(reviewed) = %q", got)
 	}
 	rec.State = review.StateDrafted

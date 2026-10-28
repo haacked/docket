@@ -265,8 +265,8 @@ func (m Model) confirmAssign(key tea.KeyPressMsg) (Model, tea.Cmd) {
 
 // choose handles the keys of the step that asks what to do with the marked pull
 // requests that already have a review. The list is not on screen, so no key
-// reaches it. A batch runs in the background, so view and ask, which needs the
-// terminal, is not on offer.
+// reaches it. A batch runs in the background. Open needs the terminal, so the
+// screen does not offer it.
 func (m Model) choose(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.Busy {
 		return m, nil
