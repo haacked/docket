@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +88,100 @@ func lines(entries ...string) string {
 func with(entries []string, more ...string) []string {
 	return append(append([]string{}, entries...), more...)
 }
+
+// replaced is entries with every old string replaced by its new one, as
+// strings.NewReplacer replaces them.
+func replaced(entries []string, oldnew ...string) []string {
+	r := strings.NewReplacer(oldnew...)
+	out := make([]string, len(entries))
+	for i, entry := range entries {
+		out[i] = r.Replace(entry)
+	}
+	return out
+}
+
+// turnCompanion is the line Claude Code 2.1.312 wrote just before a task
+// notification that followed a refused turn. claude ran no turn for it.
+const turnCompanion = `{"parentUuid":"e4176aef-494a-4719-8930-2517755e1ffd","isSidechain":false,"promptId":"6f718fd8-a1ef-4ebd-a30c-83a6468a16f8","type":"user","message":{"role":"user","content":"<system-reminder>\n<tools-used-before-summary>TaskStop, ToolSearch</tools-used-before-summary>\n</system-reminder>"},"isMeta":true,"turnCompanion":true,"uuid":"755cf424-8ad0-4bf4-bfb4-00463ac57999","timestamp":"2026-10-28T17:47:09.951Z","queueSkipAttachments":true,"queueTranscriptOnly":true,"sessionKind":"bg","userType":"external","sessionId":"1b5209e0-f2cb-42b4-ab42-6cd849a9925a"}`
+
+// companion is turnCompanion with one string replaced.
+func companion(old, replacement string) string {
+	return strings.Replace(turnCompanion, old, replacement, 1)
+}
+
+// wrapUpPromptID is the promptId of every user line of the turn in which
+// session 85f79088 reached its account's usage limit.
+const wrapUpPromptID = "4508d009-d69c-4b25-9d7f-3123cd3a91ae"
+
+// wrapUpPrompt is the line Claude Code 2.1.312 wrote to open a turn for a
+// sub-agent's report. The account reached its usage limit during that turn.
+const wrapUpPrompt = `{"isSidechain":false,"promptId":"4508d009-d69c-4b25-9d7f-3123cd3a91ae","type":"user","message":{"role":"user","content":"Another Claude session sent a message:\n<agent-message from=\"aa02b58c8200606ea\">Report written.</agent-message>"},"isMeta":true,"timestamp":"2026-10-28T17:45:49.326Z","permissionMode":"auto","origin":{"kind":"peer","from":"aa02b58c8200606ea"},"promptSource":"system","sessionKind":"bg"}`
+
+// wrapUpToolUse is a tool call Claude Code 2.1.312 wrote in that turn.
+const wrapUpToolUse = `{"isSidechain":false,"type":"assistant","timestamp":"2026-10-28T17:45:58.327Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01P9tGvgFztJMoSQxMj9vZrW","name":"Bash","input":{}}]},"sessionKind":"bg"}`
+
+// wrapUpToolResult is the result Claude Code 2.1.312 wrote for that tool call.
+const wrapUpToolResult = `{"isSidechain":false,"promptId":"4508d009-d69c-4b25-9d7f-3123cd3a91ae","type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01P9tGvgFztJMoSQxMj9vZrW","type":"tool_result","content":"…","is_error":false}]},"timestamp":"2026-10-28T17:45:58.944Z","sessionKind":"bg"}`
+
+// wrapUpNote is the notice Claude Code 2.1.312 added to that turn when the
+// account reached its usage limit. claude wrote no API error for the turn.
+const wrapUpNote = `{"parentUuid":"81e56ed6-66bd-4c80-af13-386f3e52b8cc","isSidechain":false,"promptId":"4508d009-d69c-4b25-9d7f-3123cd3a91ae","type":"user","message":{"role":"user","content":"[Usage limit reached; a short grace allowance remains, then this turn is cut off without warning. Judge what's left: if it's genuinely only a few steps, finish it properly, then stop and say so without extra polishing. Otherwise don't attempt it all: finish the piece in hand and at most two more like it, then stop. The allowance also pays for any subagents you have running: they don't get this message and will keep going, so it's up to you how to handle them. Either way, end by telling the user their usage limit was reached, what's done and what's left.]"},"isMeta":true,"turnCompanion":true,"usageLimitNote":"wrap_up","uuid":"2aa0aa04-eefc-467f-abba-0a4d5447e4ea","timestamp":"2026-10-28T17:45:58.952Z","sessionKind":"bg"}`
+
+// wrapUpReply is the reply Claude Code 2.1.312 wrote to end that turn.
+const wrapUpReply = `{"isSidechain":false,"type":"assistant","timestamp":"2026-10-28T17:46:12.580Z","message":{"role":"assistant","content":[{"type":"text","text":"Your usage limit was reached, so I stopped before posting anything."}]},"sessionKind":"bg"}`
+
+// garbledToolResult is wrapUpToolResult with a timestamp that does not decode.
+var garbledToolResult = strings.Replace(wrapUpToolResult, `"timestamp":"2026-10-28T17:45:58.944Z"`, `"timestamp":1793209558944`, 1)
+
+// wrapUpAt is the time wrapUpNote records.
+var wrapUpAt = time.Date(2026, 10, 28, 17, 45, 58, 952e6, time.UTC)
+
+// wrapUpStart is the part of wrapUpTurn before the note.
+var wrapUpStart = []string{wrapUpPrompt, wrapUpToolUse, wrapUpToolResult}
+
+// wrapUpTurn is the whole turn in which session 85f79088 reached its account's
+// usage limit.
+var wrapUpTurn = with(wrapUpStart, wrapUpNote, wrapUpReply)
+
+// note is wrapUpNote with one string replaced.
+func note(old, replacement string) string {
+	return strings.Replace(wrapUpNote, old, replacement, 1)
+}
+
+// releasePromptID is the promptId of the turn that releaseNote belongs to.
+const releasePromptID = "85520f37-fc0f-48e5-8dbc-e8a3deaa5eaf"
+
+// releaseNote is the notice Claude Code 2.1.304 added to a turn that a person's
+// message opened. It tells the model that earlier notices no longer apply.
+const releaseNote = `{"isSidechain":false,"promptId":"85520f37-fc0f-48e5-8dbc-e8a3deaa5eaf","type":"user","message":{"role":"user","content":"[Earlier usage-limit notes no longer apply. Continue working normally. Don't mention this to the user.]"},"isMeta":true,"turnCompanion":true,"usageLimitNote":"release","timestamp":"2026-10-20T17:17:44.164Z"}`
+
+// personTurn is a person's message that opens the turn releaseNote belongs to.
+var personTurn = strings.Replace(userTurn, `"type":"user",`, `"type":"user","promptId":"`+releasePromptID+`",`, 1)
+
+// exitPromptID is the promptId claude gave each line of a person's /exit.
+const exitPromptID = "88c6cdd5-cb2b-4003-9ed9-2038296d0995"
+
+// exitCaveat, exitCommand, and exitOutput are the lines Claude Code 2.1.312
+// wrote when a person attached to a background session and left it with
+// /exit. claude ran no turn for them.
+const (
+	exitCaveat  = `{"parentUuid":"4aefe929-5358-4139-b8a1-4e0c8fa66bf6","isSidechain":false,"promptId":"88c6cdd5-cb2b-4003-9ed9-2038296d0995","type":"user","message":{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It's recorded here as context for later messages.</local-command-caveat>"},"isMeta":true,"uuid":"e64e36f6-caad-4b4e-ae80-e5e979fb471a","timestamp":"2026-10-28T18:00:04.442Z","sessionKind":"bg"}`
+	exitCommand = `{"parentUuid":"e64e36f6-caad-4b4e-ae80-e5e979fb471a","isSidechain":false,"promptId":"88c6cdd5-cb2b-4003-9ed9-2038296d0995","type":"user","message":{"role":"user","content":"<command-name>/exit</command-name>\n            <command-message>exit</command-message>\n            <command-args></command-args>"},"uuid":"9488b56e-6400-4fcf-8dec-c2651d2214bb","timestamp":"2026-10-28T18:00:04.441Z","sessionKind":"bg"}`
+	exitOutput  = `{"parentUuid":"9488b56e-6400-4fcf-8dec-c2651d2214bb","isSidechain":false,"promptId":"88c6cdd5-cb2b-4003-9ed9-2038296d0995","type":"user","message":{"role":"user","content":"<local-command-stdout>(no content)</local-command-stdout>"},"uuid":"e32eeb7f-5cb5-4a36-8f29-a6f8f946d11c","timestamp":"2026-10-28T18:00:04.441Z","sessionKind":"bg"}`
+)
+
+// exitLines are a person's /exit in the order claude wrote them.
+var exitLines = []string{exitCaveat, exitCommand, exitOutput}
+
+// secondExit is the second /exit that the same session recorded, at 18:00:47.
+var secondExit = replaced(exitLines, exitPromptID, "c3feb92c-78c7-430a-bda5-5de282163c17", "18:00:04.44", "18:00:47.44")
+
+// exitTag is a message under releasePromptID that starts the way claude writes
+// an /exit command. typedExitTag is the same message as a person types it.
+var (
+	exitTag      = strings.Replace(personTurn, `"content":"continue"`, `"content":"<command-name>/exit</command-name> is what I typed"`, 1)
+	typedExitTag = strings.Replace(exitTag, `"type":"user",`, `"type":"user","promptSource":"typed",`, 1)
+)
 
 // writeTranscript lays a transcript out the way claude does, at
 // <projects>/<project>/<session id>.jsonl.
@@ -355,5 +450,237 @@ func TestUsageLimitReadsARefusalThatStartsTheTail(t *testing.T) {
 
 	if _, ok := usageLimit(t, content); !ok {
 		t.Error("missed the refusal at the start of the tail")
+	}
+}
+
+// claude can write a companion line before a message of its own. The companion
+// is meta and queued without a turn. It carries no promptSource.
+func TestUsageLimitSkipsTheCompanionOfAMessageClaudeQueuesWithoutATurn(t *testing.T) {
+	got, ok := usageLimit(t, lines(promptTurn, refusedTurn, taskNotification, turnCompanion, taskNotification))
+
+	if !ok {
+		t.Fatal("claude's companion line hid the session's refusal")
+	}
+	if !got.At.Equal(refusedAt) {
+		t.Errorf("at = %v, want %v", got.At, refusedAt)
+	}
+}
+
+// claude also writes a meta companion for a prompt it runs a turn for. That
+// companion has no queueTranscriptOnly. A queued line that is neither meta nor
+// marked as claude's own may be a person's message. So may one that carries a
+// person's source.
+func TestUsageLimitIsNoneAfterACompanionThatMayStartATurn(t *testing.T) {
+	for name, line := range map[string]string{
+		"the companion of a prompt claude ran":      companion(`"queueTranscriptOnly":true,`, ""),
+		"a queued line that is not meta":            companion(`"isMeta":true,`, ""),
+		"a queued meta line with a person's source": companion(`"isMeta":true,`, `"isMeta":true,"promptSource":"queued",`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := usageLimit(t, lines(promptTurn, refusedTurn, line)); ok {
+				t.Errorf("reported a usage limit %+v", got)
+			}
+		})
+	}
+}
+
+// When an account reaches its usage limit during a turn, claude can add a
+// notice to the turn instead of refusing it. The model then ends the turn with
+// an ordinary reply. claude writes no API error for that turn.
+func TestUsageLimitReadsAWrapUpNotice(t *testing.T) {
+	for name, content := range map[string]string{
+		"the reply after the notice":                               lines(wrapUpTurn...),
+		"more work after the notice":                               lines(with(wrapUpStart, wrapUpNote, wrapUpToolUse, wrapUpToolResult, wrapUpReply)...),
+		"bookkeeping and claude's own message after it":            lines(with(with(wrapUpTurn, bookkeeping...), taskNotification)...),
+		"claude's companion and message after it":                  lines(with(wrapUpTurn, turnCompanion, taskNotification)...),
+		"a released turn before it":                                lines(with([]string{personTurn, releaseNote, replyTurn}, wrapUpTurn...)...),
+		"a person's two exits after it, as session 85f79088 ended": lines(slices.Concat(wrapUpTurn, exitLines, secondExit)...),
+		"a notice with no promptId before the reply":               lines(with(wrapUpStart, note(`"promptId":"`+wrapUpPromptID+`",`, ""), wrapUpReply)...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ok := usageLimit(t, content)
+
+			if !ok {
+				t.Fatal("the wrap-up notice was not recognized")
+			}
+			if !got.At.Equal(wrapUpAt) {
+				t.Errorf("at = %v, want the notice's timestamp %v", got.At, wrapUpAt)
+			}
+			if !got.Resets.IsZero() {
+				t.Errorf("resets = %v, want zero", got.Resets)
+			}
+		})
+	}
+}
+
+// The lines that run no turn can land inside the turn that reached the limit.
+// They do not end that turn.
+func TestUsageLimitReadsAWrapUpNoticePastLinesThatRunNoTurn(t *testing.T) {
+	interrupted := func(interruption ...string) string {
+		head := with(wrapUpStart, wrapUpNote, wrapUpToolUse)
+		return lines(with(with(head, interruption...), wrapUpToolResult, wrapUpReply)...)
+	}
+	for name, content := range map[string]string{
+		"claude's own message":               interrupted(taskNotification),
+		"claude's companion and its message": interrupted(turnCompanion, taskNotification),
+		"a person's /exit":                   interrupted(exitLines...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ok := usageLimit(t, content)
+
+			if !ok {
+				t.Fatal("a line that runs no turn hid the wrap-up notice")
+			}
+			if !got.At.Equal(wrapUpAt) {
+				t.Errorf("at = %v, want the notice's timestamp %v", got.At, wrapUpAt)
+			}
+		})
+	}
+}
+
+// A notice moves the review only when the model has replied in the turn that
+// holds it and nothing has released it since. Each of these sessions is waiting
+// for some other reason. In some of them docket cannot tell which turn the
+// notice is in.
+func TestUsageLimitIsNoneUnlessTheLastTurnEndedAfterAWrapUpNotice(t *testing.T) {
+	sameTurnRelease := strings.Replace(releaseNote, releasePromptID, wrapUpPromptID, 1)
+	unpromptedResult := strings.Replace(wrapUpToolResult, `"promptId":"`+wrapUpPromptID+`",`, "", 1)
+	laterResult := strings.Replace(wrapUpToolResult, wrapUpPromptID, releasePromptID, 1)
+	for name, content := range map[string]string{
+		"no reply after the notice yet":                              lines(with(wrapUpStart, wrapUpNote)...),
+		"a tool call after the notice with no result yet":            lines(with(wrapUpStart, wrapUpNote, wrapUpToolUse)...),
+		"a person's message after the reply":                         lines(with(wrapUpTurn, personTurn)...),
+		"a queued message after the reply":                           lines(with(wrapUpTurn, queuedTurn)...),
+		"a later turn that released the notice":                      lines(with(wrapUpTurn, personTurn, releaseNote, replyTurn)...),
+		"a release after the notice in the same turn":                lines(with(wrapUpStart, wrapUpNote, sameTurnRelease, wrapUpReply)...),
+		"a notice of another kind":                                   lines(with(wrapUpStart, note(`"usageLimitNote":"wrap_up"`, `"usageLimitNote":"warn"`), wrapUpReply)...),
+		"a sub-agent's notice":                                       lines(with(wrapUpStart, sidechain(wrapUpNote), wrapUpReply)...),
+		"a later ordinary turn of another promptId":                  lines(with(wrapUpTurn, personTurn, replyTurn)...),
+		"a later ordinary turn with no promptId":                     lines(with(wrapUpTurn, userTurn, replyTurn)...),
+		"a tool result with no promptId after the notice":            lines(with(wrapUpStart, wrapUpNote, wrapUpToolUse, unpromptedResult, wrapUpReply)...),
+		"a person's queued message after the notice":                 lines(with(wrapUpStart, wrapUpNote, queuedTurn, wrapUpReply)...),
+		"a notice in a sub-agent's turn after a reply":               lines(promptTurn, replyTurn, sidechain(wrapUpNote), sidechain(wrapUpReply)),
+		"a notice and reply that are both a sub-agent's":             lines(with(wrapUpStart, sidechain(wrapUpNote), sidechain(wrapUpReply))...),
+		"an API error claude may retry after the notice":             lines(with(wrapUpStart, wrapUpNote, wrapUpToolUse, wrapUpToolResult, refusal(`"error":"rate_limit"`, `"error":"server_error"`))...),
+		"claude's own message directly before the reply":             lines(with(wrapUpStart, wrapUpNote, taskNotification, wrapUpReply)...),
+		"a later turn a person typed that starts with the /exit tag": lines(with(wrapUpTurn, typedExitTag, wrapUpToolUse, laterResult, wrapUpReply)...),
+		"a later turn with no source that starts with the /exit tag": lines(with(wrapUpTurn, exitTag, wrapUpToolUse, laterResult, wrapUpReply)...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := usageLimit(t, content); ok {
+				t.Errorf("reported a usage limit %+v", got)
+			}
+		})
+	}
+}
+
+// docket cannot tell which turn a line it cannot read belongs to. A notice
+// before such a line must not answer for the session.
+func TestUsageLimitIsNoneWhenALineOfTheWrapUpTurnDoesNotDecode(t *testing.T) {
+	afterNote := func(line string) string {
+		return lines(with(wrapUpStart, wrapUpNote, wrapUpToolUse, line, wrapUpReply)...)
+	}
+	for name, content := range map[string]string{
+		"a tool result whose timestamp is a number":                              afterNote(garbledToolResult),
+		"a tool result whose promptId is a number":                               afterNote(strings.Replace(wrapUpToolResult, `"promptId":"`+wrapUpPromptID+`"`, `"promptId":4508`, 1)),
+		"a notice whose kind is an object":                                       lines(with(wrapUpStart, note(`"usageLimitNote":"wrap_up"`, `"usageLimitNote":{"kind":"wrap_up"}`), wrapUpReply)...),
+		"claude's own message after the reply with a timestamp that is a number": lines(with(wrapUpTurn, notification(`"timestamp":"2026-10-22T16:04:08.752Z"`, `"timestamp":1792857848752`))...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := usageLimit(t, content); ok {
+				t.Errorf("reported a usage limit %+v from a turn docket could not read", got)
+			}
+		})
+	}
+}
+
+// A line before the session's last message cannot be the person continuing. A
+// line that does not decode ends the turn there, and the messages after it
+// still answer.
+func TestUsageLimitReadsTheTurnAfterALineThatDoesNotDecode(t *testing.T) {
+	for name, tc := range map[string]struct {
+		content string
+		at      time.Time
+	}{
+		"a refusal":        {lines(wrapUpPrompt, wrapUpToolUse, garbledToolResult, refusedTurn), refusedAt},
+		"a wrap-up notice": {lines(wrapUpPrompt, wrapUpToolUse, garbledToolResult, wrapUpNote, wrapUpReply), wrapUpAt},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ok := usageLimit(t, tc.content)
+
+			if !ok {
+				t.Fatal("a line earlier in the turn that does not decode hid the limit")
+			}
+			if !got.At.Equal(tc.at) {
+				t.Errorf("at = %v, want %v", got.At, tc.at)
+			}
+		})
+	}
+}
+
+// The notice says claude cuts the turn off once the grace runs out. The refusal
+// that ends the turn answers, because it says when the limit resets.
+func TestUsageLimitReadsARefusalAfterAWrapUpNotice(t *testing.T) {
+	got, ok := usageLimit(t, lines(with(wrapUpStart, wrapUpNote, wrapUpToolUse, wrapUpToolResult, refusedTurn)...))
+
+	if !ok {
+		t.Fatal("the refusal that ended a wrap-up turn was not recognized")
+	}
+	if !got.At.Equal(refusedAt) {
+		t.Errorf("at = %v, want the refusal's timestamp %v", got.At, refusedAt)
+	}
+	if !got.Resets.Equal(refusalResets) {
+		t.Errorf("resets = %v, want %v", got.Resets, refusalResets)
+	}
+}
+
+// A person who attaches to a background session and leaves with /exit makes
+// claude write three lines under one promptId. claude runs no turn for them.
+func TestUsageLimitSkipsAPersonsExit(t *testing.T) {
+	refused := []string{promptTurn, refusedTurn}
+	for name, content := range map[string]string{
+		"one exit":  lines(with(refused, exitLines...)...),
+		"two exits": lines(slices.Concat(refused, exitLines, secondExit)...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ok := usageLimit(t, content)
+
+			if !ok {
+				t.Fatal("a person's /exit hid the session's refusal")
+			}
+			if !got.At.Equal(refusedAt) {
+				t.Errorf("at = %v, want %v", got.At, refusedAt)
+			}
+		})
+	}
+}
+
+// Only /exit leaves the session without a turn. Another command may mean that
+// the person is about to continue. docket passes over a line only when its
+// promptId is the promptId of an /exit command line.
+func TestUsageLimitIsNoneAfterAnythingButAPersonsExit(t *testing.T) {
+	refused := []string{promptTurn, refusedTurn}
+	command := func(name string) []string {
+		return replaced(exitLines,
+			"<command-name>/exit</command-name>", "<command-name>/"+name+"</command-name>",
+			"<command-message>exit</command-message>", "<command-message>"+name+"</command-message>")
+	}
+	commandOfItsOwn := []string{exitCaveat, strings.Replace(exitCommand, exitPromptID, "2b7e0f4c-5d6a-4b8c-9e1f-0a2b3c4d5e6f", 1), exitOutput}
+	mentionsExit := strings.Replace(personTurn, `"content":"continue"`, `"content":"I typed <command-name>/exit</command-name> by mistake, carry on"`, 1)
+	for name, content := range map[string]string{
+		"a person's message after the exit":                 lines(with(with(refused, exitLines...), userTurn)...),
+		"a /model command":                                  lines(with(refused, command("model")...)...),
+		"a /login command":                                  lines(with(refused, command("login")...)...),
+		"a command whose name starts with exit":             lines(with(refused, command("exit-plan")...)...),
+		"an exit with no promptIds":                         lines(with(refused, replaced(exitLines, `"promptId":"`+exitPromptID+`",`, "")...)...),
+		"an exit command under a promptId of its own":       lines(with(refused, commandOfItsOwn...)...),
+		"a person's message that mentions /exit":            lines(with(refused, mentionsExit)...),
+		"a person's message that starts with the /exit tag": lines(with(refused, typedExitTag)...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := usageLimit(t, content); ok {
+				t.Errorf("reported a usage limit %+v", got)
+			}
+		})
 	}
 }

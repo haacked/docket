@@ -337,6 +337,42 @@ func TestAnInteractiveSessionRefusedForUsageMovesTheNextReview(t *testing.T) {
 	}
 }
 
+// A person can resume a session that claude refused and leave it before sending
+// anything. A limit that has reset since then says nothing about the account.
+func TestAnInteractiveSessionRefusedForALimitThatHasResetMovesNothing(t *testing.T) {
+	for name, resets := range map[string]func(refused time.Time) time.Time{
+		"a reset that has passed":          func(refused time.Time) time.Time { return refused.Add(time.Hour) },
+		"no reset, and the refusal is old": func(time.Time) time.Time { return time.Time{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ghc := &fakeGH{login: "haacked", info: prInfo()}
+			svc, _ := newService(t, ghc, newFakeGit())
+			primary, fallback := t.TempDir(), t.TempDir()
+			svc.Cfg.ClaudeConfigDir = primary
+			svc.Cfg.ClaudeFallbackConfigDirs = []string{fallback}
+			rec := prepareWith(t, svc, unlisted, "claude", review.IntentReview)
+			refused := svc.now().Add(-96 * time.Hour)
+			writeTranscript(t, svc.Cfg.ClaudeProjectsDir(primary), rec.SessionID, refusedTurn(refused, resets(refused)))
+
+			exited, err := svc.AfterExit(context.Background(), rec, nil)
+			if err != nil {
+				t.Fatalf("AfterExit: %v", err)
+			}
+
+			if strings.Contains(exited.Err, "usage limit") {
+				t.Errorf("error = %q, want no word of a limit that has reset", exited.Err)
+			}
+			limits, err := account.Load(svc.Paths.Limits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(limits) != 0 {
+				t.Errorf("limits = %+v, want none recorded", limits)
+			}
+		})
+	}
+}
+
 // claude may not say when a limit resets. The account still counts as limited
 // for a while, or the rotation would hand the next review straight back to it.
 func TestALimitWithNoResetTimeStillCounts(t *testing.T) {
