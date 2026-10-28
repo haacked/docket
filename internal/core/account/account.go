@@ -1,6 +1,6 @@
 // Package account picks the claude account a new session runs under. docket
-// rotates through the accounts config.toml names, and moves past an account once
-// claude refuses one of its sessions for a usage limit. claude counts usage per
+// takes the first account config.toml names, and passes over an account while
+// a usage limit that claude reported for it is in force. claude counts usage per
 // login. A limit therefore applies to every account dir signed in to that login.
 package account
 
@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"slices"
 	"time"
 )
 
@@ -66,44 +65,16 @@ func (c Choice) Limited() bool {
 	return !c.Until.IsZero()
 }
 
-// Pick chooses the account for a new session. accounts is the rotation order.
+// Pick chooses the account for a new session. accounts is the priority order.
 // logins maps each account to the login it is signed in to. An account that
 // logins leaves out has an unknown login. limits is every limit docket has
-// recorded, in any order. A limit that applies to no account in the rotation
-// counts for nothing.
+// recorded, in any order.
 //
-// The rotation starts after the first account that the most recent limit
-// applies to, passes every account that limit applies to, and takes the first
-// account that is not over a limit. docket therefore stays on an account until
-// that account hits a limit, even after an earlier account's limit resets.
-// Before any account has hit a limit, the pick is the first.
+// The pick is the first account that is not over a limit. docket therefore
+// returns to an earlier account as soon as its limit resets.
 func Pick(accounts []string, logins map[string]Login, limits []Limit, now time.Time) Choice {
-	if len(accounts) == 0 {
-		return Choice{}
-	}
-	start := 0
-	var latest Limit
-	for _, limit := range limits {
-		i := slices.IndexFunc(accounts, func(account string) bool {
-			return limit.appliesTo(account, logins[account])
-		})
-		if i >= 0 && limit.At.After(latest.At) {
-			latest, start = limit, i+1
-		}
-	}
-	// The latest limit also covers every later dir on its login. A start on one of
-	// those would move docket back to that login once the limit resets.
-	for range accounts {
-		candidate := accounts[start%len(accounts)]
-		if latest.At.IsZero() || !latest.appliesTo(candidate, logins[candidate]) {
-			break
-		}
-		start++
-	}
-
 	var soonest Choice
-	for step := range len(accounts) {
-		candidate := accounts[(start+step)%len(accounts)]
+	for _, candidate := range accounts {
 		until := reset(candidate, logins[candidate], limits)
 		if !until.After(now) {
 			return Choice{Account: candidate}

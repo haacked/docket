@@ -119,17 +119,21 @@ func TestAPollStartsAReviewRefusedForUsageAgainUnderTheFallbackAccount(t *testin
 	}
 }
 
-// docket stays on the fallback after the poll moves a review there, until the
-// fallback hits a limit of its own.
-func TestANewReviewRunsUnderTheAccountTheRotationMovedTo(t *testing.T) {
+// A new review runs under the fallback while the primary is over its limit,
+// and under the primary again once that limit resets.
+func TestANewReviewReturnsToThePrimaryOnceItsLimitResets(t *testing.T) {
 	r := refusedForUsage(t)
 	r.poll(t)
-	r.svc.Now = func() time.Time { return r.resets.Add(time.Hour) }
 
-	rec := prepareWith(t, r.svc, pr.Ref{Org: "haacked", Repo: "docket", Number: 8}, "claude", review.IntentReview)
+	during := prepareWith(t, r.svc, pr.Ref{Org: "haacked", Repo: "docket", Number: 8}, "claude", review.IntentReview)
+	if during.ClaudeConfigDir != r.fallback {
+		t.Errorf("account = %q, want the fallback %q while the primary is limited", during.ClaudeConfigDir, r.fallback)
+	}
 
-	if rec.ClaudeConfigDir != r.fallback {
-		t.Errorf("account = %q, want the fallback %q, which has not hit a limit", rec.ClaudeConfigDir, r.fallback)
+	r.svc.Now = func() time.Time { return r.resets }
+	after := prepareWith(t, r.svc, pr.Ref{Org: "haacked", Repo: "docket", Number: 9}, "claude", review.IntentReview)
+	if after.ClaudeConfigDir != r.primary {
+		t.Errorf("account = %q, want the primary %q once its limit reset", after.ClaudeConfigDir, r.primary)
 	}
 }
 
