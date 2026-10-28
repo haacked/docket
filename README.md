@@ -58,7 +58,7 @@ claude_fallback_config_dirs = ["~/.claude"]
 
 When claude refuses a background review because its account is over a usage limit, or cuts one short because the account reached its limit partway through, and the session has posted nothing, docket stops that session and starts the review again under the first account in the list that is not over a limit. Each new review runs under the first account in the list that is not over a limit, so docket goes back to an earlier account as soon as its limit resets. When every account is over its limit, the review waits under "Did not start" with the time the first limit resets, and `enter` starts it again. A review you run in this terminal shows you claude's refusal itself. docket records the limit when the session ends, so `u` and the next review move to another account. docket keeps the limits claude reported in `~/.docket/limits.jsonl`. claude counts usage per login, so a limit on one directory also holds every other directory signed in to the same login, and docket skips them all. Listing two directories signed in to one login therefore adds nothing to fall back to.
 
-The dashboard's title line names the account the next review runs under, or says until when every account is over its limit. Each claude row ends with the account its session runs under.
+The dashboard's title line names the account the next review runs under, or says until when every account is over its limit. Each claude row ends with the account its session runs under. docket names an account by the email and plan it is signed in as, such as `me@example.com Max`, and by its config dir when it cannot read them.
 
 ## Review requests
 

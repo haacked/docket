@@ -125,6 +125,17 @@ func Name(dir string) string {
 	return dir
 }
 
+// Names maps account dirs to how docket shows them.
+type Names map[string]string
+
+// Of is how docket shows dir: its entry in n, or else its Name.
+func (n Names) Of(dir string) string {
+	if name, ok := n[dir]; ok {
+		return name
+	}
+	return Name(dir)
+}
+
 // When is how docket shows the time a limit resets.
 func When(at time.Time) string {
 	if at.IsZero() {
@@ -137,24 +148,68 @@ func When(at time.Time) string {
 // returns the zero Login when the file is missing or does not parse, or when it
 // lacks either id.
 func ReadLogin(path string) Login {
+	oauth := readOAuth(path)
+	if oauth.AccountUUID == "" || oauth.OrganizationUUID == "" {
+		return Login{}
+	}
+	return Login{AccountUUID: oauth.AccountUUID, OrganizationUUID: oauth.OrganizationUUID}
+}
+
+// Profile is who an account dir is signed in as.
+type Profile struct {
+	Email string
+	// Plan is the organization's plan, such as "Max" or "Team". It is empty
+	// when claude names a type docket does not know.
+	Plan string
+}
+
+// Label is how docket shows the profile: the email, then the plan. It is empty
+// when the email is unknown, because the plan alone does not name a login.
+func (p Profile) Label() string {
+	if p.Email == "" {
+		return ""
+	}
+	return strings.TrimSpace(p.Email + " " + p.Plan)
+}
+
+// ReadProfile reads who the .claude.json at path is signed in as. It returns
+// the zero Profile when the file is missing or does not parse.
+func ReadProfile(path string) Profile {
+	oauth := readOAuth(path)
+	return Profile{Email: oauth.EmailAddress, Plan: plan(oauth.OrganizationType)}
+}
+
+// plan names the plan of an organization whose type claude writes as kind,
+// such as "claude_max".
+func plan(kind string) string {
+	name, ok := strings.CutPrefix(kind, "claude_")
+	if !ok || name == "" {
+		return ""
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
+type oauthAccount struct {
+	AccountUUID      string `json:"accountUuid"`
+	OrganizationUUID string `json:"organizationUuid"`
+	EmailAddress     string `json:"emailAddress"`
+	OrganizationType string `json:"organizationType"`
+}
+
+// readOAuth reads the oauthAccount that claude keeps in the .claude.json at
+// path. It returns the zero value when the file is missing or does not parse.
+func readOAuth(path string) oauthAccount {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Login{}
+		return oauthAccount{}
 	}
 	var config struct {
-		OAuthAccount struct {
-			AccountUUID      string `json:"accountUuid"`
-			OrganizationUUID string `json:"organizationUuid"`
-		} `json:"oauthAccount"`
+		OAuthAccount oauthAccount `json:"oauthAccount"`
 	}
 	if err := json.Unmarshal(data, &config); err != nil {
-		return Login{}
+		return oauthAccount{}
 	}
-	login := Login(config.OAuthAccount)
-	if login.AccountUUID == "" || login.OrganizationUUID == "" {
-		return Login{}
-	}
-	return login
+	return config.OAuthAccount
 }
 
 // Load reads the limits recorded at path. A missing file holds none. A line that

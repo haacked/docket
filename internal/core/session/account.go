@@ -43,6 +43,23 @@ func (s *Service) claudeLogin(dir string) account.Login {
 	return account.ReadLogin(s.Cfg.ClaudeLoginFile(dir))
 }
 
+// AccountNames names each account in the rotation by who it is signed in as.
+// It leaves out an account whose profile docket cannot read.
+func (s *Service) AccountNames() account.Names {
+	names := account.Names{}
+	for _, dir := range s.Cfg.ClaudeAccounts() {
+		if label := s.profile(dir).Label(); label != "" {
+			names[dir] = label
+		}
+	}
+	return names
+}
+
+// profile is who the account dir is signed in as now.
+func (s *Service) profile(dir string) account.Profile {
+	return account.ReadProfile(s.Cfg.ClaudeLoginFile(dir))
+}
+
 // freshAccount puts rec on the claude account a fresh start of it runs under,
 // and reports the choice. rec keeps its own account while that account is under
 // its limits, so a change to claude_config_dir still applies only to new
@@ -119,7 +136,7 @@ func (s *Service) noteLimit(rec review.Record, sessionID string) review.Record {
 		rec.Err = err.Error()
 		return rec
 	}
-	rec.Err = fmt.Sprintf("%s is over its usage limit until %s", accountName(rec.ClaudeConfigDir), account.When(limit.Resets))
+	rec.Err = fmt.Sprintf("%s is over its usage limit until %s", s.accountName(rec.ClaudeConfigDir), account.When(limit.Resets))
 	return rec
 }
 
@@ -167,7 +184,7 @@ func (s *Service) startElsewhere(ctx context.Context, rec review.Record, limit e
 	case err != nil:
 		again.Err = err.Error()
 	case choice.Limited():
-		again.Err = fmt.Sprintf("no claude account has usage left until %s, when %s resets", account.When(choice.Until), accountName(choice.Account))
+		again.Err = fmt.Sprintf("no claude account has usage left until %s, when %s resets", account.When(choice.Until), s.accountName(choice.Account))
 	default:
 		// StartBackground records a launch that fails.
 		started, _ := s.StartBackground(ctx, ready)
@@ -198,7 +215,10 @@ func (s *Service) readyAgain(ctx context.Context, rec review.Record) (review.Rec
 }
 
 // accountName is how a message names a claude account.
-func accountName(dir string) string {
+func (s *Service) accountName(dir string) string {
+	if label := s.profile(dir).Label(); label != "" {
+		return label
+	}
 	if dir == "" {
 		return "the default claude account"
 	}

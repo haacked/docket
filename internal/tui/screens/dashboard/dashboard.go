@@ -58,9 +58,12 @@ type Model struct {
 	// Background is what each running background session is doing, keyed by
 	// record. The root fills it in, because a screen holds no engine to ask.
 	Background map[string]review.Progress
-	Styles     Styles
-	Width      int
-	Now        func() time.Time
+	// Accounts is how each claude account is shown. The root fills it in,
+	// because a screen holds no service to ask.
+	Accounts account.Names
+	Styles   Styles
+	Width    int
+	Now      func() time.Time
 }
 
 // quietAfter is how long a session may go without the agent updating its
@@ -268,7 +271,7 @@ func (m Model) meta(rec review.Record) string {
 	// The account goes last, so a narrow terminal cuts it before the rest of the
 	// metadata.
 	if config.UsesClaudeAccount(rec.Engine) {
-		parts = append(parts, "account "+account.Name(rec.ClaudeConfigDir))
+		parts = append(parts, "account "+m.Accounts.Of(rec.ClaudeConfigDir))
 	}
 	meta := m.Styles.Dim.Render("· " + strings.Join(parts, " · "))
 	note, busy := m.Busy[rec.ID]

@@ -8,6 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/haacked/docket/internal/core/account"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/tier"
@@ -96,6 +97,17 @@ func TestAClaudeRowNamesItsAccount(t *testing.T) {
 	}
 	if line := lineOf(t, m.View(), "#105891"); strings.Contains(line, "account") {
 		t.Errorf("the codex row names a claude account:\n%s", line)
+	}
+}
+
+func TestAClaudeRowNamesItsAccountByItsProfile(t *testing.T) {
+	named := runningRecord()
+	named.ClaudeConfigDir = "/opt/claude-max"
+	m := progressModel(200, named)
+	m.Accounts = account.Names{"/opt/claude-max": "me@home.example Max"}
+
+	if line := lineOf(t, m.View(), "#105890"); !strings.HasSuffix(strings.TrimSpace(line), "· account me@home.example Max") {
+		t.Errorf("the row does not name its account by its profile:\n%s", line)
 	}
 }
 
