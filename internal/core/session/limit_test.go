@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -612,5 +613,50 @@ func TestALimitOnTheDefaultAccountRecordsTheLoginInTheHomeDirectory(t *testing.T
 	}
 	if len(limits) != 1 || limits[0].Login != teamSeat {
 		t.Errorf("limits = %+v, want one on the team seat's login", limits)
+	}
+}
+
+// writeProfile writes who a dir is signed in as, in the .claude.json at path.
+func writeProfile(t *testing.T, path, email, kind string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"oauthAccount":{"emailAddress":%q,"organizationType":%q}}`, email, kind)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAccountNamesNameEachAccountByItsProfile(t *testing.T) {
+	svc, _ := newService(t, &fakeGH{login: "haacked", info: prInfo()}, newFakeGit())
+	home, signedIn, signedOut := t.TempDir(), t.TempDir(), t.TempDir()
+	svc.Cfg.ClaudeDefaultDir = filepath.Join(home, ".claude")
+	writeProfile(t, filepath.Join(home, ".claude.json"), "me@work.example", "claude_team")
+	writeProfile(t, filepath.Join(signedIn, ".claude.json"), "me@home.example", "claude_max")
+	svc.Cfg.ClaudeFallbackConfigDirs = []string{signedIn, signedOut}
+
+	names := svc.AccountNames()
+
+	want := account.Names{"": "me@work.example Team", signedIn: "me@home.example Max"}
+	if !maps.Equal(names, want) {
+		t.Errorf("names = %v, want %v", names, want)
+	}
+}
+
+func TestALimitNamesTheAccountByItsProfile(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	primary, fallback := t.TempDir(), t.TempDir()
+	writeProfile(t, filepath.Join(primary, ".claude.json"), "me@home.example", "claude_max")
+	svc.Cfg.ClaudeConfigDir = primary
+	svc.Cfg.ClaudeFallbackConfigDirs = []string{fallback}
+	rec := prepareWith(t, svc, unlisted, "claude", review.IntentReview)
+	writeTranscript(t, svc.Cfg.ClaudeProjectsDir(primary), rec.SessionID, refusedTurn(svc.now(), svc.now().Add(time.Hour)))
+
+	exited, err := svc.AfterExit(context.Background(), rec, nil)
+	if err != nil {
+		t.Fatalf("AfterExit: %v", err)
+	}
+
+	if !strings.HasPrefix(exited.Err, "me@home.example Max is over its usage limit") {
+		t.Errorf("error = %q, want it to name the account by its profile", exited.Err)
 	}
 }

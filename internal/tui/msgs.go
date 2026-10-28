@@ -131,9 +131,11 @@ type bgPolledMsg struct {
 	err      error
 }
 
-// accountMsg carries the claude account a new review runs under.
+// accountMsg carries the claude account a new review runs under, and how
+// docket shows each account in the rotation.
 type accountMsg struct {
 	choice account.Choice
+	names  account.Names
 	err    error
 }
 

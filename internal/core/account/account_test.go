@@ -642,3 +642,55 @@ func TestNameWritesTheHomeDirectoryAsATilde(t *testing.T) {
 		}
 	}
 }
+
+func TestReadProfileReadsTheEmailAndThePlan(t *testing.T) {
+	for _, tc := range []struct {
+		kind string
+		want string
+	}{
+		{kind: "claude_max", want: "me@example.com Max"},
+		{kind: "claude_team", want: "me@example.com Team"},
+		{kind: "", want: "me@example.com"},
+		{kind: "enterprise", want: "me@example.com"},
+	} {
+		path := writeConfig(t, `{"oauthAccount":{"emailAddress":"me@example.com","organizationType":"`+tc.kind+`"}}`)
+
+		if got := ReadProfile(path).Label(); got != tc.want {
+			t.Errorf("%q: label = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}
+
+// Without an email the plan alone does not say which login a dir holds.
+func TestAProfileWithoutAnEmailHasNoLabel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{name: "no path", path: ""},
+		{name: "a missing file", path: filepath.Join(t.TempDir(), ".claude.json")},
+		{name: "a file that does not parse", path: writeConfig(t, `{"oauthAccount":{"emailAddress":"`)},
+		{name: "a dir that never signed in", path: writeConfig(t, `{"numStartups":1}`)},
+		{name: "a plan alone", path: writeConfig(t, `{"oauthAccount":{"organizationType":"claude_max"}}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ReadProfile(tc.path).Label(); got != "" {
+				t.Errorf("label = %q, want none", got)
+			}
+		})
+	}
+}
+
+func TestNamesFallBackToTheDir(t *testing.T) {
+	names := Names{personal: "me@example.com Max"}
+
+	if got := names.Of(personal); got != "me@example.com Max" {
+		t.Errorf("name = %q, want the profile", got)
+	}
+	if got := names.Of(defaultAccount); got != "default" {
+		t.Errorf("name = %q, want default", got)
+	}
+	if got := Names(nil).Of("/opt/claude-max"); got != "/opt/claude-max" {
+		t.Errorf("name = %q, want the dir", got)
+	}
+}

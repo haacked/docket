@@ -613,6 +613,7 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case accountMsg:
 		a.next = &message
+		a.dash.Accounts = message.names
 		return a, nil
 
 	case preparedMsg:
@@ -867,7 +868,7 @@ func (a App) accountLine() string {
 	case next.choice.Limited():
 		return a.styles.Err.Render(fmt.Sprintf("· every claude account is over its limit until %s", account.When(next.choice.Until)))
 	}
-	return a.styles.Dim.Render("· claude account " + account.Name(next.choice.Account))
+	return a.styles.Dim.Render("· claude account " + next.names.Of(next.choice.Account))
 }
 
 // spinner is what every busy marker draws with. Its frame is empty while the
@@ -1071,7 +1072,7 @@ func (a App) loadAccount() tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
 		choice, err := svc.NextAccount()
-		return accountMsg{choice: choice, err: err}
+		return accountMsg{choice: choice, names: svc.AccountNames(), err: err}
 	}
 }
 

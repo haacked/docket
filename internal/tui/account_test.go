@@ -27,6 +27,11 @@ func TestTheTitleNamesTheAccountANewReviewRunsUnder(t *testing.T) {
 		{name: "the default account", next: accountMsg{}, want: "docket · claude account default"},
 		{name: "a named account", next: accountMsg{choice: account.Choice{Account: "/opt/claude-max"}}, want: "docket · claude account /opt/claude-max"},
 		{
+			name: "an account signed in",
+			next: accountMsg{choice: account.Choice{Account: "/opt/claude-max"}, names: account.Names{"/opt/claude-max": "me@home.example Max"}},
+			want: "docket · claude account me@home.example Max",
+		},
+		{
 			name: "every account limited",
 			next: accountMsg{choice: account.Choice{Account: "/opt/claude-max", Until: time.Date(2026, 10, 28, 15, 4, 0, 0, time.Local)}},
 			want: "docket · every claude account is over its limit until Oct 28 3:04 PM",
@@ -40,6 +45,17 @@ func TestTheTitleNamesTheAccountANewReviewRunsUnder(t *testing.T) {
 		if got := titleLine(next.(App)); got != tc.want {
 			t.Errorf("%s: title = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestTheDashboardNamesAccountsByTheirProfiles(t *testing.T) {
+	a := New(nil, config.Config{DefaultEngine: "claude"}, "", false)
+	names := account.Names{"/opt/claude-max": "me@home.example Max"}
+
+	model, _ := a.Update(accountMsg{names: names})
+
+	if got := model.(App).dash.Accounts.Of("/opt/claude-max"); got != "me@home.example Max" {
+		t.Errorf("the dashboard names the account %q, want its profile", got)
 	}
 }
 
