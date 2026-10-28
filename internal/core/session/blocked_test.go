@@ -98,7 +98,7 @@ func TestPollReadsGitHubOnceForEachStretchASessionIsBlocked(t *testing.T) {
 
 // Opening a drafted row's session and leaving it unanswered leaves the session
 // blocked. The row keeps its draft rather than going back to reviewing, where s,
-// r, c, and u all refuse it.
+// r, and u all refuse it.
 func TestLeavingABlockedSessionKeepsItsDraft(t *testing.T) {
 	ghc := &fakeGH{login: "haacked", info: prInfo()}
 	svc, _ := newService(t, ghc, newFakeGit())

@@ -460,7 +460,7 @@ func TestAFailedSubmissionLeavesTheSubmitScreenUsable(t *testing.T) {
 // just its presence.
 func TestTheDashboardFooterPlacesTheArchivedToggleBeforeHelpAndQuit(t *testing.T) {
 	want :=
-		"n new · i requests · enter resume · s submit · v notes · o github · c ask · u re-review · x abandon · r refresh · R refresh all · a show archived · ? help · q quit"
+		"n new · i requests · enter open · s submit · v notes · o github · u re-review · x abandon · r refresh · R refresh all · a show archived · ? help · q quit"
 	if got := footerOn(msg.Dashboard, false); got != want {
 		t.Errorf("footer = %q, want %q", got, want)
 	}

@@ -614,7 +614,8 @@ func (s *Service) LaunchSpec(ctx context.Context, rec review.Record) (review.Rec
 }
 
 // ResumeSpec reopens the conversation a launch left behind, falling back to a
-// fresh review when the record carries no session to resume.
+// fresh review when the record carries no session to resume. The dashboard
+// opens a session about the notes instead when OpensNotes returns true.
 func (s *Service) ResumeSpec(ctx context.Context, rec review.Record) (review.Record, exec.CommandSpec, error) {
 	return s.launch(ctx, rec, true)
 }
@@ -728,6 +729,39 @@ func (s *Service) capture(rec review.Record) (string, error) {
 	return eng.CaptureSessionID(rec, s.enginePaths(rec.ClaudeConfigDir))
 }
 
+// OpensNotes reports whether enter on rec opens a session about its notes
+// rather than its review session. It does when rec has no review session to
+// resume and AskSpec would accept it. A background session opens through
+// attach or resume, and a record that did not start launches again. Any other
+// record keeps the resume, which reports why it cannot run.
+func OpensNotes(rec review.Record) bool {
+	if rec.HasBackgroundSession() || rec.State == review.StateNotStarted {
+		return false
+	}
+	eng, err := engine.For(rec.Engine)
+	if err != nil {
+		return false
+	}
+	if _, ok := eng.Resume(rec, engine.Paths{}); ok {
+		return false
+	}
+	return askable(rec) == nil
+}
+
+// askable refuses a record that a session about its notes cannot run against.
+func askable(rec review.Record) error {
+	if err := refuseInProgress(rec); err != nil {
+		return err
+	}
+	if err := checkDir(rec); err != nil {
+		return err
+	}
+	if _, err := os.Stat(rec.NotesPath); err != nil {
+		return fmt.Errorf("%s has no review notes to ask about", rec.Ref)
+	}
+	return nil
+}
+
 // AskSpec returns the command that opens a question-and-answer session about the
 // record's notes, after recording that it started. It resumes the record's
 // earlier session about them when there is one.
@@ -755,14 +789,8 @@ func (s *Service) askSpecFor(rec review.Record) (review.Record, exec.CommandSpec
 	if err != nil {
 		return rec, exec.CommandSpec{}, err
 	}
-	if err := refuseInProgress(rec); err != nil {
+	if err := askable(rec); err != nil {
 		return rec, exec.CommandSpec{}, err
-	}
-	if err := checkDir(rec); err != nil {
-		return rec, exec.CommandSpec{}, err
-	}
-	if _, err := os.Stat(rec.NotesPath); err != nil {
-		return rec, exec.CommandSpec{}, fmt.Errorf("%s has no review notes to ask about", rec.Ref)
 	}
 
 	if rec.AskSessionID != "" {

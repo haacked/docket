@@ -51,7 +51,7 @@ func sent(t *testing.T, cmd tea.Cmd) msg.StartReview {
 func TestTheChoiceStepSaysWhatWasFound(t *testing.T) {
 	view := choosing().View()
 
-	for _, want := range []string{"Existing review of haacked/docket#4", "2026-09-18", "pending draft", "view and ask", "append", "overwrite"} {
+	for _, want := range []string{"Existing review of haacked/docket#4", "2026-09-18", "pending draft", "v open", "append", "overwrite"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}
@@ -131,7 +131,7 @@ func TestViewAndAskNeverRunsInTheBackground(t *testing.T) {
 		t.Fatalf("intent = %q, want ask", got.Intent)
 	}
 	if got.Background {
-		t.Error("view and ask asked for the background")
+		t.Error("open asked for the background")
 	}
 }
 
@@ -168,8 +168,8 @@ func TestViewAndAskNeedsNotes(t *testing.T) {
 	if _, cmd := m.Update(press("v")); cmd != nil {
 		t.Errorf("v with no notes produced %#v", cmd())
 	}
-	if view := m.View(); strings.Contains(view, "view and ask") {
-		t.Errorf("the view offers view and ask with no notes:\n%s", view)
+	if view := m.View(); strings.Contains(view, "v open") {
+		t.Errorf("the view offers open with no notes:\n%s", view)
 	}
 	if _, cmd := m.Update(press("a")); cmd == nil {
 		t.Error("append is refused when a review of mine is on GitHub")
@@ -221,8 +221,8 @@ func TestARereviewOffersNoAsk(t *testing.T) {
 	if _, cmd := m.Update(press("v")); cmd != nil {
 		t.Errorf("v on a re-review produced %#v", cmd())
 	}
-	if view := m.View(); strings.Contains(view, "view and ask") {
-		t.Errorf("the re-review view offers view and ask:\n%s", view)
+	if view := m.View(); strings.Contains(view, "v open") {
+		t.Errorf("the re-review view offers open:\n%s", view)
 	}
 }
 

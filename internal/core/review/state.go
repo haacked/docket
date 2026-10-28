@@ -124,8 +124,8 @@ func (r Record) HasClone() bool {
 }
 
 // Adopted reports whether the record took over an existing review and has run no
-// review session of its own. The dashboard opens the re-review choice for it and
-// the service refuses to resume it, so the rule is stated once.
+// review session of its own. The service refuses to start review-code fresh for
+// it, because review-code would ask whether to append or overwrite.
 func (r Record) Adopted() bool {
 	return r.Intent == IntentAsk
 }
