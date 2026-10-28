@@ -96,23 +96,30 @@ func (s *Service) recordLimit(rec review.Record, limit engine.UsageLimit) error 
 	}) {
 		return nil
 	}
-	until := limit.Resets
-	if until.IsZero() {
-		until = limit.At.Add(unknownReset)
+	return account.Append(s.Paths.Limits, account.Limit{Account: rec.ClaudeConfigDir, Login: s.claudeLogin(rec.ClaudeConfigDir), At: limit.At, Until: limitUntil(limit)})
+}
+
+// limitUntil is when a limit stops counting: when claude said it resets, or
+// unknownReset after the refusal when claude did not say.
+func limitUntil(limit engine.UsageLimit) time.Time {
+	if limit.Resets.IsZero() {
+		return limit.At.Add(unknownReset)
 	}
-	return account.Append(s.Paths.Limits, account.Limit{Account: rec.ClaudeConfigDir, Login: s.claudeLogin(rec.ClaudeConfigDir), At: limit.At, Until: until})
+	return limit.Resets
 }
 
 // noteLimit records the usage limit that an interactive session ran into, so the
 // next fresh start moves to another account. Nothing starts again here, because
-// the user saw claude's refusal in the terminal.
+// the user saw claude's refusal in the terminal. It skips a limit that has
+// reset, because the user can resume a refused session after the reset and
+// leave it without sending anything.
 func (s *Service) noteLimit(rec review.Record, sessionID string) review.Record {
 	eng, err := engine.For(rec.Engine)
 	if err != nil {
 		return rec
 	}
 	limit, ok := eng.UsageLimit(sessionID, s.enginePaths(rec.ClaudeConfigDir))
-	if !ok {
+	if !ok || !limitUntil(limit).After(s.now()) {
 		return rec
 	}
 	if err := s.recordLimit(rec, limit); err != nil {
