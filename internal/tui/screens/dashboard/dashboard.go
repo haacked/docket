@@ -13,6 +13,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/haacked/docket/internal/core/account"
+	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/tui/format"
 	"github.com/haacked/docket/internal/tui/msg"
@@ -262,6 +264,11 @@ func (m Model) meta(rec review.Record) string {
 	}
 	if rec.Mode == review.ModeBackground {
 		parts = append(parts, "background")
+	}
+	// The account goes last, so a narrow terminal cuts it before the rest of the
+	// metadata.
+	if config.UsesClaudeAccount(rec.Engine) {
+		parts = append(parts, "account "+account.Name(rec.ClaudeConfigDir))
 	}
 	meta := m.Styles.Dim.Render("· " + strings.Join(parts, " · "))
 	note, busy := m.Busy[rec.ID]

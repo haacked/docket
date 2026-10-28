@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/haacked/docket/internal/core/account"
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/pr"
@@ -128,6 +129,12 @@ type bgPolledMsg struct {
 	records  []review.Record
 	progress map[string]review.Progress
 	err      error
+}
+
+// accountMsg carries the claude account a new review runs under.
+type accountMsg struct {
+	choice account.Choice
+	err    error
 }
 
 // indexTickMsg asks the root to check whether another docket process appended

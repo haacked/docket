@@ -73,14 +73,39 @@ func TestNoLineIsWiderThanTheTerminal(t *testing.T) {
 
 // The title shrinks first, because the metadata is what tells the rows apart.
 func TestALongTitleGivesWayToTheMetadata(t *testing.T) {
-	m := progressModel(100, runningRecord())
+	m := progressModel(120, runningRecord())
 
 	line := lineOf(t, m.View(), "PostHog/posthog#105890")
-	if !strings.HasSuffix(strings.TrimSpace(line), "· background") {
+	if !strings.HasSuffix(strings.TrimSpace(line), "· background · account default") {
 		t.Errorf("the metadata was cut off:\n%s", line)
 	}
 	if !strings.Contains(line, "…") {
 		t.Errorf("the title was not shortened:\n%s", line)
+	}
+}
+
+func TestAClaudeRowNamesItsAccount(t *testing.T) {
+	named := runningRecord()
+	named.ClaudeConfigDir = "/opt/claude-max"
+	codex := runningRecord()
+	codex.ID, codex.Ref.Number, codex.Engine, codex.Mode = "rec-2", 105891, "codex", review.ModeInteractive
+	m := progressModel(200, named, codex)
+
+	if line := lineOf(t, m.View(), "#105890"); !strings.HasSuffix(strings.TrimSpace(line), "· account /opt/claude-max") {
+		t.Errorf("the claude row does not name its account:\n%s", line)
+	}
+	if line := lineOf(t, m.View(), "#105891"); strings.Contains(line, "account") {
+		t.Errorf("the codex row names a claude account:\n%s", line)
+	}
+}
+
+// A narrow terminal cuts the account before the parts that tell rows apart.
+func TestANarrowRowCutsTheAccountFirst(t *testing.T) {
+	m := progressModel(100, runningRecord())
+
+	line := lineOf(t, m.View(), "PostHog/posthog#105890")
+	if !strings.Contains(line, "· background") || strings.Contains(line, "account default") {
+		t.Errorf("the row did not cut the account before background:\n%s", line)
 	}
 }
 

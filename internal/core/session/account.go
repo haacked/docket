@@ -5,12 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/haacked/docket/internal/core/account"
+	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/engine"
 	"github.com/haacked/docket/internal/core/review"
 )
@@ -19,15 +18,9 @@ import (
 // claude did not say when the limit resets.
 const unknownReset = time.Hour
 
-// rotatesAccounts reports whether a review under engineName runs under the
-// claude account the rotation picks. Only claude has those accounts.
-func rotatesAccounts(engineName string) bool {
-	return engineName == (engine.Claude{}).Name()
-}
-
-// newAccount is the claude account a new record runs under. The rotation picks
+// NextAccount is the claude account a new record runs under. The rotation picks
 // it from the limits claude has reported.
-func (s *Service) newAccount() (account.Choice, error) {
+func (s *Service) NextAccount() (account.Choice, error) {
 	limits, err := account.Load(s.Paths.Limits)
 	if err != nil {
 		return account.Choice{}, err
@@ -62,7 +55,7 @@ func (s *Service) claudeLogin(dir string) account.Login {
 func (s *Service) freshAccount(rec review.Record) (review.Record, account.Choice, error) {
 	choice := account.Choice{Account: rec.ClaudeConfigDir}
 	// A codex record keeps the question-and-answer session codex can resume.
-	if !rotatesAccounts(rec.Engine) {
+	if !config.UsesClaudeAccount(rec.Engine) {
 		return rec, choice, nil
 	}
 	limits, err := account.Load(s.Paths.Limits)
@@ -126,7 +119,7 @@ func (s *Service) noteLimit(rec review.Record, sessionID string) review.Record {
 		rec.Err = err.Error()
 		return rec
 	}
-	rec.Err = fmt.Sprintf("%s is over its usage limit until %s", accountName(rec.ClaudeConfigDir), when(limit.Resets))
+	rec.Err = fmt.Sprintf("%s is over its usage limit until %s", accountName(rec.ClaudeConfigDir), account.When(limit.Resets))
 	return rec
 }
 
@@ -174,7 +167,7 @@ func (s *Service) startElsewhere(ctx context.Context, rec review.Record, limit e
 	case err != nil:
 		again.Err = err.Error()
 	case choice.Limited():
-		again.Err = fmt.Sprintf("no claude account has usage left until %s, when %s resets", when(choice.Until), accountName(choice.Account))
+		again.Err = fmt.Sprintf("no claude account has usage left until %s, when %s resets", account.When(choice.Until), accountName(choice.Account))
 	default:
 		// StartBackground records a launch that fails.
 		started, _ := s.StartBackground(ctx, ready)
@@ -209,18 +202,5 @@ func accountName(dir string) string {
 	if dir == "" {
 		return "the default claude account"
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		if rest, ok := strings.CutPrefix(dir, home+string(filepath.Separator)); ok {
-			return "~/" + rest
-		}
-	}
-	return dir
-}
-
-// when is how a message names the time a limit resets.
-func when(at time.Time) string {
-	if at.IsZero() {
-		return "claude says it resets"
-	}
-	return at.Local().Format("Jan 2 3:04 PM")
+	return account.Name(dir)
 }

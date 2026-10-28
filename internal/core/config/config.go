@@ -28,6 +28,13 @@ const DefaultClaudeConfigDir = "~/.claude"
 // EngineClaude is the engine docket uses when config.toml names none.
 const EngineClaude = "claude"
 
+// UsesClaudeAccount reports whether a review under engine runs under the
+// claude account the rotation picks. Only claude has those accounts. A codex
+// record still carries claude_config_dir, which nothing reads.
+func UsesClaudeAccount(engine string) bool {
+	return engine == EngineClaude
+}
+
 // The values of default_run. The new review screen starts a review where
 // default_run says, unless the engine has no background mode.
 const (
