@@ -93,6 +93,9 @@ type childExitedMsg struct {
 type detectedMsg struct {
 	record    review.Record
 	submitted bool
+	// handoff says what a submit did to hand a blocking review back to the
+	// user's teams, or is empty.
+	handoff string
 }
 
 // notesLoadedMsg carries the review review-code wrote. A missing file is not an

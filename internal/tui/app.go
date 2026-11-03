@@ -524,6 +524,9 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if a.dryRun {
 			a.sub = a.sub.ClearBusy()
 			a.status = fmt.Sprintf("Would submit review %d on %s as %s", rec.ReviewID, rec.Ref, message.Event)
+			if session.MayHandBack(rec, message.Event, a.login()) {
+				a.status += ", and hand it back to your team if it blocks"
+			}
 			return a, nil
 		}
 		// The row carries the marker too, because esc leaves the screen while
@@ -662,6 +665,9 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case detectedMsg:
 		delete(a.dash.Busy, message.record.ID)
 		a.status = describe(message.record)
+		if message.handoff != "" {
+			a.status += ". " + message.handoff
+		}
 		// A submit that worked has nothing left on its screen to look at. A
 		// user who left that screen with esc keeps the screen they went to.
 		if message.submitted && a.screen == msg.Submit && a.sub.Record.ID == message.record.ID {
@@ -1106,11 +1112,11 @@ func (a App) abandon(rec review.Record) tea.Cmd {
 func (a App) submitReview(rec review.Record, event, body string) tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
-		updated, err := svc.Submit(context.Background(), rec, event, body)
+		updated, handoff, err := svc.Submit(context.Background(), rec, event, body)
 		if err != nil {
 			return errMsg{err: err}
 		}
-		return detectedMsg{record: updated, submitted: true}
+		return detectedMsg{record: updated, submitted: true, handoff: handoff.String()}
 	}
 }
 

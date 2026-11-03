@@ -41,7 +41,7 @@ func TestSubmitPostsTheEventAndArchivesTheRecord(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	rec := drafted(t, svc, ghc, unlisted)
 
-	done, err := svc.Submit(context.Background(), rec, review.EventRequestChanges, "one blocking comment")
+	done, _, err := svc.Submit(context.Background(), rec, review.EventRequestChanges, "one blocking comment")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestSubmitSendsAnEmptyBodyAsEmpty(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	rec := drafted(t, svc, ghc, unlisted)
 
-	if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err != nil {
+	if _, _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
@@ -118,7 +118,7 @@ func TestSubmitRefusesARecordWithNothingPending(t *testing.T) {
 			svc, _ := newService(t, ghc, newFakeGit())
 			rec := tt.spoil(drafted(t, svc, ghc, unlisted))
 
-			_, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+			_, _, err := svc.Submit(context.Background(), rec, review.EventComment, "")
 			if err == nil || !strings.Contains(err.Error(), "no pending review") {
 				t.Fatalf("Submit answered %v, want a refusal that says there is no pending review", err)
 			}
@@ -151,7 +151,7 @@ func TestSubmitRefusesADraftWhoseInteractiveSessionIsOpen(t *testing.T) {
 		t.Fatalf("record is %q with review %d, want reviewing and still holding review %d", rec.State, rec.ReviewID, pendingID)
 	}
 
-	_, err = svc.Submit(context.Background(), rec, review.EventComment, "")
+	_, _, err = svc.Submit(context.Background(), rec, review.EventComment, "")
 	if err == nil || !strings.Contains(err.Error(), "interactive session") {
 		t.Errorf("Submit answered %v, want a refusal that names the open interactive session", err)
 	}
@@ -169,7 +169,7 @@ func TestSubmitRefusesAnEventGitHubDoesNotAccept(t *testing.T) {
 	rec := drafted(t, svc, ghc, unlisted)
 
 	for _, event := range []string{"", "LGTM", "approve"} {
-		if _, err := svc.Submit(context.Background(), rec, event, ""); err == nil {
+		if _, _, err := svc.Submit(context.Background(), rec, event, ""); err == nil {
 			t.Errorf("Submit accepted the event %q", event)
 		}
 	}
@@ -186,7 +186,7 @@ func TestSubmitKeepsTheDraftWhenGitHubRefuses(t *testing.T) {
 	rec := drafted(t, svc, ghc, unlisted)
 	ghc.submitErr = errors.New("HTTP 422: Can not approve your own pull request")
 
-	done, err := svc.Submit(context.Background(), rec, review.EventApprove, "")
+	done, _, err := svc.Submit(context.Background(), rec, review.EventApprove, "")
 	if err == nil {
 		t.Fatal("Submit reported success on a 422")
 	}
@@ -218,7 +218,7 @@ func TestSubmitRefusesApprovingMyOwnPullRequest(t *testing.T) {
 	rec := drafted(t, svc, ghc, unlisted)
 	rec.Author = "Haacked"
 
-	done, err := svc.Submit(context.Background(), rec, review.EventApprove, "")
+	done, _, err := svc.Submit(context.Background(), rec, review.EventApprove, "")
 	if err == nil {
 		t.Fatal("Submit accepted an approval of my own pull request")
 	}
@@ -237,7 +237,7 @@ func TestSubmitAllowsApprovingSomeoneElsesPullRequest(t *testing.T) {
 	rec := drafted(t, svc, ghc, unlisted)
 	rec.Author = "someone-else"
 
-	if _, err := svc.Submit(context.Background(), rec, review.EventApprove, ""); err != nil {
+	if _, _, err := svc.Submit(context.Background(), rec, review.EventApprove, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	if len(ghc.submitted) != 1 || ghc.submitted[0].event != review.EventApprove {
@@ -307,7 +307,7 @@ func TestSubmitFromInsideTheCloneWaitsForTheSessionToEnd(t *testing.T) {
 	}
 	svc.CallerDir = inside
 
-	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+	done, _, err := svc.Submit(context.Background(), rec, review.EventComment, "")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestRefreshAllLeavesAnArchiveThatWaitsForASession(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	rec := drafted(t, svc, ghc, unlisted)
 	svc.CallerDir = rec.Dir
-	if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err != nil {
+	if _, _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	svc.CallerDir = ""
@@ -381,7 +381,7 @@ func TestRereviewClearsTheCloneInUse(t *testing.T) {
 	svc, _ := newService(t, ghc, newFakeGit())
 	rec := drafted(t, svc, ghc, unlisted)
 	svc.CallerDir = rec.Dir
-	if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err != nil {
+	if _, _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	svc.CallerDir = ""
@@ -443,7 +443,7 @@ func TestAfterAskFinishesAnArchiveThatWaitedForTheSession(t *testing.T) {
 		t.Fatalf("the adopted review has no clone: %v", err)
 	}
 	svc.CallerDir = rec.Dir
-	if _, err := svc.Submit(context.Background(), storedByID(t, svc, rec.ID), review.EventComment, ""); err != nil {
+	if _, _, err := svc.Submit(context.Background(), storedByID(t, svc, rec.ID), review.EventComment, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	if got := storedByID(t, svc, rec.ID); got.State != review.StateSubmitted {

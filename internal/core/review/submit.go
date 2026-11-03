@@ -1,6 +1,9 @@
 package review
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // The events GitHub accepts when a pending review is submitted.
 const (
@@ -27,4 +30,14 @@ func SubmitEventsFor(author, me string) []string {
 		}
 	}
 	return events
+}
+
+// blockingPrefix matches the severity prefix of a blocking finding in each form
+// review-code's finding-comment-contract.py accepts. review-code publishes the
+// first form, and the user may edit a comment into one of the others.
+var blockingPrefix = regexp.MustCompile("(?i)^(?:`blocking(?::`|`:)|\\*\\*blocking(?::\\*\\*|\\*\\*:)|blocking:)")
+
+// Blocking reports whether a review comment's body is a blocking finding.
+func Blocking(body string) bool {
+	return blockingPrefix.MatchString(strings.TrimSpace(body))
 }

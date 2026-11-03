@@ -77,3 +77,32 @@ func TestCommentIsTheFirstEventOffered(t *testing.T) {
 		}
 	}
 }
+
+// review-code publishes a blocking finding as "`blocking`: ...". A user who
+// edits the comment can write the prefix in any form review-code's own parser
+// accepts, so each of those counts too.
+func TestBlockingReadsTheSeverityPrefix(t *testing.T) {
+	tests := []struct {
+		body string
+		want bool
+	}{
+		{"`blocking`: This drops the lock.", true},
+		{"`blocking:` This drops the lock.", true},
+		{"**blocking:** This drops the lock.", true},
+		{"**blocking**: This drops the lock.", true},
+		{"blocking: This drops the lock.", true},
+		{"`Blocking`: This drops the lock.", true},
+		{"  \n`blocking`: leading space", true},
+		{"`suggestion`: Rename this.", false},
+		{"`nit`: blocking: is not the prefix here", false},
+		{"This is non-blocking.", false},
+		{"`blocking` without a colon", false},
+		{"blockingly: no", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := Blocking(tt.body); got != tt.want {
+			t.Errorf("Blocking(%q) = %v, want %v", tt.body, got, tt.want)
+		}
+	}
+}

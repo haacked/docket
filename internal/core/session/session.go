@@ -1010,13 +1010,14 @@ func (s *Service) rearm(rec review.Record, intent review.Intent, mode review.Mod
 // record. It reads the outcome back off GitHub rather than assuming it. The
 // submitted review is no longer pending, which is what Decide reads as this
 // session's submission, so archiving and the tier-2 cleanup run through the path
-// detection already uses.
-func (s *Service) Submit(ctx context.Context, rec review.Record, event, body string) (review.Record, error) {
+// detection already uses. A review that blocks the pull request is handed back
+// to the user's teams (handBack), and the Handoff says what that did.
+func (s *Service) Submit(ctx context.Context, rec review.Record, event, body string) (review.Record, Handoff, error) {
 	if !slices.Contains(review.SubmitEvents, event) {
-		return rec, fmt.Errorf("%q is not a review event; use one of %s", event, strings.Join(review.SubmitEvents, ", "))
+		return rec, Handoff{}, fmt.Errorf("%q is not a review event; use one of %s", event, strings.Join(review.SubmitEvents, ", "))
 	}
 	if err := RefuseSubmit(rec); err != nil {
-		return rec, err
+		return rec, Handoff{}, err
 	}
 
 	// The screen offers the same list, but it reads a login the service owns and
@@ -1024,10 +1025,11 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 	// the refusal certain.
 	me, err := s.Login(ctx)
 	if err != nil {
-		return s.recordErr(rec, err)
+		rec, err = s.recordErr(rec, err)
+		return rec, Handoff{}, err
 	}
 	if !slices.Contains(review.SubmitEventsFor(rec.Author, me), event) {
-		return rec, fmt.Errorf("GitHub refuses an approval of your own pull request; submit %s as %s instead", rec.Ref, review.EventComment)
+		return rec, Handoff{}, fmt.Errorf("GitHub refuses an approval of your own pull request; submit %s as %s instead", rec.Ref, review.EventComment)
 	}
 
 	// A reviewing row's background session may have replaced or submitted this
@@ -1037,10 +1039,11 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 	if rec.State == review.StateReviewing {
 		reviews, err := s.GH.Reviews(ctx, rec.Ref)
 		if err != nil {
-			return s.recordErr(rec, err)
+			rec, err = s.recordErr(rec, err)
+			return rec, Handoff{}, err
 		}
 		if review.PendingReviewID(reviews, me) != rec.ReviewID {
-			return rec, fmt.Errorf("%s's review %d is no longer pending; docket reads GitHub for %s again once its session ends its turn", rec.Ref, rec.ReviewID, rec.Ref)
+			return rec, Handoff{}, fmt.Errorf("%s's review %d is no longer pending; docket reads GitHub for %s again once its session ends its turn", rec.Ref, rec.ReviewID, rec.Ref)
 		}
 	}
 
@@ -1049,9 +1052,17 @@ func (s *Service) Submit(ctx context.Context, rec review.Record, event, body str
 	// recordErr writes a new one if this attempt fails too.
 	rec.Err = ""
 	if err := s.GH.SubmitReview(ctx, rec.Ref, rec.ReviewID, event, body); err != nil {
-		return s.recordErr(rec, err)
+		rec, err = s.recordErr(rec, err)
+		return rec, Handoff{}, err
 	}
-	return s.detect(ctx, rec)
+	handoff := s.handBack(ctx, rec, event, me)
+	rec, err = s.detect(ctx, rec)
+	// The handoff is already done when this read fails. The caller reports only
+	// the error, so the error carries the handoff.
+	if line := handoff.String(); err != nil && line != "" {
+		err = fmt.Errorf("%w. %s", err, line)
+	}
+	return rec, handoff, err
 }
 
 // DraftBody reads the body of the record's pending review, which is the summary

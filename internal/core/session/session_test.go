@@ -65,6 +65,23 @@ type fakeGH struct {
 	// assigns records each Assign call as "ref login".
 	assigns   []string
 	assignErr error
+	// unassigns records each Unassign call as "ref login". notAssigned makes
+	// Unassign answer that the user was not an assignee.
+	unassigns   []string
+	unassignErr error
+	notAssigned bool
+	// comments answers ReviewComments, keyed by review id. commentReads counts
+	// the calls.
+	comments     map[int64][]string
+	commentsErr  error
+	commentReads int
+	// requestedTeams and requestedTeamsErr answer RequestedTeams. eventReads
+	// counts its calls too.
+	requestedTeams    []string
+	requestedTeamsErr error
+	// teamRequests records each RequestTeamReview call as "ref team,team".
+	teamRequests   []string
+	teamRequestErr error
 }
 
 // submitCall is one POST to the reviews events endpoint.
@@ -121,6 +138,29 @@ func (f *fakeGH) FirstAssignee(_ context.Context, ref pr.Ref, assigner string) (
 func (f *fakeGH) Assign(_ context.Context, ref pr.Ref, login string) error {
 	f.assigns = append(f.assigns, ref.String()+" "+login)
 	return f.assignErr
+}
+
+func (f *fakeGH) Unassign(_ context.Context, ref pr.Ref, login string) (bool, error) {
+	f.unassigns = append(f.unassigns, ref.String()+" "+login)
+	if f.unassignErr != nil {
+		return false, f.unassignErr
+	}
+	return !f.notAssigned, nil
+}
+
+func (f *fakeGH) ReviewComments(_ context.Context, _ pr.Ref, id int64) ([]string, error) {
+	f.commentReads++
+	return f.comments[id], f.commentsErr
+}
+
+func (f *fakeGH) RequestedTeams(context.Context, pr.Ref) ([]string, error) {
+	f.eventReads++
+	return f.requestedTeams, f.requestedTeamsErr
+}
+
+func (f *fakeGH) RequestTeamReview(_ context.Context, ref pr.Ref, teams []string) error {
+	f.teamRequests = append(f.teamRequests, ref.String()+" "+strings.Join(teams, ","))
+	return f.teamRequestErr
 }
 
 // SubmitReview records the call and, on success, leaves the review the way

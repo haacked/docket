@@ -38,6 +38,7 @@ type Review struct {
 	NotesPath   string    `json:"notes_path,omitempty" jsonschema:"the notes file review-code writes for this pull request"`
 	Error       string    `json:"error,omitempty" jsonschema:"what failed the last time docket acted on the review"`
 	Progress    *Progress `json:"progress,omitempty" jsonschema:"what the background session is doing, present while it runs"`
+	Handoff     string    `json:"handoff,omitempty" jsonschema:"what submit_review did to hand a blocking review back to the user's teams: the teams it asked to review, whether it removed the user from the assignees, and what failed"`
 }
 
 // Progress is what the agent says about a running background session.
@@ -99,7 +100,7 @@ A pull request docket already has open is refused. The error says how the user c
 
 const submitDescription = `Submits the pending review docket is tracking for a pull request, with COMMENT, APPROVE, or REQUEST_CHANGES, and archives the record.
 
-The review must be submittable in list_reviews. Leave body out to keep the summary review-code posted with the draft. GitHub refuses an approval of your own pull request. This publishes the review under the user's name and cannot be undone, so confirm the event and the body with the user first.`
+The review must be submittable in list_reviews. Leave body out to keep the summary review-code posted with the draft. GitHub refuses an approval of your own pull request. A REQUEST_CHANGES review, or a COMMENT review with an inline comment that starts with the blocking prefix, also removes the user from the pull request's assignees and asks the user's configured teams that were requested on it to review it again; handoff in the result says what that did. This publishes the review under the user's name and cannot be undone, so confirm the event and the body with the user first.`
 
 // server holds the tool handlers. Each handler detaches its context from the
 // request. The SDK cancels a request's context when the client cancels the call
@@ -370,11 +371,13 @@ func (s *server) submit(ctx context.Context, _ *sdk.CallToolRequest, in submitIn
 			return nil, Review{}, err
 		}
 	}
-	rec, err = s.svc.Submit(ctx, rec, in.Event, in.Body)
+	rec, handoff, err := s.svc.Submit(ctx, rec, in.Event, in.Body)
 	if err != nil {
 		return nil, Review{}, err
 	}
-	return nil, view(rec, nil), nil
+	out := view(rec, nil)
+	out.Handoff = handoff.String()
+	return nil, out, nil
 }
 
 // view is the record as the tools report it. statuses holds the poll's answer
