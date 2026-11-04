@@ -36,11 +36,30 @@ func TestNeedIsNamedOnlyWhileTheSessionWaits(t *testing.T) {
 		{name: "waiting", status: BGStatus{Idle: true, Progress: needs}, want: "permission to run gh"},
 		{name: "working", status: BGStatus{Progress: needs}, want: ""},
 		{name: "starting", status: BGStatus{Idle: true, Progress: review.Progress{Active: true, Needs: needs.Needs}}, want: ""},
+		{name: "at a prompt", status: BGStatus{Prompted: true, Progress: needs}, want: "permission to run gh"},
 	}
 	for _, tc := range tests {
 		if got := tc.status.Need(); got != tc.want {
 			t.Errorf("%s: Need() = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// A prompt stops a session partway through its turn. The session makes no
+// progress until the user answers, but its turn has not ended.
+func TestASessionAtAPromptNeedsTheUserWithoutEndingItsTurn(t *testing.T) {
+	prompted := BGStatus{Prompted: true, Progress: review.Progress{Active: true}}
+	if !prompted.NeedsUser() {
+		t.Error("a session at a prompt does not need the user")
+	}
+	if prompted.Waiting() {
+		t.Error("a session at a prompt read as having ended its turn")
+	}
+	if !(BGStatus{Idle: true}).NeedsUser() {
+		t.Error("a session that ended its turn does not need the user")
+	}
+	if (BGStatus{}).NeedsUser() {
+		t.Error("a working session needs the user")
 	}
 }
 

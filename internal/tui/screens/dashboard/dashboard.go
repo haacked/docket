@@ -29,13 +29,21 @@ type Styles struct {
 	Err      lipgloss.Style
 }
 
-// groups is the order states appear in. Archived and abandoned records are in
-// the last group, which stays hidden until the user asks for it.
-var groups = []struct {
+type group struct {
 	Title  string
 	States []review.State
-	Closed bool
-}{
+	// Waiting holds the rows whose session needs the user. Every other group
+	// leaves them out.
+	Waiting bool
+	Closed  bool
+}
+
+// groups is the order states appear in. Archived and abandoned records are in
+// the last group, which stays hidden until the user asks for it.
+var groups = []group{
+	// A session that needs the user makes no progress until the user answers
+	// it, so its row goes above every other.
+	{Title: "Waiting for you", States: []review.State{review.StateReviewing}, Waiting: true},
 	{Title: "Reviewing", States: []review.State{review.StateReviewing, review.StatePreparing}},
 	{Title: "Did not start", States: []review.State{review.StateNotStarted}},
 	{Title: "Drafted", States: []review.State{review.StateDrafted}},
@@ -83,6 +91,19 @@ func New(styles Styles) Model {
 func (m Model) SetRecords(records []review.Record) Model {
 	selected, had := m.Selected()
 	m.Records = records
+	return m.follow(selected, had)
+}
+
+// SetBackground replaces what each session is doing and keeps the cursor on the
+// record it was on. A session that starts or stops needing the user moves its
+// row between groups.
+func (m Model) SetBackground(progress map[string]review.Progress) Model {
+	selected, had := m.Selected()
+	m.Background = progress
+	return m.follow(selected, had)
+}
+
+func (m Model) follow(selected review.Record, had bool) Model {
 	if had {
 		if i := slices.IndexFunc(m.rows(), func(r review.Record) bool { return r.ID == selected.ID }); i >= 0 {
 			m.Cursor = i
@@ -179,15 +200,15 @@ func (m Model) rows() []review.Record {
 		if group.Closed && !m.ShowArchived {
 			continue
 		}
-		rows = append(rows, m.inGroup(group.States)...)
+		rows = append(rows, m.inGroup(group)...)
 	}
 	return rows
 }
 
-func (m Model) inGroup(states []review.State) []review.Record {
+func (m Model) inGroup(g group) []review.Record {
 	var out []review.Record
 	for _, rec := range m.Records {
-		if slices.Contains(states, rec.State) {
+		if slices.Contains(g.States, rec.State) && m.waiting(rec) == g.Waiting {
 			out = append(out, rec)
 		}
 	}
@@ -205,7 +226,7 @@ func (m Model) View() string {
 		if group.Closed && !m.ShowArchived {
 			continue
 		}
-		records := m.inGroup(group.States)
+		records := m.inGroup(group)
 		if len(records) == 0 {
 			continue
 		}
@@ -272,6 +293,13 @@ func (m Model) meta(rec review.Record) string {
 	return m.Styles.Dim.Render("· ") + m.Spinner.Render(note) + " " + meta
 }
 
+// waiting reports that the row's session needs the user. The root names a need
+// for every session that needs the user.
+func (m Model) waiting(rec review.Record) bool {
+	act, ok := m.Background[rec.ID]
+	return ok && rec.BackgroundRunning() && act.Needs != ""
+}
+
 // activity is the line under a running background row that says what its
 // session is doing, and whether the session is waiting for the user. It is
 // empty for any other row, and for a session the last poll said nothing about.
@@ -280,7 +308,7 @@ func (m Model) activity(rec review.Record) (string, bool) {
 	if !ok || !rec.BackgroundRunning() {
 		return "", false
 	}
-	if act.Needs != "" {
+	if m.waiting(rec) {
 		parts := []string{"waiting for you: " + act.Needs, "enter opens it"}
 		if act.Detail != "" {
 			parts = append(parts, act.Detail)

@@ -63,6 +63,32 @@ func TestPollKeepsABlockedSessionWithNothingPostedRunning(t *testing.T) {
 	}
 }
 
+// A permission prompt stops a session partway through its turn, and claude lists
+// it as waiting rather than idle. The turn has not ended, so the poll reads
+// nothing from GitHub, even when a draft of mine is already there.
+func TestPollReadsNothingFromGitHubForASessionAtAPermissionPrompt(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	writeJobState(t, defaultJobs(t, svc), "6d681a76", `{"tempo": "blocked", "needs": "approve Bash: gh pr diff 7"}`)
+	rec := startedBackground(t, svc, bgRunner(bgEntry("6d681a76", bgSession, "blocked", "waiting", true)))
+	ghc.reviews = []review.GHReview{myPending()}
+	before := ghc.reads
+
+	records, statuses, err := svc.PollBackground(context.Background())
+	if err != nil {
+		t.Fatalf("PollBackground: %v", err)
+	}
+	if got := ghc.reads - before; got != 0 {
+		t.Errorf("read GitHub %d times for a session whose turn has not ended, want 0", got)
+	}
+	if records[0].State != review.StateReviewing {
+		t.Errorf("state = %q, want the review still running", records[0].State)
+	}
+	if status := statuses[rec.ID]; !status.Prompted || status.Need() != "approve Bash: gh pr diff 7" {
+		t.Errorf("status = %+v, want a session at a prompt that names it", status)
+	}
+}
+
 // A session stays blocked until the user answers it. Reading GitHub on every
 // tick for that long would spend two API calls per session every 15 seconds.
 func TestPollReadsGitHubOnceForEachStretchASessionIsBlocked(t *testing.T) {

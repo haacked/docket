@@ -87,6 +87,12 @@ const bgStateDone = "done"
 // also reports it for a few seconds after launch, before the first turn starts.
 const bgStatusIdle = "idle"
 
+// bgStatusWaiting is the status claude reports for a session stopped partway
+// through its turn at a permission prompt (verified on 2.1.318). The listing
+// then reads state "blocked", and the status file reads tempo "blocked" with a
+// need such as "approve Bash: <command>".
+const bgStatusWaiting = "waiting"
+
 // agentEntry is one element of `claude agents --json`. Interactive sessions
 // appear too and carry no ID.
 type agentEntry struct {
@@ -120,8 +126,9 @@ func (Claude) ParseStatus(res exec.Result) (map[string]BGStatus, error) {
 			// says. `claude stop` on a session still working leaves it as
 			// "stopped", which is not "done" and would otherwise be polled for
 			// ever, and the user can stop one from outside docket.
-			Done: entry.State == bgStateDone || entry.PID == 0,
-			Idle: entry.Status == bgStatusIdle,
+			Done:     entry.State == bgStateDone || entry.PID == 0,
+			Idle:     entry.Status == bgStatusIdle,
+			Prompted: entry.Status == bgStatusWaiting,
 			// claude keeps the process after the session's turn ends, and drops
 			// it once the session is stopped. That is the difference between a
 			// session that has to be attached and one a plain resume reopens.

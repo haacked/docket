@@ -153,6 +153,48 @@ func TestABlockedSessionSaysItIsWaitingForYou(t *testing.T) {
 	}
 }
 
+// A row waiting on the user goes in a group above every other, so it is the
+// first thing on the dashboard rather than a red line among working rows.
+func TestASessionWaitingForYouIsGroupedFirst(t *testing.T) {
+	working := runningRecord()
+	working.ID, working.BGID = "rec-2", "22222222"
+	drafted := runningRecord()
+	drafted.ID, drafted.State, drafted.BGID = "rec-3", review.StateDrafted, ""
+	m := progressModel(160, drafted, working, runningRecord())
+	m.Background = map[string]review.Progress{
+		"rec-1": {Needs: "approve Bash: gh pr diff 7"},
+		"rec-2": {Detail: "running reviewers"},
+	}
+
+	view := m.View()
+	if !strings.HasPrefix(view, "Waiting for you (1)\n") {
+		t.Fatalf("the waiting group is missing or not first:\n%s", view)
+	}
+	if !strings.Contains(view, "Reviewing (1)") {
+		t.Errorf("the working row is not left under Reviewing:\n%s", view)
+	}
+	if rows := m.rows(); len(rows) != 3 || rows[0].ID != "rec-1" {
+		t.Errorf("rows = %v, want the waiting row first so the cursor order matches the view", rows)
+	}
+}
+
+// A poll that finds a session waiting moves its row to another group. The cursor
+// stays on the record rather than on the position, so x and s act on the row
+// the user chose.
+func TestTheCursorFollowsARowThatStartsWaiting(t *testing.T) {
+	first := runningRecord()
+	second := runningRecord()
+	second.ID, second.BGID = "rec-2", "22222222"
+	m := progressModel(160, first, second)
+	m.Cursor = 1
+
+	m = m.SetBackground(map[string]review.Progress{"rec-2": {Needs: "your input"}})
+
+	if rec, _ := m.Selected(); rec.ID != "rec-2" {
+		t.Errorf("selected = %s, want rec-2 after it moved to the waiting group", rec.ID)
+	}
+}
+
 // Nothing tells docket that a session has hung. The time since the agent last
 // updated its account is the sign the user can judge by.
 func TestAQuietSessionSaysHowLongSinceItsLastUpdate(t *testing.T) {

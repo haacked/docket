@@ -402,7 +402,7 @@ func view(rec review.Record, statuses map[string]engine.BGStatus) Review {
 		p := status.Progress
 		out.Progress = &Progress{
 			Detail:    p.Detail,
-			Waiting:   status.Waiting(),
+			Waiting:   status.NeedsUser(),
 			Needs:     status.Need(),
 			Agents:    p.Agents,
 			UpdatedAt: p.UpdatedAt,
