@@ -263,19 +263,39 @@ func TestOpeningSubmitOnMyOwnPullRequestOffersNoApproval(t *testing.T) {
 
 func TestADryRunSubmitsNothingAndOpensNoEditor(t *testing.T) {
 	rec := draftedRecord()
+	mine := rec
+	mine.Author = "haacked"
 
 	tests := []struct {
 		name    string
+		rec     review.Record
 		message tea.Msg
 		want    []string
+		reject  []string
 	}{
 		{
 			name:    "submit",
+			rec:     rec,
 			message: msg.SubmitReview{ID: rec.ID, ReviewID: rec.ReviewID, Event: review.EventComment},
-			want:    []string{"Would submit", "haacked/docket#7", review.EventComment},
+			want:    []string{"Would submit", "haacked/docket#7", review.EventComment, "hand it back to your team"},
+		},
+		{
+			name:    "approve",
+			rec:     rec,
+			message: msg.SubmitReview{ID: rec.ID, ReviewID: rec.ReviewID, Event: review.EventApprove},
+			want:    []string{"Would submit", review.EventApprove},
+			reject:  []string{"hand it back"},
+		},
+		{
+			name:    "request changes on my own pull request",
+			rec:     mine,
+			message: msg.SubmitReview{ID: rec.ID, ReviewID: rec.ReviewID, Event: review.EventRequestChanges},
+			want:    []string{"Would submit", review.EventRequestChanges},
+			reject:  []string{"hand it back"},
 		},
 		{
 			name:    "edit the notes",
+			rec:     rec,
 			message: msg.EditNotes{ID: rec.ID},
 			want:    []string{"Would open", rec.NotesPath},
 		},
@@ -283,13 +303,21 @@ func TestADryRunSubmitsNothingAndOpensNoEditor(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			next, cmd := dryRunApp(rec).Update(tc.message)
+			a := dryRunApp(tc.rec)
+			a.cfg.GitHubUser = "haacked"
+			next, cmd := a.Update(tc.message)
 			if cmd != nil {
 				t.Errorf("%s ran a command in a dry run: %#v", tc.name, cmd())
 			}
+			got := next.(App).status
 			for _, want := range tc.want {
-				if got := next.(App).status; !strings.Contains(got, want) {
+				if !strings.Contains(got, want) {
 					t.Errorf("status = %q, want %q in it", got, want)
+				}
+			}
+			for _, reject := range tc.reject {
+				if strings.Contains(got, reject) {
+					t.Errorf("status = %q, want no %q in it", got, reject)
 				}
 			}
 		})
@@ -432,6 +460,23 @@ func TestASubmittedReviewLeavesTheSubmitScreen(t *testing.T) {
 	}
 	if a.sub.Busy != "" {
 		t.Errorf("the submit screen is still busy (%q), so the next submission is dead", a.sub.Busy)
+	}
+}
+
+// The status line is the only place the TUI reports what the handoff did,
+// failures included, because the archived row is hidden.
+func TestASubmittedReviewReportsItsHandoff(t *testing.T) {
+	rec := draftedRecord()
+	a := liveApp(rec)
+
+	archived := rec
+	archived.State = review.StateArchived
+	handoff := "docket asked posthog/core to review it and removed you from its assignees"
+	next, _ := a.Update(detectedMsg{record: archived, submitted: true, handoff: handoff})
+	a = next.(App)
+
+	if !strings.Contains(a.status, "submitted and archived") || !strings.HasSuffix(a.status, ". "+handoff) {
+		t.Errorf("status = %q, want the archive line followed by %q", a.status, handoff)
 	}
 }
 

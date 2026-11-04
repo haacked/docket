@@ -43,6 +43,10 @@ type GitHub interface {
 	TeamMembers(ctx context.Context, team string) ([]string, error)
 	FirstAssignee(ctx context.Context, ref pr.Ref, assigner string) (string, error)
 	Assign(ctx context.Context, ref pr.Ref, login string) error
+	Unassign(ctx context.Context, ref pr.Ref, login string) (bool, error)
+	ReviewComments(ctx context.Context, ref pr.Ref, reviewID int64) ([]string, error)
+	RequestedTeams(ctx context.Context, ref pr.Ref) ([]string, error)
+	RequestTeamReview(ctx context.Context, ref pr.Ref, teams []string) error
 }
 
 // CLI talks to GitHub through the gh command.
@@ -253,31 +257,48 @@ func (c *CLI) TeamMembers(ctx context.Context, team string) ([]string, error) {
 	return members, nil
 }
 
-// FirstAssignee returns the first user that assigner assigned to the pull
-// request, or "" when assigner assigned nobody. It reads the issue events API,
-// which lists events and none of the comments the timeline also carries. That
-// API puts the assignee in both "assignee" and "actor", so only "assigner" says
-// who made the assignment.
-func (c *CLI) FirstAssignee(ctx context.Context, ref pr.Ref, assigner string) (string, error) {
+// issueEvent is one entry of the issue events API. That API puts the assignee
+// of an assigned event in both "assignee" and "actor", so only "assigner" says
+// who made the assignment. A review_requested event names a team by slug alone.
+type issueEvent struct {
+	Event         string        `json:"event"`
+	Assigner      review.GHUser `json:"assigner"`
+	Assignee      review.GHUser `json:"assignee"`
+	RequestedTeam *teamSlug     `json:"requested_team"`
+}
+
+type teamSlug struct {
+	Slug string `json:"slug"`
+}
+
+// issueEvents reads every page of the pull request's issue events. That API
+// lists events and none of the comments the timeline also carries.
+func (c *CLI) issueEvents(ctx context.Context, ref pr.Ref) ([]issueEvent, error) {
 	path := fmt.Sprintf("repos/%s/%s/issues/%d/events", ref.Org, ref.Repo, ref.Number)
 	res, err := c.run(ctx, "api", "-X", "GET", "--paginate", "--slurp", path, "-f", "per_page=100")
 	if err != nil {
-		return "", fmt.Errorf("gh api events of %s: %w", ref, err)
+		return nil, fmt.Errorf("gh api events of %s: %w", ref, err)
 	}
 	out := strings.TrimSpace(res.Stdout)
 	if out == "" {
-		return "", nil
+		return nil, nil
 	}
 
-	var pages [][]struct {
-		Event    string        `json:"event"`
-		Assigner review.GHUser `json:"assigner"`
-		Assignee review.GHUser `json:"assignee"`
-	}
+	var pages [][]issueEvent
 	if err := json.Unmarshal([]byte(out), &pages); err != nil {
-		return "", fmt.Errorf("parse the events of %s: %w", ref, err)
+		return nil, fmt.Errorf("parse the events of %s: %w", ref, err)
 	}
-	for _, e := range slices.Concat(pages...) {
+	return slices.Concat(pages...), nil
+}
+
+// FirstAssignee returns the first user that assigner assigned to the pull
+// request, or "" when assigner assigned nobody.
+func (c *CLI) FirstAssignee(ctx context.Context, ref pr.Ref, assigner string) (string, error) {
+	events, err := c.issueEvents(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range events {
 		if e.Event == "assigned" && strings.EqualFold(e.Assigner.Login, assigner) {
 			return e.Assignee.Login, nil
 		}
@@ -290,19 +311,143 @@ func (c *CLI) FirstAssignee(ctx context.Context, ref pr.Ref, assigner string) (s
 // without push access to the repository. Assign therefore reads the assignees
 // GitHub answers with and fails when login is not among them.
 func (c *CLI) Assign(ctx context.Context, ref pr.Ref, login string) error {
-	path := fmt.Sprintf("repos/%s/%s/issues/%d/assignees", ref.Org, ref.Repo, ref.Number)
-	res, err := c.run(ctx, "api", "-X", "POST", path, "-f", "assignees[]="+login)
+	res, err := c.run(ctx, "api", "-X", "POST", assigneesPath(ref), "-f", "assignees[]="+login)
 	if err != nil {
 		return fmt.Errorf("assign %s to %s: %w", login, ref, err)
 	}
+	assigned, err := amongAssignees(res.Stdout, login)
+	if err != nil {
+		return fmt.Errorf("parse the answer to assigning %s to %s: %w", login, ref, err)
+	}
+	if !assigned {
+		return fmt.Errorf("GitHub left %s out of the assignees of %s, as it does for a user without push access", login, ref)
+	}
+	return nil
+}
+
+// Unassign removes login from the pull request's assignees, keeps the others,
+// and reports whether login was an assignee to remove. GitHub answers a removal
+// of a user who is not assigned the same way it answers a real one, so Unassign
+// reads the assignees first and sends nothing when login is not among them. It
+// fails when login is still among the assignees GitHub answers the removal with.
+func (c *CLI) Unassign(ctx context.Context, ref pr.Ref, login string) (bool, error) {
+	res, err := c.run(ctx, "api", "-X", "GET", fmt.Sprintf("repos/%s/%s/issues/%d", ref.Org, ref.Repo, ref.Number))
+	if err != nil {
+		return false, fmt.Errorf("read the assignees of %s: %w", ref, err)
+	}
+	assigned, err := amongAssignees(res.Stdout, login)
+	if err != nil {
+		return false, fmt.Errorf("parse the assignees of %s: %w", ref, err)
+	}
+	if !assigned {
+		return false, nil
+	}
+
+	res, err = c.run(ctx, "api", "-X", "DELETE", assigneesPath(ref), "-f", "assignees[]="+login)
+	if err != nil {
+		return false, fmt.Errorf("unassign %s from %s: %w", login, ref, err)
+	}
+	if assigned, err = amongAssignees(res.Stdout, login); err != nil {
+		return false, fmt.Errorf("parse the answer to unassigning %s from %s: %w", login, ref, err)
+	}
+	if assigned {
+		return false, fmt.Errorf("GitHub kept %s among the assignees of %s", login, ref)
+	}
+	return true, nil
+}
+
+func assigneesPath(ref pr.Ref) string {
+	return fmt.Sprintf("repos/%s/%s/issues/%d/assignees", ref.Org, ref.Repo, ref.Number)
+}
+
+// amongAssignees reports whether login is among the assignees of the issue in
+// GitHub's JSON answer. GitHub compares logins without case.
+func amongAssignees(answer, login string) (bool, error) {
 	var issue struct {
 		Assignees []review.GHUser `json:"assignees"`
 	}
-	if err := json.Unmarshal([]byte(res.Stdout), &issue); err != nil {
-		return fmt.Errorf("parse the answer to assigning %s to %s: %w", login, ref, err)
+	if err := json.Unmarshal([]byte(answer), &issue); err != nil {
+		return false, err
 	}
-	if !slices.ContainsFunc(issue.Assignees, func(a review.GHUser) bool { return strings.EqualFold(a.Login, login) }) {
-		return fmt.Errorf("GitHub left %s out of the assignees of %s, as it does for a user without push access", login, ref)
+	return slices.ContainsFunc(issue.Assignees, func(a review.GHUser) bool { return strings.EqualFold(a.Login, login) }), nil
+}
+
+// ReviewComments lists the bodies of a review's inline comments. The author of
+// a pending review can read its comments. A submitted review keeps them at the
+// same path.
+func (c *CLI) ReviewComments(ctx context.Context, ref pr.Ref, reviewID int64) ([]string, error) {
+	path := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews/%d/comments", ref.Org, ref.Repo, ref.Number, reviewID)
+	res, err := c.run(ctx, "api", "-X", "GET", "--paginate", "--slurp", path, "-f", "per_page=100")
+	if err != nil {
+		return nil, fmt.Errorf("gh api comments of review %d on %s: %w", reviewID, ref, err)
+	}
+	out := strings.TrimSpace(res.Stdout)
+	if out == "" {
+		return nil, nil
+	}
+
+	var pages [][]struct {
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(out), &pages); err != nil {
+		return nil, fmt.Errorf("parse the comments of review %d on %s: %w", reviewID, ref, err)
+	}
+	var bodies []string
+	for _, comment := range slices.Concat(pages...) {
+		bodies = append(bodies, comment.Body)
+	}
+	return bodies, nil
+}
+
+// RequestedTeams lists the slug of every team that was ever asked to review the
+// pull request, each once, including a team whose request a review has since
+// fulfilled. GitHub can only request a team of the repository's own
+// organization, so the slug is enough to name it.
+func (c *CLI) RequestedTeams(ctx context.Context, ref pr.Ref) ([]string, error) {
+	events, err := c.issueEvents(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	var slugs []string
+	for _, e := range events {
+		if e.Event != "review_requested" || e.RequestedTeam == nil || slices.Contains(slugs, e.RequestedTeam.Slug) {
+			continue
+		}
+		slugs = append(slugs, e.RequestedTeam.Slug)
+	}
+	return slugs, nil
+}
+
+// RequestTeamReview asks the "org/team" teams to review the pull request. Each
+// team must belong to the repository's organization, because GitHub can request
+// no other. It reads the requested teams GitHub answers with and fails when one
+// of the teams is not among them.
+func (c *CLI) RequestTeamReview(ctx context.Context, ref pr.Ref, teams []string) error {
+	path := fmt.Sprintf("repos/%s/%s/pulls/%d/requested_reviewers", ref.Org, ref.Repo, ref.Number)
+	args := []string{"api", "-X", "POST", path}
+	slugs := make([]string, len(teams))
+	for i, team := range teams {
+		org, slug, ok := strings.Cut(team, "/")
+		if !ok || !strings.EqualFold(org, ref.Org) {
+			return fmt.Errorf("team %q is not a team of %s", team, ref.Org)
+		}
+		slugs[i] = slug
+		args = append(args, "-f", "team_reviewers[]="+slug)
+	}
+	res, err := c.run(ctx, args...)
+	if err != nil {
+		return fmt.Errorf("request a review of %s from %s: %w", ref, strings.Join(teams, ", "), err)
+	}
+	var pull struct {
+		RequestedTeams []teamSlug `json:"requested_teams"`
+	}
+	if err := json.Unmarshal([]byte(res.Stdout), &pull); err != nil {
+		return fmt.Errorf("parse the answer to requesting a review of %s: %w", ref, err)
+	}
+	for i, slug := range slugs {
+		if !slices.ContainsFunc(pull.RequestedTeams, func(t teamSlug) bool { return strings.EqualFold(t.Slug, slug) }) {
+			return fmt.Errorf("GitHub left %s out of the teams requested on %s", teams[i], ref)
+		}
 	}
 	return nil
 }

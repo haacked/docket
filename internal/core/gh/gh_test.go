@@ -483,3 +483,177 @@ func TestAssignPassesOnTheRunnersFailure(t *testing.T) {
 		t.Errorf("error = %v, want it to wrap %v", err, failure)
 	}
 }
+
+func TestReviewCommentsReadsEveryPageOfTheReviewsComments(t *testing.T) {
+	body := `[[{"body":"` + "`blocking`" + `: drops the lock"}],[{"body":"` + "`nit`" + `: rename"}]]`
+	fake := &exec.Fake{Results: map[string]exec.Result{"repos/haacked/docket/pulls/7/reviews/55/comments": {Stdout: body}}}
+
+	bodies, err := New(fake).ReviewComments(context.Background(), ref, 55)
+	if err != nil {
+		t.Fatalf("ReviewComments: %v", err)
+	}
+
+	if want := []string{"`blocking`: drops the lock", "`nit`: rename"}; !slices.Equal(bodies, want) {
+		t.Errorf("bodies = %q, want %q", bodies, want)
+	}
+	if line := fake.Calls[0].String(); !strings.Contains(line, "--paginate") || !strings.Contains(line, "--slurp") {
+		t.Errorf("command %s does not read every page", line)
+	}
+}
+
+func TestReviewCommentsFailsOnOutputThatIsNotJSON(t *testing.T) {
+	fake := &exec.Fake{Results: map[string]exec.Result{"comments": {Stdout: "<html>502 Bad Gateway</html>"}}}
+
+	if _, err := New(fake).ReviewComments(context.Background(), ref, 55); err == nil {
+		t.Error("ReviewComments succeeded on output that is not JSON")
+	}
+}
+
+// The events API names a requested team by its slug alone. A person's request
+// carries no team at all.
+func TestRequestedTeamsListsEveryTeamEverRequested(t *testing.T) {
+	body := `[[{"event":"review_requested","requested_reviewer":{"login":"Copilot"}},` +
+		`{"event":"review_requested","requested_team":{"slug":"team-feature-flags"}}],` +
+		`[{"event":"review_request_removed","requested_team":{"slug":"team-feature-flags"}},` +
+		`{"event":"assigned","assignee":{"login":"haacked"}},` +
+		`{"event":"review_requested","requested_team":{"slug":"team-flags-platform"}},` +
+		`{"event":"review_requested","requested_team":{"slug":"team-feature-flags"}}]]`
+	fake := &exec.Fake{Results: map[string]exec.Result{"repos/haacked/docket/issues/7/events": {Stdout: body}}}
+
+	slugs, err := New(fake).RequestedTeams(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("RequestedTeams: %v", err)
+	}
+
+	if want := []string{"team-feature-flags", "team-flags-platform"}; !slices.Equal(slugs, want) {
+		t.Errorf("slugs = %q, want %q, each once", slugs, want)
+	}
+	if line := fake.Calls[0].String(); !strings.Contains(line, "--paginate") || !strings.Contains(line, "--slurp") {
+		t.Errorf("command %s does not read every page", line)
+	}
+}
+
+func TestRequestedTeamsFailsOnOutputThatIsNotJSON(t *testing.T) {
+	fake := &exec.Fake{Results: map[string]exec.Result{"events": {Stdout: "<html>502 Bad Gateway</html>"}}}
+
+	if _, err := New(fake).RequestedTeams(context.Background(), ref); err == nil {
+		t.Error("RequestedTeams succeeded on output that is not JSON")
+	}
+}
+
+func TestRequestTeamReviewRequestsEveryTeam(t *testing.T) {
+	answer := `{"requested_teams":[{"slug":"team-feature-flags"},{"slug":"Team-Flags-Platform"}]}`
+	fake := &exec.Fake{Results: map[string]exec.Result{"requested_reviewers": {Stdout: answer}}}
+
+	if err := New(fake).RequestTeamReview(context.Background(), ref, []string{"haacked/team-feature-flags", "Haacked/team-flags-platform"}); err != nil {
+		t.Fatalf("RequestTeamReview: %v", err)
+	}
+
+	line := fake.Calls[0].String()
+	for _, want := range []string{"POST", "repos/haacked/docket/pulls/7/requested_reviewers", "team_reviewers[]=team-feature-flags", "team_reviewers[]=team-flags-platform"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("command %s is missing %q", line, want)
+		}
+	}
+}
+
+// GitHub can leave out a team it cannot request, such as one without access to
+// the repository. The answer lists the teams it did request.
+func TestRequestTeamReviewFailsWhenGitHubLeavesATeamOut(t *testing.T) {
+	fake := &exec.Fake{Results: map[string]exec.Result{"requested_reviewers": {Stdout: `{"requested_teams":[{"slug":"team-feature-flags"}]}`}}}
+
+	err := New(fake).RequestTeamReview(context.Background(), ref, []string{"haacked/team-feature-flags", "haacked/team-flags-platform"})
+	if err == nil || !strings.Contains(err.Error(), "haacked/team-flags-platform") {
+		t.Errorf("error = %v, want one that names haacked/team-flags-platform", err)
+	}
+}
+
+// GitHub can only request a team of the repository's own organization.
+func TestRequestTeamReviewRefusesATeamOfAnotherOrg(t *testing.T) {
+	fake := &exec.Fake{}
+
+	for _, team := range []string{"posthog/team-feature-flags", "team-feature-flags"} {
+		if err := New(fake).RequestTeamReview(context.Background(), ref, []string{team}); err == nil {
+			t.Errorf("RequestTeamReview(%q) succeeded on %s", team, ref)
+		}
+	}
+	if len(fake.Calls) != 0 {
+		t.Errorf("ran %v, want nothing", fake.Calls)
+	}
+}
+
+func TestRequestTeamReviewPassesOnTheRunnersFailure(t *testing.T) {
+	failure := errors.New("gh: HTTP 422")
+	fake := &exec.Fake{Errs: map[string]error{"requested_reviewers": failure}}
+
+	if err := New(fake).RequestTeamReview(context.Background(), ref, []string{"haacked/team-feature-flags"}); !errors.Is(err, failure) {
+		t.Errorf("error = %v, want it to wrap %v", err, failure)
+	}
+}
+
+func TestUnassignRemovesTheUserFromTheAssignees(t *testing.T) {
+	fake := &exec.Fake{Results: map[string]exec.Result{
+		"GET repos/haacked/docket/issues/7":              {Stdout: `{"assignees":[{"login":"vdekrijger"},{"login":"Haacked"}]}`},
+		"DELETE repos/haacked/docket/issues/7/assignees": {Stdout: `{"assignees":[{"login":"vdekrijger"}]}`},
+	}}
+
+	removed, err := New(fake).Unassign(context.Background(), ref, "haacked")
+	if err != nil {
+		t.Fatalf("Unassign: %v", err)
+	}
+
+	if !removed {
+		t.Error("removed = false, want true for a user GitHub listed as an assignee")
+	}
+	if len(fake.Calls) != 2 {
+		t.Fatalf("calls = %v, want a read and a delete", fake.Calls)
+	}
+	line := fake.Calls[1].String()
+	for _, want := range []string{"DELETE", "repos/haacked/docket/issues/7/assignees", "assignees[]=haacked"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("command %s is missing %q", line, want)
+		}
+	}
+}
+
+// GitHub answers a removal of someone who was never assigned the same way it
+// answers a real one, so only a read beforehand says whether there was anything
+// to remove.
+func TestUnassignOfAUserWhoIsNotAssignedRemovesNothing(t *testing.T) {
+	fake := &exec.Fake{Results: map[string]exec.Result{
+		"GET repos/haacked/docket/issues/7": {Stdout: `{"assignees":[{"login":"vdekrijger"}]}`},
+	}}
+
+	removed, err := New(fake).Unassign(context.Background(), ref, "haacked")
+	if err != nil || removed {
+		t.Errorf("Unassign = %v, %v, want nothing removed and no error", removed, err)
+	}
+	if len(fake.Calls) != 1 {
+		t.Errorf("calls = %v, want only the read", fake.Calls)
+	}
+}
+
+func TestUnassignFailsWhenGitHubKeepsTheUser(t *testing.T) {
+	fake := &exec.Fake{Results: map[string]exec.Result{
+		"GET repos/haacked/docket/issues/7":              {Stdout: `{"assignees":[{"login":"haacked"}]}`},
+		"DELETE repos/haacked/docket/issues/7/assignees": {Stdout: `{"assignees":[{"login":"Haacked"}]}`},
+	}}
+
+	if _, err := New(fake).Unassign(context.Background(), ref, "haacked"); err == nil {
+		t.Error("Unassign succeeded although GitHub's answer still lists the user")
+	}
+}
+
+func TestUnassignPassesOnTheRunnersFailure(t *testing.T) {
+	failure := errors.New("gh: HTTP 404")
+	for _, key := range []string{"GET repos/haacked/docket/issues/7", "DELETE"} {
+		fake := &exec.Fake{
+			Results: map[string]exec.Result{"GET repos/haacked/docket/issues/7": {Stdout: `{"assignees":[{"login":"haacked"}]}`}},
+			Errs:    map[string]error{key: failure},
+		}
+
+		if _, err := New(fake).Unassign(context.Background(), ref, "haacked"); !errors.Is(err, failure) {
+			t.Errorf("%s failing: error = %v, want it to wrap %v", key, err, failure)
+		}
+	}
+}

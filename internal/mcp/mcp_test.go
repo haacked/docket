@@ -42,6 +42,10 @@ type fakeGitHub struct {
 	reviewsErr error
 	prState    review.PRState
 	submits    []string
+	// requestedTeams answers RequestedTeams. handoffs records each team request
+	// and unassign as "teams <teams>" and "unassign <login>".
+	requestedTeams []string
+	handoffs       []string
 }
 
 func (f *fakeGitHub) Login(context.Context) (string, error) { return me, nil }
@@ -77,6 +81,24 @@ func (f *fakeGitHub) TeamMembers(context.Context, string) ([]string, error) { re
 func (f *fakeGitHub) FirstAssignee(context.Context, pr.Ref, string) (string, error) { return "", nil }
 
 func (f *fakeGitHub) Assign(context.Context, pr.Ref, string) error { return nil }
+
+func (f *fakeGitHub) Unassign(_ context.Context, _ pr.Ref, login string) (bool, error) {
+	f.handoffs = append(f.handoffs, "unassign "+login)
+	return true, nil
+}
+
+func (f *fakeGitHub) ReviewComments(context.Context, pr.Ref, int64) ([]string, error) {
+	return nil, nil
+}
+
+func (f *fakeGitHub) RequestedTeams(context.Context, pr.Ref) ([]string, error) {
+	return f.requestedTeams, nil
+}
+
+func (f *fakeGitHub) RequestTeamReview(_ context.Context, _ pr.Ref, teams []string) error {
+	f.handoffs = append(f.handoffs, "teams "+strings.Join(teams, ","))
+	return nil
+}
 
 func (f *fakeGitHub) post(r review.GHReview) {
 	r.User.Login = me
@@ -625,6 +647,34 @@ func TestSubmitReviewPassesTheBody(t *testing.T) {
 
 	if want := []string{`55 REQUEST_CHANGES "Please add a test."`}; !slices.Equal(f.gh.submits, want) {
 		t.Errorf("submits = %v, want %v", f.gh.submits, want)
+	}
+}
+
+// The agent relays the result to the user, so the handoff travels with it.
+func TestSubmitReviewReportsTheHandoffOfABlockingReview(t *testing.T) {
+	f := newFixture(t)
+	f.svc.Cfg.Teams = []string{"haacked/core"}
+	f.gh.requestedTeams = []string{"core"}
+	f.drafted(t)
+
+	out := decode[Review](t, f.submit(t, map[string]any{"event": review.EventRequestChanges}))
+
+	if want := []string{"teams haacked/core", "unassign " + me}; !slices.Equal(f.gh.handoffs, want) {
+		t.Errorf("handoffs = %q, want %q", f.gh.handoffs, want)
+	}
+	if want := "docket asked haacked/core to review it and removed you from its assignees"; out.Handoff != want {
+		t.Errorf("handoff = %q, want %q", out.Handoff, want)
+	}
+}
+
+func TestSubmitReviewReportsNoHandoffForANonBlockingComment(t *testing.T) {
+	f := newFixture(t)
+	f.drafted(t)
+
+	out := decode[Review](t, f.submit(t, map[string]any{"event": review.EventComment}))
+
+	if len(f.gh.handoffs) != 0 || out.Handoff != "" {
+		t.Errorf("handoffs = %q, handoff = %q, want none", f.gh.handoffs, out.Handoff)
 	}
 }
 

@@ -862,7 +862,7 @@ func TestSubmittingWhileTheSessionWorksLeavesTheSessionRunning(t *testing.T) {
 	runner := bgRunner("")
 	rec := reopenedWhileWorking(t, svc, ghc, runner)
 
-	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+	done, _, err := svc.Submit(context.Background(), rec, review.EventComment, "")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -892,7 +892,7 @@ func TestSubmittingADraftWhoseSessionEndedItsTurnStopsTheSession(t *testing.T) {
 	runner := bgRunner("")
 	rec := draftedInBackground(t, svc, ghc, runner)
 
-	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+	done, _, err := svc.Submit(context.Background(), rec, review.EventComment, "")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -919,7 +919,7 @@ func TestSubmittingWhenTheListingLagsTheProgressFileLeavesTheSessionRunning(t *t
 	rec := draftedInBackground(t, svc, ghc, runner)
 	writeJobState(t, defaultJobs(t, svc), "6d681a76", `{"tempo": "active", "detail": "starting…"}`)
 
-	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+	done, _, err := svc.Submit(context.Background(), rec, review.EventComment, "")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -969,7 +969,7 @@ func TestSubmitPostsOnlyADraftItReadAsPending(t *testing.T) {
 			rec := reopenedWhileWorking(t, svc, ghc, bgRunner(""))
 			tt.spoil(ghc)
 
-			if _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err == nil {
+			if _, _, err := svc.Submit(context.Background(), rec, review.EventComment, ""); err == nil {
 				t.Error("Submit accepted a draft it had not read as pending")
 			}
 			if len(ghc.submitted) != 0 {
@@ -988,7 +988,7 @@ func TestArchiveLeavesTheSessionWhenTheAgentDoesNotAnswer(t *testing.T) {
 	rec := reopenedWhileWorking(t, svc, ghc, runner)
 	runner.Errs = map[string]error{"agents": errors.New("daemon not running")}
 
-	done, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+	done, _, err := svc.Submit(context.Background(), rec, review.EventComment, "")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
