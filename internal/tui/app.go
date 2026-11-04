@@ -1676,8 +1676,7 @@ func (a App) applyPoll(polled bgPolledMsg) (tea.Model, tea.Cmd) {
 	// change screens.
 	a.err = polled.err
 	if polled.records != nil {
-		a.dash = a.dash.SetRecords(polled.records)
-		a.dash.Background = polled.progress
+		a.dash = a.dash.SetRecords(polled.records).SetBackground(polled.progress)
 	}
 	return a.armPoll()
 }
@@ -1708,16 +1707,15 @@ func (a App) pollBackground() tea.Cmd {
 }
 
 // progressFor hands each session's progress to the dashboard, which holds no
-// engine to ask. A session that is Waiting is waiting for the user. The
-// dashboard draws a row as waiting when the row names a need, so a waiting
-// session always names one. A working session with no detail shows the agent's
-// state.
+// engine to ask. The dashboard draws a row as waiting when the row names a need,
+// so a session that needs the user always names one. A working session with no
+// detail shows the agent's state.
 func progressFor(statuses map[string]engine.BGStatus) map[string]review.Progress {
 	progress := make(map[string]review.Progress, len(statuses))
 	for id, status := range statuses {
 		p := status.Progress
 		p.Needs = status.Need()
-		if status.Waiting() {
+		if status.NeedsUser() {
 			p.Needs = cmp.Or(p.Needs, "your input")
 		} else {
 			p.Detail = cmp.Or(p.Detail, status.State)

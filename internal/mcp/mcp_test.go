@@ -580,6 +580,24 @@ func TestListReviewsSaysWhatAWaitingSessionNeeds(t *testing.T) {
 	}
 }
 
+// A permission prompt stops the session partway through its turn, and claude's
+// listing reports it as waiting rather than idle.
+func TestListReviewsSaysASessionAtAPermissionPromptIsWaiting(t *testing.T) {
+	f := newFixture(t)
+	f.started(t)
+	f.agents("blocked", "waiting")
+	f.jobState(t, `{"tempo":"blocked","needs":"approve Bash: gh pr diff 7"}`)
+
+	got := f.listedOne(t)
+
+	if got.State != string(review.StateReviewing) || got.Progress == nil {
+		t.Fatalf("review = %+v, want reviewing with progress", got)
+	}
+	if p := *got.Progress; !p.Waiting || p.Needs != "approve Bash: gh pr diff 7" {
+		t.Errorf("progress = %+v, want waiting on the permission prompt", p)
+	}
+}
+
 // Nothing else moves a finished background session on while the TUI is closed.
 // Listing therefore reads the agent and GitHub rather than the index alone.
 func TestListReviewsMovesAFinishedSessionToDrafted(t *testing.T) {

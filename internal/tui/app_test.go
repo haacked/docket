@@ -370,6 +370,7 @@ func TestProgressForMarksOnlyASessionThatEndedItsTurnAsWaiting(t *testing.T) {
 		"named":    {State: "blocked", Idle: true, Progress: review.Progress{Needs: "permission to run gh"}},
 		"busy":     {State: "blocked", Progress: review.Progress{Needs: "results from 5 reviewers"}},
 		"starting": {State: "working", Idle: true, Progress: review.Progress{Detail: "starting…", Active: true}},
+		"prompted": {State: "blocked", Prompted: true, Progress: review.Progress{Detail: "starting…", Active: true}},
 	})
 	if got["bare"].Needs == "" {
 		t.Error("a session that ended its turn with no status file does not read as waiting")
@@ -385,6 +386,9 @@ func TestProgressForMarksOnlyASessionThatEndedItsTurnAsWaiting(t *testing.T) {
 	}
 	if got["starting"].Needs != "" {
 		t.Errorf("needs = %q, want none while the session starts", got["starting"].Needs)
+	}
+	if got["prompted"].Needs == "" {
+		t.Error("a session stopped at a permission prompt does not read as waiting")
 	}
 }
 

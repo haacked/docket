@@ -346,6 +346,25 @@ func TestParseStatusReportsABlockedSession(t *testing.T) {
 	}
 }
 
+// A session stopped at a permission prompt partway through its turn reports
+// waiting, which is neither idle nor busy (verified on 2.1.318). Its turn has not
+// ended, so it does not read as idle, which is what makes the poll read GitHub.
+func TestParseStatusReportsASessionStoppedAtAPrompt(t *testing.T) {
+	statuses, err := Claude{}.ParseStatus(exec.Result{
+		Stdout: `[{"id": "aaaaaaaa", "kind": "background", "state": "blocked", "status": "waiting", "pid": 5}]`,
+	})
+	if err != nil {
+		t.Fatalf("ParseStatus: %v", err)
+	}
+	got := statuses["aaaaaaaa"]
+	if !got.Prompted {
+		t.Error("a session stopped at a prompt did not read as prompted")
+	}
+	if got.Idle || got.Done {
+		t.Errorf("a session stopped at a prompt read as idle %v or done %v", got.Idle, got.Done)
+	}
+}
+
 // A session that ends its turn without asking anything keeps its process and
 // its working state, and only the status says the turn is over. review-code's
 // background runs end this way when the last message tells the user what to do

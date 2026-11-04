@@ -27,6 +27,10 @@ type BGStatus struct {
 	// session is not working. The listing can say so just as a turn starts.
 	// Waiting, not Idle, is the test for an ended turn.
 	Idle bool
+	// Prompted reports that the session stopped partway through its turn until
+	// the user answers a prompt, such as a request to run a tool. The turn has
+	// not ended, so Waiting stays false and the poll reads nothing from GitHub.
+	Prompted bool
 	// Progress is what the agent says the session is doing, beyond the listing.
 	// The poll fills it in for a session that is still running.
 	Progress review.Progress
@@ -39,11 +43,18 @@ func (s BGStatus) Waiting() bool {
 	return s.Idle && !s.Progress.Active
 }
 
-// Need is what a waiting session needs from the user, when the agent named one.
+// NeedsUser reports that the session makes no progress until the user answers
+// it. Either it ended its turn, or it stopped at a prompt partway through one.
+func (s BGStatus) NeedsUser() bool {
+	return s.Waiting() || s.Prompted
+}
+
+// Need is what the session needs from the user, when the agent named one.
 // claude's own reading of the conversation can name a need while the session's
-// reviewer agents still run. A session that is not waiting therefore has none.
+// reviewer agents still run. A session that does not need the user therefore
+// has none.
 func (s BGStatus) Need() string {
-	if !s.Waiting() {
+	if !s.NeedsUser() {
 		return ""
 	}
 	return s.Progress.Needs

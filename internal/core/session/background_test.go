@@ -884,6 +884,32 @@ func TestSubmittingWhileTheSessionWorksLeavesTheSessionRunning(t *testing.T) {
 	}
 }
 
+// A session at a permission prompt is partway through its turn. Archiving after
+// the submit stops only a session whose turn has ended, so this one keeps
+// running with its clone.
+func TestSubmittingWhileTheSessionWaitsAtAPromptLeavesTheSessionRunning(t *testing.T) {
+	ghc := &fakeGH{login: "haacked", info: prInfo()}
+	svc, _ := newService(t, ghc, newFakeGit())
+	runner := bgRunner("")
+	rec := reopenedWhileWorking(t, svc, ghc, runner)
+	runner.Results["agents"] = exec.Result{Stdout: bgEntry("6d681a76", bgSession, "blocked", "waiting", true)}
+
+	done, _, err := svc.Submit(context.Background(), rec, review.EventComment, "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if slices.ContainsFunc(runner.Lines(), func(l string) bool { return strings.Contains(l, "claude stop") }) {
+		t.Errorf("the submit stopped a session waiting at a prompt: %v", runner.Lines())
+	}
+	if _, err := os.Stat(rec.Dir); err != nil {
+		t.Errorf("the clone at %s was deleted under a session waiting at a prompt: %v", rec.Dir, err)
+	}
+	if !strings.Contains(done.Err, "still working") {
+		t.Errorf("the row does not say the session was left running: %q", done.Err)
+	}
+}
+
 // review-code ends its turn once the draft is posted, and claude goes on holding
 // the session. Submitting from the dashboard is the usual end of that review.
 func TestSubmittingADraftWhoseSessionEndedItsTurnStopsTheSession(t *testing.T) {
