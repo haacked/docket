@@ -486,6 +486,7 @@ func TestAFailedSubmissionLeavesTheSubmitScreenUsable(t *testing.T) {
 	a := liveApp(rec)
 	a.screen = msg.Submit
 	a.sub = a.sub.For(rec, review.SubmitEvents)
+	a.sub, _ = a.sub.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	a.sub, _ = a.sub.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	if a.sub.Busy == "" {
 		t.Fatal("the submit screen did not mark itself busy")

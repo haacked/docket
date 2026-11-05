@@ -23,6 +23,7 @@ type Styles struct {
 	Label    lipgloss.Style
 	Dim      lipgloss.Style
 	Selected lipgloss.Style
+	Err      lipgloss.Style
 }
 
 type Model struct {
@@ -35,6 +36,8 @@ type Model struct {
 	Spinner format.Spinner
 	// draft is the pending review's body as the text area holds it after SetDraft.
 	draft string
+	// refusedSubmit is true after ctrl+s finds no event chosen.
+	refusedSubmit bool
 }
 
 // fieldWidth is the widest the body field grows, in columns.
@@ -59,14 +62,13 @@ func (m Model) SetWidth(width int) Model {
 
 // For aims the screen at a record. The events come from the caller because
 // approving your own pull request is a 422 from GitHub, so that choice is left
-// out rather than offered and refused.
+// out rather than offered and refused. No event starts chosen, so a submit
+// always follows a choice the user made on this screen.
 func (m Model) For(rec review.Record, events []string) Model {
 	m.Record = rec
 	m.Events = events
 	m.Event = ""
-	if len(events) > 0 {
-		m.Event = events[0]
-	}
+	m.refusedSubmit = false
 	m.Body.Reset()
 	m.Body.Focus()
 	m.Busy = ""
@@ -115,6 +117,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		// key so a multi-line summary stays possible.
 		case "ctrl+s":
 			if m.Event == "" {
+				m.refusedSubmit = true
 				return m, nil
 			}
 			body := m.Body.Value()
@@ -145,6 +148,13 @@ func (m Model) View() string {
 	fmt.Fprintf(&b, "%s %s  %s\n\n", m.Styles.Label.Render("Submit"), m.Record.Ref, cmp.Or(m.Record.Title, m.Record.URL))
 
 	b.WriteString(m.Styles.Label.Render("Event") + " " + choice.Line(m.Events, m.Event, m.Styles.Selected, m.Styles.Dim) + "\n")
+	if m.Event == "" {
+		style := m.Styles.Dim
+		if m.refusedSubmit {
+			style = m.Styles.Err
+		}
+		b.WriteString(style.Render("Choose an event with tab before you submit.") + "\n")
+	}
 	if !slices.Contains(m.Events, review.EventApprove) {
 		b.WriteString(m.Styles.Dim.Render("GitHub refuses an approval of your own pull request, so approve is not offered.") + "\n")
 	}

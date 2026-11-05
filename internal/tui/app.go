@@ -113,7 +113,7 @@ func New(svc *session.Service, cfg config.Config, initialInput string, dryRun bo
 			cfg.DefaultRepo,
 			cfg.RunsInBackground(),
 		),
-		sub:   submit.New(submit.Styles{Label: s.Label, Dim: s.Dim, Selected: s.Selected}),
+		sub:   submit.New(submit.Styles{Label: s.Label, Dim: s.Dim, Selected: s.Selected, Err: s.Err}),
 		notes: notes.New(notes.Styles{Label: s.Label, Dim: s.Dim}),
 		help:  help.New(help.Styles{Group: s.Group, Label: s.Label}),
 		reqs: inbox.New(inbox.Styles{
