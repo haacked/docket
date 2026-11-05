@@ -36,8 +36,8 @@ type Model struct {
 	Spinner format.Spinner
 	// draft is the pending review's body as the text area holds it after SetDraft.
 	draft string
-	// unchosen is true after ctrl+s finds no event chosen.
-	unchosen bool
+	// refusedSubmit is true after ctrl+s finds no event chosen.
+	refusedSubmit bool
 }
 
 // fieldWidth is the widest the body field grows, in columns.
@@ -68,7 +68,7 @@ func (m Model) For(rec review.Record, events []string) Model {
 	m.Record = rec
 	m.Events = events
 	m.Event = ""
-	m.unchosen = false
+	m.refusedSubmit = false
 	m.Body.Reset()
 	m.Body.Focus()
 	m.Busy = ""
@@ -117,7 +117,7 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 		// key so a multi-line summary stays possible.
 		case "ctrl+s":
 			if m.Event == "" {
-				m.unchosen = true
+				m.refusedSubmit = true
 				return m, nil
 			}
 			body := m.Body.Value()
@@ -150,7 +150,7 @@ func (m Model) View() string {
 	b.WriteString(m.Styles.Label.Render("Event") + " " + choice.Line(m.Events, m.Event, m.Styles.Selected, m.Styles.Dim) + "\n")
 	if m.Event == "" {
 		style := m.Styles.Dim
-		if m.unchosen {
+		if m.refusedSubmit {
 			style = m.Styles.Err
 		}
 		b.WriteString(style.Render("Choose an event with tab before you submit.") + "\n")

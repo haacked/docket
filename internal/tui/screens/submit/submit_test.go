@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/haacked/docket/internal/core/pr"
@@ -59,7 +60,15 @@ func TestNoEventStartsChosen(t *testing.T) {
 }
 
 func TestSubmittingWithNoEventSendsNothing(t *testing.T) {
-	m, cmd := model().Update(ctrlS)
+	m := model()
+	m.Styles.Dim = lipgloss.NewStyle().Faint(true)
+	m.Styles.Err = lipgloss.NewStyle().Bold(true)
+	prompt := "Choose an event with tab before you submit."
+	if !strings.Contains(m.View(), m.Styles.Dim.Render(prompt)) {
+		t.Errorf("the prompt is not dim before a refused submit:\n%q", m.View())
+	}
+
+	m, cmd := m.Update(ctrlS)
 
 	if cmd != nil {
 		t.Errorf("submitting with no event produced %#v", cmd())
@@ -67,8 +76,8 @@ func TestSubmittingWithNoEventSendsNothing(t *testing.T) {
 	if m.Busy != "" {
 		t.Error("submitting with no event marked the screen busy")
 	}
-	if !m.unchosen {
-		t.Error("the screen does not mark the refused submit, so the prompt stays dim")
+	if !strings.Contains(m.View(), m.Styles.Err.Render(prompt)) {
+		t.Errorf("the prompt is not in the error style after a refused submit:\n%q", m.View())
 	}
 
 	m, _ = m.Update(key(tea.KeyTab))
@@ -108,7 +117,7 @@ func TestForClearsTheEventBetweenRecords(t *testing.T) {
 
 	m, _ = model().Update(ctrlS)
 	m = m.For(record(), review.SubmitEvents)
-	if m.unchosen {
+	if m.refusedSubmit {
 		t.Error("the next record's screen still shows the last one's refused submit")
 	}
 }
