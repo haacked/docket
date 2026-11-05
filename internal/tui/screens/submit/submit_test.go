@@ -44,7 +44,7 @@ func chosen() Model {
 }
 
 // chooseEvent is the prompt the screen shows while no event is chosen.
-const chooseEvent = "Choose an event with tab"
+const chooseEvent = "Choose an event with tab before you submit."
 
 // No event starts chosen, so a submit always follows a choice made on this
 // screen.
@@ -63,8 +63,7 @@ func TestSubmittingWithNoEventSendsNothing(t *testing.T) {
 	m := model()
 	m.Styles.Dim = lipgloss.NewStyle().Faint(true)
 	m.Styles.Err = lipgloss.NewStyle().Bold(true)
-	prompt := "Choose an event with tab before you submit."
-	if !strings.Contains(m.View(), m.Styles.Dim.Render(prompt)) {
+	if !strings.Contains(m.View(), m.Styles.Dim.Render(chooseEvent)) {
 		t.Errorf("the prompt is not dim before a refused submit:\n%q", m.View())
 	}
 
@@ -76,7 +75,7 @@ func TestSubmittingWithNoEventSendsNothing(t *testing.T) {
 	if m.Busy != "" {
 		t.Error("submitting with no event marked the screen busy")
 	}
-	if !strings.Contains(m.View(), m.Styles.Err.Render(prompt)) {
+	if !strings.Contains(m.View(), m.Styles.Err.Render(chooseEvent)) {
 		t.Errorf("the prompt is not in the error style after a refused submit:\n%q", m.View())
 	}
 
