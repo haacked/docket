@@ -36,14 +36,52 @@ func typed(s string) tea.KeyPressMsg { return tea.KeyPressMsg{Code: rune(s[0]), 
 
 var ctrlS = tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}
 
-func TestTheChoiceStartsOnComment(t *testing.T) {
-	if got := model().Event; got != review.EventComment {
-		t.Errorf("event = %q, want comment: it is the choice that always applies", got)
+// chosen is the screen after the user picks the first event, comment.
+func chosen() Model {
+	m, _ := model().Update(key(tea.KeyTab))
+	return m
+}
+
+// chooseEvent is the prompt the screen shows while no event is chosen.
+const chooseEvent = "Choose an event with tab"
+
+// No event starts chosen, so a submit always follows a choice made on this
+// screen.
+func TestNoEventStartsChosen(t *testing.T) {
+	m := model()
+
+	if m.Event != "" {
+		t.Errorf("event = %q, want none until the user chooses one", m.Event)
+	}
+	if !strings.Contains(m.View(), chooseEvent) {
+		t.Errorf("the view does not say how to choose an event:\n%s", m.View())
+	}
+}
+
+func TestSubmittingWithNoEventSendsNothing(t *testing.T) {
+	m, cmd := model().Update(ctrlS)
+
+	if cmd != nil {
+		t.Errorf("submitting with no event produced %#v", cmd())
+	}
+	if m.Busy != "" {
+		t.Error("submitting with no event marked the screen busy")
+	}
+	if !m.unchosen {
+		t.Error("the screen does not mark the refused submit, so the prompt stays dim")
+	}
+
+	m, _ = m.Update(key(tea.KeyTab))
+	if strings.Contains(m.View(), chooseEvent) {
+		t.Errorf("the view still asks for an event after one was chosen:\n%s", m.View())
 	}
 }
 
 func TestTabCyclesTheEvents(t *testing.T) {
-	m := model()
+	m := chosen()
+	if m.Event != review.EventComment {
+		t.Fatalf("the first tab chose %q, want comment", m.Event)
+	}
 	seen := []string{m.Event}
 
 	for range len(m.Events) {
@@ -58,6 +96,20 @@ func TestTabCyclesTheEvents(t *testing.T) {
 	}
 	if seen[len(seen)-1] != review.EventComment {
 		t.Errorf("a full cycle ended on %q, want it back at comment", seen[len(seen)-1])
+	}
+}
+
+// The event chosen for one record must not carry over to the next.
+func TestForClearsTheEventBetweenRecords(t *testing.T) {
+	m := chosen().For(record(), review.SubmitEvents)
+	if m.Event != "" {
+		t.Errorf("event = %q, want none on the next record", m.Event)
+	}
+
+	m, _ = model().Update(ctrlS)
+	m = m.For(record(), review.SubmitEvents)
+	if m.unchosen {
+		t.Error("the next record's screen still shows the last one's refused submit")
 	}
 }
 
@@ -103,7 +155,7 @@ func TestSubmittingSendsTheEventAndTheBodyUp(t *testing.T) {
 }
 
 func TestSubmittingWithNoBodyIsAllowed(t *testing.T) {
-	_, cmd := model().Update(ctrlS)
+	_, cmd := chosen().Update(ctrlS)
 	if cmd == nil {
 		t.Fatal("submitting an empty body produced no command")
 	}
@@ -115,7 +167,7 @@ func TestSubmittingWithNoBodyIsAllowed(t *testing.T) {
 
 // A second press while the first is in flight would submit the review twice.
 func TestSubmittingTwiceSendsOneReview(t *testing.T) {
-	m, _ := model().Update(ctrlS)
+	m, _ := chosen().Update(ctrlS)
 
 	if _, cmd := m.Update(ctrlS); cmd != nil {
 		t.Errorf("a second press produced %#v", cmd())
@@ -214,7 +266,7 @@ func TestTheDraftsSummaryLeavesWhatTheUserTyped(t *testing.T) {
 // The text area turns a tab into spaces. Sending an untouched summary back would
 // therefore rewrite it. Sending nothing leaves the draft's own text on GitHub.
 func TestAnUntouchedSummaryIsNotSentBack(t *testing.T) {
-	m := model().SetDraft("Nice fix!\n\n\tindented")
+	m := chosen().SetDraft("Nice fix!\n\n\tindented")
 
 	_, cmd := m.Update(ctrlS)
 	if cmd == nil {
@@ -236,7 +288,7 @@ func TestASummaryWithWindowsLineEndingsKeepsItsLines(t *testing.T) {
 }
 
 func TestAnEditedSummaryIsSent(t *testing.T) {
-	m := model().SetDraft("Nice fix!")
+	m := chosen().SetDraft("Nice fix!")
 
 	m, _ = m.Update(typed("x"))
 	_, cmd := m.Update(ctrlS)
@@ -267,7 +319,7 @@ func TestEmptyingTheSummarySaysGitHubKeepsIt(t *testing.T) {
 // A change made after ctrl+s would never be sent. The screen would then show an
 // event that the review did not go out with.
 func TestTabDoesNotChangeTheEventWhileSubmitting(t *testing.T) {
-	m, _ := model().Update(ctrlS)
+	m, _ := chosen().Update(ctrlS)
 	event := m.Event
 
 	m, _ = m.Update(key(tea.KeyTab))
@@ -278,7 +330,7 @@ func TestTabDoesNotChangeTheEventWhileSubmitting(t *testing.T) {
 }
 
 func TestTypingDoesNotReachTheBodyWhileSubmitting(t *testing.T) {
-	m, _ := model().Update(typed("a"))
+	m, _ := chosen().Update(typed("a"))
 	m, _ = m.Update(ctrlS)
 
 	m, _ = m.Update(typed("b"))
@@ -291,7 +343,7 @@ func TestTypingDoesNotReachTheBodyWhileSubmitting(t *testing.T) {
 // esc is the one key that works while the submit runs. The dashboard row says
 // it is still submitting.
 func TestEscapeGoesBackWhileSubmitting(t *testing.T) {
-	m, _ := model().Update(ctrlS)
+	m, _ := chosen().Update(ctrlS)
 
 	_, cmd := m.Update(key(tea.KeyEscape))
 	if cmd == nil {
@@ -304,7 +356,7 @@ func TestEscapeGoesBackWhileSubmitting(t *testing.T) {
 }
 
 func TestSubmittingTakesTheFocusFromTheBody(t *testing.T) {
-	m, _ := model().Update(ctrlS)
+	m, _ := chosen().Update(ctrlS)
 
 	if m.Body.Focused() {
 		t.Error("the body still has the focus while the review is being submitted")
@@ -314,7 +366,7 @@ func TestSubmittingTakesTheFocusFromTheBody(t *testing.T) {
 // A failed submit leaves the user on this screen to retry. A retry may mean
 // editing the body first.
 func TestClearingBusyMakesTheBodyEditableAgain(t *testing.T) {
-	m, _ := model().Update(ctrlS)
+	m, _ := chosen().Update(ctrlS)
 
 	m = m.ClearBusy()
 	m, _ = m.Update(typed("x"))
@@ -328,7 +380,7 @@ func TestClearingBusyMakesTheBodyEditableAgain(t *testing.T) {
 }
 
 func TestTheBusyLineCarriesTheSpinnersFrame(t *testing.T) {
-	m, _ := model().Update(ctrlS)
+	m, _ := chosen().Update(ctrlS)
 	m.Spinner.Frame = "⠙"
 
 	if view := m.View(); !strings.Contains(view, "⠙ submitting…") {
