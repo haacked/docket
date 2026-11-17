@@ -25,12 +25,24 @@ type fakeUsage struct {
 	readings map[string]usage.Reading
 	errs     map[string]error
 	calls    []string
+	// started, when set, receives each dir as its reading begins.
+	started chan string
+	// gate, when set, holds every reading until the test closes it.
+	gate chan struct{}
 }
 
 func (f *fakeUsage) Read(_ context.Context, dir string) (usage.Reading, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, dir)
+	f.mu.Unlock()
+	if f.started != nil {
+		f.started <- dir
+	}
+	if f.gate != nil {
+		<-f.gate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.errs[dir]; err != nil {
 		return usage.Reading{}, err
 	}
@@ -895,5 +907,76 @@ func TestARefusalContradictsAFreeReadingOfEveryDirOnItsLogin(t *testing.T) {
 	}
 	if twinReads != 1 {
 		t.Errorf("twin read %d times, want no read again while its login's refused limit lasts", twinReads)
+	}
+}
+
+// A refusal contradicts only the readings of dirs on its own login. A free
+// reading of a dir on another login still stands after it.
+func TestARefusalLeavesAFreeReadingOfAnotherLoginStanding(t *testing.T) {
+	svc, primary, _, other := twins(t)
+	appendLimit(t, svc, account.Limit{Account: primary, Login: teamSeat, At: svc.now().Add(-time.Hour), Until: svc.now().Add(48 * time.Hour)})
+	appendLimit(t, svc, account.Limit{Account: other, Login: ownOrg, At: svc.now().Add(-time.Hour), Until: svc.now().Add(48 * time.Hour)})
+	svc.Usage = &fakeUsage{readings: map[string]usage.Reading{primary: atLimit, other: underLimits}}
+	c := useClock(svc)
+	if got := nextAccount(t, svc); got.Account != other {
+		t.Fatalf("pick = %+v, want other on its free reading", got)
+	}
+
+	c.at = c.at.Add(time.Minute)
+	if err := svc.recordLimit(review.Record{ClaudeConfigDir: primary}, engine.UsageLimit{At: c.at, Resets: c.at.Add(48 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	c.at = c.at.Add(2 * liveTTL)
+
+	if got := nextAccount(t, svc); got.Account != other || got.Limited() {
+		t.Errorf("pick = %+v, want other: a refusal on the team seat says nothing about its organization", got)
+	}
+}
+
+// verdict holds one lock per dir across a reading, so two picks that both miss
+// the cache read the account once and refresh its token once.
+func TestConcurrentPicksReadAnAccountOnce(t *testing.T) {
+	l := staleLimit(t)
+	l.usage.readings[l.primary] = underLimits
+	l.usage.started = make(chan string, 2)
+	l.usage.gate = make(chan struct{})
+
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() {
+			if got, err := l.svc.NextAccount(context.Background()); err != nil {
+				t.Errorf("NextAccount: %v", err)
+			} else if got.Account != l.primary {
+				t.Errorf("pick = %+v, want the primary on its free reading", got)
+			}
+		})
+	}
+	<-l.usage.started
+	// The second pick has time to reach the reading while the first one holds
+	// it open. A slow second pick lets the test pass without checking the lock,
+	// but never makes it fail.
+	time.Sleep(50 * time.Millisecond)
+	close(l.usage.gate)
+	wg.Wait()
+
+	if n := len(l.usage.reads()); n != 1 {
+		t.Errorf("%d reads from two concurrent picks, want 1", n)
+	}
+}
+
+// A reading that finds an account still at its limit runs out after liveTTL.
+// The title line reads the account again then, rather than wait for the reset
+// the log recorded.
+func TestAPickRechecksWhenAReadingThatKeptAnAccountLimitedExpires(t *testing.T) {
+	l := staleLimit(t)
+	l.usage.readings[l.primary] = atLimit
+
+	got := nextAccount(t, l.svc)
+
+	if got.Account != l.fallback {
+		t.Fatalf("pick = %+v, want the fallback while the primary reads at its limit", got)
+	}
+	if want := l.svc.now().Add(liveTTL); got.Recheck.IsZero() || got.Recheck.After(want) {
+		t.Errorf("recheck = %v, want no later than %v, when the primary's reading expires", got.Recheck, want)
 	}
 }

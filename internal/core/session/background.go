@@ -98,7 +98,7 @@ func (s *Service) Restart(ctx context.Context, rec review.Record) (review.Record
 	if err != nil {
 		return rec, err
 	}
-	s.keepReading(ready)
+	s.recordClear(ready)
 	return s.StartBackground(ctx, ready)
 }
 
@@ -271,7 +271,8 @@ func (s *Service) applyStatus(ctx context.Context, rec review.Record, found map[
 	if over {
 		// detectPolled writes what it decides, so an id learned on this same poll
 		// is saved with it.
-		return s.detectPolled(ctx, s.noteServed(rec, rec.SessionID)), status, false
+		s.noteServed(rec, rec.SessionID)
+		return s.detectPolled(ctx, rec), status, false
 	}
 	if status.SessionID != before {
 		if err := s.append(rec); err != nil {
@@ -312,7 +313,7 @@ func (s *Service) settleIdle(ctx context.Context, rec review.Record, status engi
 		}
 	}
 	if err == nil && !refused {
-		settled = s.noteServed(settled, rec.SessionID)
+		s.noteServed(settled, rec.SessionID)
 	}
 	if err != nil || !running {
 		// A failure is tried again on the next poll. A record that moved on

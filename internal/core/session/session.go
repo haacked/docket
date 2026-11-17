@@ -396,7 +396,7 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mo
 	if err := s.append(rec); err != nil {
 		return rec, plan, err
 	}
-	s.keepReading(rec)
+	s.recordClear(rec)
 
 	if plan.Tier == tier.Tier1 {
 		if err := s.ensureScratch(ctx); err != nil {
@@ -915,7 +915,7 @@ func (s *Service) Rereview(ctx context.Context, rec review.Record, intent review
 	if err := s.append(rearmed); err != nil {
 		return rearmed, err
 	}
-	s.keepReading(rearmed)
+	s.recordClear(rearmed)
 	return rearmed, nil
 }
 

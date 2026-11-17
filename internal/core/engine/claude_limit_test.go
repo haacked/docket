@@ -705,7 +705,7 @@ func TestServedTurnReadsTheModelsReply(t *testing.T) {
 		"claude's own message after the reply":           lines(promptTurn, replyTurn, taskNotification),
 		"a person's /exit after the reply":               lines(slices.Concat([]string{promptTurn, replyTurn}, exitLines)...),
 		"a sub-agent's line after the reply":             lines(promptTurn, replyTurn, sidechain(userTurn)),
-		"a reply after a refused turn":                   lines(promptTurn, refusedTurn, userTurn, replyTurn),
+		"a reply after a refused turn":                   lines(promptTurn, refusedTurn, personTurn, replyTurn),
 		"a reply in a turn after a wrap-up was released": lines(with(wrapUpTurn, personTurn, releaseNote, replyTurn)...),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -819,5 +819,47 @@ func TestServedTurnIsNoneForAReplyClaudeWroteItself(t *testing.T) {
 				t.Errorf("reported a served turn at %v for a reply the model did not write", got)
 			}
 		})
+	}
+}
+
+// bulkyToolResult is wrapUpToolResult with a result of more than half the part
+// of a transcript that ServedTurn reads.
+var bulkyToolResult = strings.Replace(wrapUpToolResult, `"content":"…"`, `"content":"`+strings.Repeat("r", transcriptTail*2/3)+`"`, 1)
+
+// bulk is enough tool calls and results to push the start of their turn out of
+// the part of a transcript that ServedTurn reads.
+var bulk = slices.Repeat([]string{wrapUpToolUse, bulkyToolResult}, 3)
+
+// ServedTurn reads only the end of a transcript. A usage limit note can sit
+// before that end in the same turn, so a turn whose start docket did not read
+// does not count as served.
+func TestServedTurnIsNoneWhenTheTurnStartsBeforeTheTail(t *testing.T) {
+	unpromptedResult := strings.Replace(wrapUpToolResult, `"promptId":"`+wrapUpPromptID+`",`, "", 1)
+	for name, content := range map[string]string{
+		"a wrap-up note before the tail":         lines(slices.Concat(wrapUpStart, []string{wrapUpNote}, bulk, []string{wrapUpReply})...),
+		"a long turn with no note":               lines(slices.Concat([]string{wrapUpPrompt}, bulk, []string{wrapUpReply})...),
+		"a long turn with bookkeeping after":     lines(slices.Concat([]string{wrapUpPrompt}, bulk, []string{wrapUpReply}, bookkeeping)...),
+		"a tool result with no promptId":         lines(with(wrapUpStart, wrapUpNote, wrapUpToolUse, unpromptedResult, wrapUpReply)...),
+		"a person's message with no promptId":    lines(promptTurn, wrapUpNote, userTurn, replyTurn),
+		"a line before the turn that is cut off": lines(longReply(), wrapUpToolUse, bulkyToolResult, wrapUpReply),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := servedTurn(t, content); ok {
+				t.Errorf("reported a served turn at %v for a turn whose start docket did not read", got)
+			}
+		})
+	}
+}
+
+// The turn before the last one marks where the last one starts, even when the
+// tail does not reach the start of the file.
+func TestServedTurnReadsATurnWhoseStartIsInTheTail(t *testing.T) {
+	got, ok := servedTurn(t, lines(longReply(), wrapUpPrompt, wrapUpReply, personTurn, replyTurn))
+
+	if !ok {
+		t.Fatal("the served turn was not recognized")
+	}
+	if !got.Equal(replyAt) {
+		t.Errorf("served at %v, want the reply's timestamp %v", got, replyAt)
 	}
 }

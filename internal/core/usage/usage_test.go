@@ -211,7 +211,6 @@ func TestAnyLimitAtItsCapIsNotFree(t *testing.T) {
 		{name: "the weekly limit at its cap", limits: []Window{{Kind: "session", Percent: 3}, {Kind: "weekly_all", Percent: 100}}, want: false},
 		{name: "the session limit at its cap", limits: []Window{{Kind: "session", Percent: 100}, {Kind: "weekly_all", Percent: 7}}, want: false},
 		{name: "a model-scoped limit at its cap", limits: []Window{{Kind: "weekly_all", Percent: 7}, {Kind: "weekly_scoped", Percent: 100}}, want: false},
-		{name: "an inactive limit at its cap", limits: []Window{{Kind: "weekly_all", Percent: 7}, {Kind: "session", Percent: 100}}, want: false},
 		{name: "a limit past its cap", limits: []Window{{Kind: "weekly_all", Percent: 104}}, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

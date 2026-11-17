@@ -128,7 +128,7 @@ func (e transcriptEntry) callsTool() bool {
 
 // UsageLimit reads the session's transcript.
 func (Claude) UsageLimit(sessionID string, paths Paths) (UsageLimit, bool) {
-	turn, ok := sessionTurn(sessionID, paths)
+	turn, _, ok := sessionTurn(sessionID, paths)
 	if !ok {
 		return UsageLimit{}, false
 	}
@@ -149,10 +149,12 @@ func (Claude) UsageLimit(sessionID string, paths Paths) (UsageLimit, bool) {
 // reply. It reports false unless the session's last turn ended with that reply,
 // with no tool call pending and no usage limit note in force. Such a turn shows
 // that the session's account had usage left. A reply claude wrote itself shows
-// nothing, because the model never ran.
+// nothing, because the model never ran. A turn whose start docket did not read
+// shows nothing either, because the usage limit note can be in the part it did
+// not read.
 func (Claude) ServedTurn(sessionID string, paths Paths) (time.Time, bool) {
-	turn, ok := sessionTurn(sessionID, paths)
-	if !ok {
+	turn, whole, ok := sessionTurn(sessionID, paths)
+	if !ok || !whole {
 		return time.Time{}, false
 	}
 	last := turn[0]
@@ -169,13 +171,13 @@ func (Claude) ServedTurn(sessionID string, paths Paths) (time.Time, bool) {
 // transcript's directory after the session's working directory, so the glob
 // finds the file without depending on how claude spells that name. A session
 // id that is not a UUID cannot name a file outside that directory.
-func sessionTurn(sessionID string, paths Paths) ([]transcriptEntry, bool) {
+func sessionTurn(sessionID string, paths Paths) (turn []transcriptEntry, whole, ok bool) {
 	if paths.ClaudeProjects == "" || uuid.Validate(sessionID) != nil {
-		return nil, false
+		return nil, false, false
 	}
 	matches, err := filepath.Glob(filepath.Join(paths.ClaudeProjects, "*", sessionID+".jsonl"))
 	if err != nil || len(matches) == 0 {
-		return nil, false
+		return nil, false, false
 	}
 	return lastTurn(matches[0])
 }
@@ -209,10 +211,15 @@ func wrappedUp(turn []transcriptEntry) (transcriptEntry, bool) {
 // message, when claude is still writing the last line, or when it stops before
 // it finds the last message. An earlier message must never answer for a later
 // one.
-func lastTurn(path string) ([]transcriptEntry, bool) {
-	tail, ok := readTail(path)
+//
+// whole reports whether the turn holds every message of the session's last turn.
+// That holds when lastTurn stops at a user message of another promptId, or when
+// nothing comes before the turn in a transcript that it read from the start. A
+// stop for any other reason leaves the turn's start unknown.
+func lastTurn(path string) (turn []transcriptEntry, whole, ok bool) {
+	tail, fromStart, ok := readTail(path)
 	if !ok {
-		return nil, false
+		return nil, false, false
 	}
 	var messages []transcriptEntry
 	// undecoded is the index of the latest message that did not decode.
@@ -232,58 +239,63 @@ func lastTurn(path string) ([]transcriptEntry, bool) {
 		messages = append(messages, entry)
 	}
 
-	var turn []transcriptEntry
 	prompt := ""
+	// whole stays true only if the walk passes every message before the turn.
+	whole = fromStart
 	for i, m := range slices.Backward(messages) {
 		if i == undecoded {
+			whole = false
 			break
 		}
 		if m.queuedWithoutTurn() || exits[m.PromptID] {
 			if len(turn) > 0 && prompt == "" {
+				whole = false
 				break
 			}
 			continue
 		}
 		if m.Type == "user" && prompt != "" && m.PromptID != prompt {
+			whole = true
 			break
 		}
 		turn = append(turn, m)
 		if m.Type == "user" {
 			if len(turn) == 1 || m.PromptID == "" {
+				whole = whole && len(turn) > 1 && i == 0
 				break
 			}
 			prompt = m.PromptID
 		}
 	}
-	return turn, len(turn) > 0
+	return turn, whole && len(turn) > 0, len(turn) > 0
 }
 
 // readTail returns the whole lines at the end of the transcript, up to
-// transcriptTail bytes. It reports false when claude is still writing the last
-// line.
-func readTail(path string) ([]byte, bool) {
+// transcriptTail bytes. fromStart reports whether those lines start at the start
+// of the file. It reports false when claude is still writing the last line.
+func readTail(path string) (tail []byte, fromStart, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
 	// A tail that starts after the beginning of the file reads one byte more.
 	// Everything up to the first newline in it is then a line that started
 	// before the tail, or the newline that ends one.
 	offset := max(0, info.Size()-transcriptTail-1)
-	tail := make([]byte, info.Size()-offset)
+	tail = make([]byte, info.Size()-offset)
 	if _, err := f.ReadAt(tail, offset); err != nil && err != io.EOF {
-		return nil, false
+		return nil, false, false
 	}
 	if !bytes.HasSuffix(tail, []byte("\n")) {
-		return nil, false
+		return nil, false, false
 	}
 	if offset > 0 {
 		_, tail, _ = bytes.Cut(tail, []byte("\n"))
 	}
-	return tail, true
+	return tail, offset == 0, true
 }

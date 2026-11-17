@@ -57,22 +57,31 @@ func (s *Service) NextAccount(ctx context.Context) (account.Choice, error) {
 	return s.pick(ctx, limits), nil
 }
 
-// pick runs the rotation over the accounts config.toml names.
+// pick runs the rotation over the accounts config.toml names. The choice can
+// change when a reading that kept an account ahead of it limited expires, so
+// Recheck is no later than that.
 func (s *Service) pick(ctx context.Context, limits []account.Limit) account.Choice {
 	accounts := s.Cfg.ClaudeAccounts()
 	logins := make(map[string]account.Login, len(accounts))
 	for _, dir := range accounts {
 		logins[dir] = s.claudeLogin(dir)
 	}
-	return account.Pick(accounts, logins, s.withLive(ctx, accounts, logins, limits), s.now())
+	limits, expires := s.withLive(ctx, accounts, logins, limits)
+	choice := account.Pick(accounts, logins, limits, s.now())
+	if !expires.IsZero() && (choice.Recheck.IsZero() || expires.Before(choice.Recheck)) {
+		choice.Recheck = expires
+	}
+	return choice
 }
 
 // withLive adds a clear for each account whose live usage shows that a limit in
 // force no longer applies. It walks accounts in order and stops at the first
 // account no limit holds back, so it reads only the accounts that a recorded
 // limit would make the pick pass over. The clear is stamped with the reading's
-// time, so a refusal claude reports after the reading still counts.
-func (s *Service) withLive(ctx context.Context, accounts []string, logins map[string]account.Login, limits []account.Limit) []account.Limit {
+// time, so a refusal claude reports after the reading still counts. expires is
+// the soonest time that a reading which found an account not free runs out, or
+// zero when there is none.
+func (s *Service) withLive(ctx context.Context, accounts []string, logins map[string]account.Login, limits []account.Limit) (_ []account.Limit, expires time.Time) {
 	limits = slices.Clip(limits)
 	now := s.now()
 	for _, dir := range accounts {
@@ -81,6 +90,9 @@ func (s *Service) withLive(ctx context.Context, accounts []string, logins map[st
 		}
 		verdict := s.verdict(ctx, dir)
 		if !verdict.Free {
+			if !verdict.Expires.IsZero() && (expires.IsZero() || verdict.Expires.Before(expires)) {
+				expires = verdict.Expires
+			}
 			continue
 		}
 		limits = append(limits, account.Limit{Account: dir, Login: logins[dir], At: verdict.At, Clear: true})
@@ -88,7 +100,7 @@ func (s *Service) withLive(ctx context.Context, accounts []string, logins map[st
 			break
 		}
 	}
-	return limits
+	return limits, expires
 }
 
 // verdict reads the usage of the account dir names, or returns the reading it
@@ -157,26 +169,21 @@ func (s *Service) distrust(limit account.Limit) {
 	}
 }
 
-// keepReading writes to the log the clear that a reading of rec's account
+// recordClear writes to the log the clear that a reading of rec's account
 // implies, so other docket instances stop passing over the account too. Only a
 // path that starts a session calls it, because a dry run writes nothing. A
-// failed write costs only another reading, so keepReading drops the error.
-func (s *Service) keepReading(rec review.Record) {
+// failed write costs only another reading, so recordClear drops the error.
+func (s *Service) recordClear(rec review.Record) {
 	if !config.UsesClaudeAccount(rec.Engine) {
 		return
 	}
-	if verdict, ok := s.cachedVerdict(rec.ClaudeConfigDir); ok && verdict.Free {
-		_ = s.keepClear(rec.ClaudeConfigDir, verdict.At)
+	verdict, ok := s.cachedVerdict(rec.ClaudeConfigDir)
+	if !ok || !verdict.Free {
+		return
 	}
-}
-
-// keepClear appends a clear for dir at at when it releases a limit in force.
-func (s *Service) keepClear(dir string, at time.Time) error {
-	limits, err := account.Load(s.Paths.Limits)
-	if err != nil {
-		return err
+	if limits, err := account.Load(s.Paths.Limits); err == nil {
+		_ = s.appendClear(rec.ClaudeConfigDir, verdict.At, limits)
 	}
-	return s.appendClear(dir, at, limits)
 }
 
 func (s *Service) appendClear(dir string, at time.Time, limits []account.Limit) error {
@@ -230,7 +237,7 @@ func (s *Service) freshAccount(ctx context.Context, rec review.Record) (review.R
 	}
 	dir := rec.ClaudeConfigDir
 	login := s.claudeLogin(dir)
-	limits = s.withLive(ctx, []string{dir}, map[string]account.Login{dir: login}, limits)
+	limits, _ = s.withLive(ctx, []string{dir}, map[string]account.Login{dir: login}, limits)
 	if account.Limited(dir, login, limits, s.now()) {
 		choice = s.pick(ctx, limits)
 	}
@@ -285,7 +292,8 @@ func (s *Service) noteUsage(rec review.Record, sessionID string) review.Record {
 	}
 	limit, ok := eng.UsageLimit(sessionID, s.enginePaths(rec.ClaudeConfigDir))
 	if !ok {
-		return s.noteServed(rec, sessionID)
+		s.noteServed(rec, sessionID)
+		return rec
 	}
 	if !limitUntil(limit).After(s.now()) {
 		return rec
@@ -302,20 +310,19 @@ func (s *Service) noteUsage(rec review.Record, sessionID string) review.Record {
 // session's last turn with the model's reply. That reply shows the account had
 // usage left when claude wrote it. It reads the transcript only while a limit is
 // in force, which is rare. A failed write leaves only a stale limit, so
-// noteServed drops the error, as keepReading does.
-func (s *Service) noteServed(rec review.Record, sessionID string) review.Record {
+// noteServed drops the error, as recordClear does.
+func (s *Service) noteServed(rec review.Record, sessionID string) {
 	eng, err := engine.For(rec.Engine)
 	if err != nil {
-		return rec
+		return
 	}
 	limits, err := account.Load(s.Paths.Limits)
 	if err != nil || !account.Limited(rec.ClaudeConfigDir, s.claudeLogin(rec.ClaudeConfigDir), limits, s.now()) {
-		return rec
+		return
 	}
 	if at, ok := eng.ServedTurn(sessionID, s.enginePaths(rec.ClaudeConfigDir)); ok {
 		_ = s.appendClear(rec.ClaudeConfigDir, at, limits)
 	}
-	return rec
 }
 
 // startElsewhere starts a background review again under another claude account,
@@ -364,7 +371,7 @@ func (s *Service) startElsewhere(ctx context.Context, rec review.Record, limit e
 	case choice.Limited():
 		again.Err = fmt.Sprintf("no claude account has usage left until %s, when %s resets", account.When(choice.Until), s.accountName(choice.Account))
 	default:
-		s.keepReading(ready)
+		s.recordClear(ready)
 		// StartBackground records a launch that fails.
 		started, _ := s.StartBackground(ctx, ready)
 		return started, nil
