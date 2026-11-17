@@ -31,7 +31,11 @@ const liveTimeout = 10 * time.Second
 type liveVerdict struct {
 	// Free is true when the account was under every limit. A failed reading is
 	// not free, so docket falls back to the limits it recorded.
-	Free    bool
+	Free bool
+	// Read is true when the endpoint answered. Only such a reading brings the
+	// pick's Recheck forward, so a broken token does not cost a refresh every
+	// liveTTL while docket sits idle.
+	Read    bool
 	At      time.Time
 	Expires time.Time
 }
@@ -85,8 +89,8 @@ func soonest(a, b time.Time) time.Time {
 // account no limit holds back, so it reads only the accounts that a recorded
 // limit would make the pick pass over. The clear is stamped with the reading's
 // time, so a refusal claude reports after the reading still counts. expires is
-// the soonest time that a reading which found an account not free runs out, or
-// zero when there is none.
+// the soonest time that a reading which found an account at its limit runs out,
+// or zero when there is none.
 func (s *Service) withLive(ctx context.Context, accounts []string, logins map[string]account.Login, limits []account.Limit) (_ []account.Limit, expires time.Time) {
 	limits = slices.Clip(limits)
 	now := s.now()
@@ -96,7 +100,9 @@ func (s *Service) withLive(ctx context.Context, accounts []string, logins map[st
 		}
 		verdict := s.verdict(ctx, dir)
 		if !verdict.Free {
-			expires = soonest(expires, verdict.Expires)
+			if verdict.Read {
+				expires = soonest(expires, verdict.Expires)
+			}
 			continue
 		}
 		limits = append(limits, account.Limit{Account: dir, Login: logins[dir], At: verdict.At, Clear: true})
@@ -135,7 +141,7 @@ func (s *Service) verdict(ctx context.Context, dir string) liveVerdict {
 	ctx, cancel := context.WithTimeout(ctx, liveTimeout)
 	defer cancel()
 	reading, err := s.Usage.Read(ctx, dir)
-	verdict := liveVerdict{Free: err == nil && reading.Free(), At: now, Expires: now.Add(liveTTL)}
+	verdict := liveVerdict{Free: err == nil && reading.Free(), Read: err == nil, At: now, Expires: now.Add(liveTTL)}
 	s.live.mu.Lock()
 	s.live.verdicts[dir] = verdict
 	s.live.mu.Unlock()

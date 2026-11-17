@@ -980,3 +980,17 @@ func TestAPickRechecksWhenAReadingThatKeptAnAccountLimitedExpires(t *testing.T) 
 		t.Errorf("recheck = %v, want no later than %v, when the primary's reading expires", got.Recheck, want)
 	}
 }
+
+func TestAFailedReadingLeavesTheRecheckAtTheRecordedReset(t *testing.T) {
+	l := staleLimit(t)
+	l.usage.errs[l.primary] = errors.New("the account's access token expired")
+
+	got := nextAccount(t, l.svc)
+
+	if got.Account != l.fallback {
+		t.Fatalf("pick = %+v, want the fallback while the primary's reading fails", got)
+	}
+	if !got.Recheck.After(l.svc.now().Add(liveTTL)) {
+		t.Errorf("recheck = %v, want the recorded reset rather than the failed reading's expiry", got.Recheck)
+	}
+}
