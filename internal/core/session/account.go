@@ -68,10 +68,16 @@ func (s *Service) pick(ctx context.Context, limits []account.Limit) account.Choi
 	}
 	limits, expires := s.withLive(ctx, accounts, logins, limits)
 	choice := account.Pick(accounts, logins, limits, s.now())
-	if !expires.IsZero() && (choice.Recheck.IsZero() || expires.Before(choice.Recheck)) {
-		choice.Recheck = expires
-	}
+	choice.Recheck = soonest(choice.Recheck, expires)
 	return choice
+}
+
+// soonest is the earlier of a and b, where a zero time stands for none.
+func soonest(a, b time.Time) time.Time {
+	if a.IsZero() || !b.IsZero() && b.Before(a) {
+		return b
+	}
+	return a
 }
 
 // withLive adds a clear for each account whose live usage shows that a limit in
@@ -90,9 +96,7 @@ func (s *Service) withLive(ctx context.Context, accounts []string, logins map[st
 		}
 		verdict := s.verdict(ctx, dir)
 		if !verdict.Free {
-			if !verdict.Expires.IsZero() && (expires.IsZero() || verdict.Expires.Before(expires)) {
-				expires = verdict.Expires
-			}
+			expires = soonest(expires, verdict.Expires)
 			continue
 		}
 		limits = append(limits, account.Limit{Account: dir, Login: logins[dir], At: verdict.At, Clear: true})
