@@ -618,3 +618,31 @@ func TestSaveKeyRefusesAFileItCannotParse(t *testing.T) {
 		t.Error("SaveKey rewrote a config.toml it could not parse")
 	}
 }
+
+// claude keeps a named dir's credentials inside it, and the default account's
+// inside ~/.claude, unlike the login.
+func TestClaudeCredentialsFileIsInsideTheConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg, err := Load(filepath.Join(t.TempDir(), "config.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	for account, want := range map[string]string{
+		"/Users/me/.claude-automation": "/Users/me/.claude-automation/.credentials.json",
+		"":                             filepath.Join(home, ".claude", ".credentials.json"),
+	} {
+		if got := cfg.ClaudeCredentialsFile(account); got != want {
+			t.Errorf("credentials file for %q = %q, want %q", account, got, want)
+		}
+	}
+}
+
+// A test that builds its own Config reads no credentials from the real home
+// directory.
+func TestAConfigLoadDidNotFillInHasNoCredentialsFileForTheDefaultAccount(t *testing.T) {
+	if got := (Config{}).ClaudeCredentialsFile(""); got != "" {
+		t.Errorf("credentials file = %q, want none", got)
+	}
+}

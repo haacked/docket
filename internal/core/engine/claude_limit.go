@@ -69,6 +69,7 @@ type transcriptEntry struct {
 	UsageLimitNote      string    `json:"usageLimitNote"`
 	Timestamp           time.Time `json:"timestamp"`
 	Message             struct {
+		Model   string          `json:"model"`
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 	IsAPIErrorMessage bool   `json:"isApiErrorMessage"`
@@ -107,6 +108,16 @@ type contentBlock struct {
 	Type string `json:"type"`
 }
 
+// syntheticModel is the model claude names on a reply it writes itself, such as
+// "No response requested." after a notification it ran no turn for.
+const syntheticModel = "<synthetic>"
+
+// endsTurn reports whether the message is the model's reply that ends a turn: no
+// API error, and no tool call that the turn waits on.
+func (e transcriptEntry) endsTurn() bool {
+	return e.Type == "assistant" && !e.IsAPIErrorMessage && !e.callsTool()
+}
+
 // callsTool reports whether the message asks for a tool. A turn whose last
 // message does has not ended. It waits for the tool's result, possibly at a
 // permission prompt.
@@ -115,19 +126,9 @@ func (e transcriptEntry) callsTool() bool {
 	return json.Unmarshal(e.Message.Content, &blocks) == nil && slices.Contains(blocks, contentBlock{Type: "tool_use"})
 }
 
-// UsageLimit reads the session's transcript. claude names the transcript's
-// directory after the session's working directory, so the glob finds the file
-// without depending on how claude spells that name. A session id that is not a
-// UUID cannot name a file outside that directory.
+// UsageLimit reads the session's transcript.
 func (Claude) UsageLimit(sessionID string, paths Paths) (UsageLimit, bool) {
-	if paths.ClaudeProjects == "" || uuid.Validate(sessionID) != nil {
-		return UsageLimit{}, false
-	}
-	matches, err := filepath.Glob(filepath.Join(paths.ClaudeProjects, "*", sessionID+".jsonl"))
-	if err != nil || len(matches) == 0 {
-		return UsageLimit{}, false
-	}
-	turn, ok := lastTurn(matches[0])
+	turn, ok := sessionTurn(sessionID, paths)
 	if !ok {
 		return UsageLimit{}, false
 	}
@@ -144,12 +145,47 @@ func (Claude) UsageLimit(sessionID string, paths Paths) (UsageLimit, bool) {
 	return UsageLimit{}, false
 }
 
+// ServedTurn reports when claude last answered the session with the model's
+// reply. It reports false unless the session's last turn ended with that reply,
+// with no tool call pending and no usage limit note in force. Such a turn shows
+// that the session's account had usage left. A reply claude wrote itself shows
+// nothing, because the model never ran.
+func (Claude) ServedTurn(sessionID string, paths Paths) (time.Time, bool) {
+	turn, ok := sessionTurn(sessionID, paths)
+	if !ok {
+		return time.Time{}, false
+	}
+	last := turn[0]
+	if !last.endsTurn() || last.Message.Model == syntheticModel {
+		return time.Time{}, false
+	}
+	if _, wrapped := wrappedUp(turn); wrapped {
+		return time.Time{}, false
+	}
+	return last.Timestamp, true
+}
+
+// sessionTurn reads the last turn of the session's transcript. claude names the
+// transcript's directory after the session's working directory, so the glob
+// finds the file without depending on how claude spells that name. A session
+// id that is not a UUID cannot name a file outside that directory.
+func sessionTurn(sessionID string, paths Paths) ([]transcriptEntry, bool) {
+	if paths.ClaudeProjects == "" || uuid.Validate(sessionID) != nil {
+		return nil, false
+	}
+	matches, err := filepath.Glob(filepath.Join(paths.ClaudeProjects, "*", sessionID+".jsonl"))
+	if err != nil || len(matches) == 0 {
+		return nil, false
+	}
+	return lastTurn(matches[0])
+}
+
 // wrappedUp returns the note claude added to the turn when the account reached
 // its usage limit. It reports false unless the turn has ended with the model's
 // message and that note is the turn's latest. An API error other than the
 // refusal does not end the turn, because claude can retry the request after it.
 func wrappedUp(turn []transcriptEntry) (transcriptEntry, bool) {
-	if last := turn[0]; last.Type != "assistant" || last.IsAPIErrorMessage || last.callsTool() {
+	if !turn[0].endsTurn() {
 		return transcriptEntry{}, false
 	}
 	for _, e := range turn {

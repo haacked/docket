@@ -2,6 +2,8 @@
 // takes the first account config.toml names, and passes over an account while
 // a usage limit that claude reported for it is in force. claude counts usage per
 // login. A limit therefore applies to every account dir signed in to that login.
+// A clear in the log records evidence that a login had usage left. It releases
+// every limit on that login recorded at or before it.
 package account
 
 import (
@@ -24,7 +26,8 @@ type Login struct {
 }
 
 // Limit records that claude refused a session because its account was over a
-// usage limit.
+// usage limit. A Limit with Clear set records instead that the account had usage
+// left at At.
 type Limit struct {
 	// Account is the account's CLAUDE_CONFIG_DIR, or "" for claude's default
 	// account.
@@ -34,13 +37,34 @@ type Limit struct {
 	// a dir whose login docket could not read.
 	Login Login     `json:"login,omitzero"`
 	At    time.Time `json:"at"`
-	Until time.Time `json:"until"`
+	// Until is zero on a clear. The clear's line then has no until key, which
+	// makes readers that predate clears skip it or count it as never in force.
+	Until time.Time `json:"until,omitzero"`
+	Clear bool      `json:"clear,omitempty"`
 }
 
-// appliesTo reports whether the limit counts against account, which is signed
+// supersedes reports whether the clear c releases l. It releases a limit
+// recorded at or before it that applies to the clear's dir and login. A clear
+// whose login docket could not read releases no limit on a known login, because
+// that would also free every other dir signed in to that login.
+func (c Limit) supersedes(l Limit) bool {
+	return c.Clear && !l.Clear && !l.At.After(c.At) && l.AppliesTo(c.Account, c.Login) && (c.Login.known() || !l.Login.known())
+}
+
+// released reports whether a clear in limits supersedes l.
+func released(l Limit, limits []Limit) bool {
+	for _, c := range limits {
+		if c.supersedes(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// AppliesTo reports whether the limit counts against account, which is signed
 // in to login. When both logins are known, only the logins decide. Otherwise
 // the limit counts against the dir it was recorded for.
-func (l Limit) appliesTo(account string, login Login) bool {
+func (l Limit) AppliesTo(account string, login Login) bool {
 	if l.Login.known() && login.known() {
 		return l.Login == login
 	}
@@ -100,15 +124,29 @@ func Limited(account string, login Login, limits []Limit, now time.Time) bool {
 	return reset(account, login, limits).After(now)
 }
 
-// reset is when the last of the limits that apply to account resets.
+// reset is when the last of the limits that apply to account resets. A limit
+// that a clear releases does not count.
 func reset(account string, login Login, limits []Limit) time.Time {
 	var until time.Time
 	for _, limit := range limits {
-		if limit.appliesTo(account, login) && limit.Until.After(until) {
+		if !limit.Clear && limit.AppliesTo(account, login) && limit.Until.After(until) && !released(limit, limits) {
 			until = limit.Until
 		}
 	}
 	return until
+}
+
+// WouldClear reports whether a clear for account, which is signed in to login,
+// at at would release a limit in force at now. docket writes a clear only then,
+// so a clear that releases nothing never reaches the log.
+func WouldClear(account string, login Login, at time.Time, limits []Limit, now time.Time) bool {
+	clear := Limit{Account: account, Login: login, At: at, Clear: true}
+	for _, limit := range limits {
+		if limit.Until.After(now) && clear.supersedes(limit) && !released(limit, limits) {
+			return true
+		}
+	}
+	return false
 }
 
 // Name is how docket shows an account dir: "default" for claude's default

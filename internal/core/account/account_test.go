@@ -1,6 +1,7 @@
 package account
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -692,5 +693,235 @@ func TestNamesFallBackToTheDir(t *testing.T) {
 	}
 	if got := Names(nil).Of("/opt/claude-max"); got != "/opt/claude-max" {
 		t.Errorf("name = %q, want the dir", got)
+	}
+}
+
+// cleared is a clear line for dir, signed in to login, made at moment.
+func cleared(dir string, login Login, moment time.Time) Limit {
+	return Limit{Clear: true, Account: dir, Login: login, At: moment}
+}
+
+func TestAClearReleasesAnEarlierLimitOnItsLogin(t *testing.T) {
+	accounts := []string{automation, personal}
+	logins := map[string]Login{automation: team, personal: ownOrg}
+	limits := []Limit{
+		{Account: automation, Login: team, At: at(0), Until: at(600)},
+		cleared(automation, team, at(10)),
+	}
+
+	if Limited(automation, team, limits, at(30)) {
+		t.Error("automation reads as limited although a later clear released its login")
+	}
+	if got := Pick(accounts, logins, limits, at(30)); got.Account != automation || got.Limited() {
+		t.Errorf("pick = %+v, want automation under its limits", got)
+	}
+}
+
+// claude can refuse an account after a reading found it under its limits. The
+// refusal is newer evidence than the clear.
+func TestAClearLeavesALimitRecordedAfterIt(t *testing.T) {
+	limits := []Limit{
+		cleared(automation, team, at(10)),
+		{Account: automation, Login: team, At: at(20), Until: at(600)},
+	}
+
+	if !Limited(automation, team, limits, at(30)) {
+		t.Error("a clear released a limit that claude recorded after it")
+	}
+}
+
+func TestAClearAtTheLimitsOwnTimeReleasesIt(t *testing.T) {
+	limits := []Limit{
+		{Account: automation, Login: team, At: at(10), Until: at(600)},
+		cleared(automation, team, at(10)),
+	}
+
+	if Limited(automation, team, limits, at(30)) {
+		t.Error("a clear at the limit's own time left the limit in force")
+	}
+}
+
+// The user's max and automation logins share an account UUID and differ by
+// organization. claude counts their usage apart, so a clear on one says nothing
+// about the other.
+func TestAClearOnOneOrganizationLeavesTheOtherLimited(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		freed, held      Login
+		freeDir, heldDir string
+	}{
+		{name: "a clear on the team seat", freed: team, held: ownOrg, freeDir: automation, heldDir: personal},
+		{name: "a clear on the own organization", freed: ownOrg, held: team, freeDir: personal, heldDir: automation},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			limits := []Limit{
+				{Account: automation, Login: team, At: at(0), Until: at(600)},
+				{Account: personal, Login: ownOrg, At: at(0), Until: at(600)},
+				cleared(tc.freeDir, tc.freed, at(10)),
+			}
+
+			if Limited(tc.freeDir, tc.freed, limits, at(30)) {
+				t.Errorf("%s reads as limited after its own clear", tc.freeDir)
+			}
+			if !Limited(tc.heldDir, tc.held, limits, at(30)) {
+				t.Errorf("%s reads as free after a clear on the other organization", tc.heldDir)
+			}
+		})
+	}
+}
+
+// claude counts usage per login. A reading through one dir answers for every
+// dir signed in to the same login.
+func TestAClearReleasesEveryDirSignedInToItsLogin(t *testing.T) {
+	limits := []Limit{
+		{Account: defaultAccount, Login: team, At: at(0), Until: at(600)},
+		cleared(automation, team, at(10)),
+	}
+
+	for _, dir := range []string{automation, defaultAccount} {
+		if Limited(dir, team, limits, at(30)) {
+			t.Errorf("%q reads as limited although a clear released its login", dir)
+		}
+	}
+}
+
+// A clear whose login docket could not read cannot show that it is about the
+// login a limit counts against. Releasing that limit would also free every
+// other dir signed in to the login.
+func TestAClearWithAnUnknownLoginLeavesAKnownLoginsLimit(t *testing.T) {
+	for name, login := range map[string]Login{
+		"no login":           {},
+		"only an account id": {AccountUUID: team.AccountUUID},
+		"only an org id":     {OrganizationUUID: team.OrganizationUUID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			limits := []Limit{
+				{Account: automation, Login: team, At: at(0), Until: at(600)},
+				cleared(automation, login, at(10)),
+			}
+
+			if !Limited(automation, team, limits, at(30)) {
+				t.Error("a clear with an unknown login released a limit on a known login")
+			}
+			if !Limited(defaultAccount, team, limits, at(30)) {
+				t.Error("a clear with an unknown login freed another dir on the limited login")
+			}
+		})
+	}
+}
+
+// A limit recorded before docket read logins counts against its dir. A clear on
+// that dir releases it, whatever login the clear carries.
+func TestAClearMatchesAnOldLimitByDir(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		clear Limit
+		want  bool
+	}{
+		{name: "a clear on the same dir with a login", clear: cleared(automation, team, at(10)), want: false},
+		{name: "a clear on the same dir with no login", clear: cleared(automation, Login{}, at(10)), want: false},
+		{name: "a clear on another dir with the same login", clear: cleared(defaultAccount, team, at(10)), want: true},
+		{name: "a clear on another dir with no login", clear: cleared(defaultAccount, Login{}, at(10)), want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			limits := []Limit{{Account: automation, At: at(0), Until: at(600)}, tc.clear}
+
+			if got := Limited(automation, team, limits, at(30)); got != tc.want {
+				t.Errorf("limited = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A clear line is evidence about a limit, never a limit of its own, whatever its
+// until says.
+func TestAClearLineIsNeverALimit(t *testing.T) {
+	clear := cleared(automation, team, at(0))
+	clear.Until = at(600)
+
+	if Limited(automation, team, []Limit{clear}, at(30)) {
+		t.Error("a clear line with an until reads as a limit")
+	}
+}
+
+// run-review.py reads until from every line and skips a line without one. An
+// older docket reads a clear line as a limit with a zero until, which has
+// already reset.
+func TestAClearLineHasNoUntil(t *testing.T) {
+	line, err := json.Marshal(cleared(automation, team, at(10)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(line, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fields["until"]; ok {
+		t.Errorf("clear line = %s, want no until key", line)
+	}
+	if got := string(fields["clear"]); got != "true" {
+		t.Errorf("clear line = %s, want \"clear\":true", line)
+	}
+
+	path := filepath.Join(t.TempDir(), "limits.jsonl")
+	if err := Append(path, cleared(automation, team, at(10))); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got) != 1 || !got[0].Clear || got[0].Account != automation || got[0].Login != team || !got[0].At.Equal(at(10)) {
+		t.Errorf("loaded %+v, want the clear back", got)
+	}
+}
+
+// A limit line keeps the shape older readers expect.
+func TestALimitLineHasAnUntilAndNoClear(t *testing.T) {
+	line, err := json.Marshal(Limit{Account: automation, Login: team, At: at(0), Until: at(60)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(line, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fields["until"]; !ok {
+		t.Errorf("limit line = %s, want an until key", line)
+	}
+	if _, ok := fields["clear"]; ok {
+		t.Errorf("limit line = %s, want no clear key", line)
+	}
+}
+
+// docket appends a clear only when it changes what the rotation reads, so the
+// log grows only then.
+func TestWouldClearOnlyWhenALimitInForceIsReleased(t *testing.T) {
+	inForce := Limit{Account: automation, Login: team, At: at(0), Until: at(600)}
+	for _, tc := range []struct {
+		name   string
+		login  Login
+		limits []Limit
+		want   bool
+	}{
+		{name: "no limits", login: team, want: false},
+		{name: "a limit that has reset", login: team, limits: []Limit{{Account: automation, Login: team, At: at(0), Until: at(20)}}, want: false},
+		{name: "a limit an earlier clear already released", login: team, limits: []Limit{inForce, cleared(automation, team, at(5))}, want: false},
+		{name: "a limit recorded after the clear", login: team, limits: []Limit{{Account: automation, Login: team, At: at(15), Until: at(600)}}, want: false},
+		{name: "a limit on another organization", login: team, limits: []Limit{{Account: automation, Login: ownOrg, At: at(0), Until: at(600)}}, want: false},
+		{name: "a limit on a known login and a clear with none", login: Login{}, limits: []Limit{inForce}, want: false},
+		{name: "a limit on another dir with no login", login: team, limits: []Limit{{Account: personal, At: at(0), Until: at(600)}}, want: false},
+		{name: "only a clear", login: team, limits: []Limit{cleared(automation, team, at(5))}, want: false},
+		{name: "a limit in force on the same login", login: team, limits: []Limit{inForce}, want: true},
+		{name: "a limit in force at the clear's own time", login: team, limits: []Limit{{Account: automation, Login: team, At: at(10), Until: at(600)}}, want: true},
+		{name: "a limit in force on another dir of the same login", login: team, limits: []Limit{{Account: defaultAccount, Login: team, At: at(0), Until: at(600)}}, want: true},
+		{name: "an old limit on the same dir", login: team, limits: []Limit{{Account: automation, At: at(0), Until: at(600)}}, want: true},
+		{name: "a released limit beside one still in force", login: team, limits: []Limit{inForce, cleared(automation, team, at(5)), {Account: automation, Login: team, At: at(7), Until: at(600)}}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := WouldClear(automation, tc.login, at(10), tc.limits, at(30)); got != tc.want {
+				t.Errorf("WouldClear = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

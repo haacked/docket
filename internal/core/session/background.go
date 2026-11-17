@@ -98,6 +98,7 @@ func (s *Service) Restart(ctx context.Context, rec review.Record) (review.Record
 	if err != nil {
 		return rec, err
 	}
+	s.keepReading(ready)
 	return s.StartBackground(ctx, ready)
 }
 
@@ -112,7 +113,7 @@ func (s *Service) ExplainRestart(ctx context.Context, rec review.Record) (exec.C
 	if err != nil {
 		return exec.CommandSpec{}, err
 	}
-	if rec, _, err = s.freshAccount(rec); err != nil {
+	if rec, _, err = s.freshAccount(ctx, rec); err != nil {
 		return exec.CommandSpec{}, err
 	}
 	return bg.StartBackground(rec, s.enginePaths(rec.ClaudeConfigDir)), nil
@@ -270,7 +271,7 @@ func (s *Service) applyStatus(ctx context.Context, rec review.Record, found map[
 	if over {
 		// detectPolled writes what it decides, so an id learned on this same poll
 		// is saved with it.
-		return s.detectPolled(ctx, rec), status, false
+		return s.detectPolled(ctx, s.noteServed(rec, rec.SessionID)), status, false
 	}
 	if status.SessionID != before {
 		if err := s.append(rec); err != nil {
@@ -300,13 +301,18 @@ func (s *Service) settleIdle(ctx context.Context, rec review.Record, status engi
 	s.idleMu.Unlock()
 
 	settled, running, err := s.settle(ctx, rec)
+	refused := false
 	if err == nil && running && status.Waiting() {
-		if limit, ok := bg.UsageLimit(rec.SessionID, paths); ok {
+		var limit engine.UsageLimit
+		if limit, refused = bg.UsageLimit(rec.SessionID, paths); refused {
 			// The status the poll holds belongs to the refused session. The next
 			// poll lists the session that replaced it.
 			settled, err = s.startElsewhere(ctx, rec, limit)
 			running = false
 		}
+	}
+	if err == nil && !refused {
+		settled = s.noteServed(settled, rec.SessionID)
 	}
 	if err != nil || !running {
 		// A failure is tried again on the next poll. A record that moved on
