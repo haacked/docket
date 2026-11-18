@@ -684,3 +684,182 @@ func TestUsageLimitIsNoneAfterAnythingButAPersonsExit(t *testing.T) {
 		})
 	}
 }
+
+// replyAt is the time replyTurn records.
+var replyAt = time.Date(2026, 10, 22, 16, 20, 0, 0, time.UTC)
+
+// servedTurn writes content as limitSession's transcript and reads it back.
+func servedTurn(t *testing.T, content string) (time.Time, bool) {
+	t.Helper()
+	projects := t.TempDir()
+	writeTranscript(t, projects, scratchProject, limitSession, content)
+	return Claude{}.ServedTurn(limitSession, Paths{ClaudeProjects: projects})
+}
+
+// A turn the model ended with a reply of its own shows that claude served the
+// account at that time.
+func TestServedTurnReadsTheModelsReply(t *testing.T) {
+	for name, content := range map[string]string{
+		"a reply to the prompt":                          lines(promptTurn, replyTurn),
+		"bookkeeping after the reply":                    lines(with([]string{promptTurn, replyTurn}, bookkeeping...)...),
+		"claude's own message after the reply":           lines(promptTurn, replyTurn, taskNotification),
+		"a person's /exit after the reply":               lines(slices.Concat([]string{promptTurn, replyTurn}, exitLines)...),
+		"a sub-agent's line after the reply":             lines(promptTurn, replyTurn, sidechain(userTurn)),
+		"a reply after a refused turn":                   lines(promptTurn, refusedTurn, personTurn, replyTurn),
+		"a reply in a turn after a wrap-up was released": lines(with(wrapUpTurn, personTurn, releaseNote, replyTurn)...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ok := servedTurn(t, content)
+
+			if !ok {
+				t.Fatal("the served turn was not recognized")
+			}
+			if !got.Equal(replyAt) {
+				t.Errorf("served at %v, want the reply's timestamp %v", got, replyAt)
+			}
+		})
+	}
+}
+
+// None of these turns shows that claude would serve the account now.
+func TestServedTurnIsNoneUnlessTheModelEndedTheTurn(t *testing.T) {
+	for name, content := range map[string]string{
+		"a refusal":                 lines(promptTurn, refusedTurn),
+		"a refusal and bookkeeping": lines(with([]string{promptTurn, refusedTurn}, bookkeeping...)...),
+		"a refusal and claude's own message after it": lines(promptTurn, refusedTurn, taskNotification),
+		"a wrap-up turn": lines(wrapUpTurn...),
+		"a wrap-up turn and claude's message after it": lines(with(wrapUpTurn, turnCompanion, taskNotification)...),
+		"a tool call with no result yet":               lines(promptTurn, wrapUpToolUse),
+		"a tool result with no reply yet":              lines(with(wrapUpStart)...),
+		"an API error claude may retry":                lines(promptTurn, refusal(`"error":"rate_limit"`, `"error":"server_error"`)),
+		"a person's message last":                      lines(promptTurn, replyTurn, userTurn),
+		"a person's queued message last":               lines(promptTurn, replyTurn, queuedTurn),
+		"only the prompt":                              lines(promptTurn),
+		"a sub-agent's reply after a pending call":     lines(promptTurn, wrapUpToolUse, sidechain(replyTurn)),
+		"a reply claude is still writing":              lines(promptTurn) + replyTurn,
+		"an empty transcript":                          "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := servedTurn(t, content); ok {
+				t.Errorf("reported a served turn at %v", got)
+			}
+		})
+	}
+}
+
+func TestServedTurnFindsNothingWithoutATranscript(t *testing.T) {
+	projects := t.TempDir()
+	writeTranscript(t, projects, scratchProject, limitSession, lines(promptTurn, replyTurn))
+
+	for name, paths := range map[string]Paths{
+		"no projects directory":          {},
+		"a projects directory not there": {ClaudeProjects: filepath.Join(t.TempDir(), "missing")},
+		"another account's projects":     {ClaudeProjects: t.TempDir()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := (Claude{}).ServedTurn(limitSession, paths); ok {
+				t.Errorf("reported a served turn at %v", got)
+			}
+		})
+	}
+}
+
+// A session id that is not a UUID must not name a transcript outside the
+// projects directory, or match every transcript in it.
+func TestServedTurnReadsOnlyATranscriptTheSessionIDNames(t *testing.T) {
+	root := t.TempDir()
+	projects := filepath.Join(root, "projects")
+	writeTranscript(t, projects, scratchProject, limitSession, lines(promptTurn, replyTurn))
+	writeTranscript(t, projects, ".", "x", lines(promptTurn, replyTurn))
+	writeTranscript(t, root, "elsewhere", "x", lines(promptTurn, replyTurn))
+
+	for _, id := range []string{
+		"",
+		"*",
+		"../x",
+		"../../elsewhere/x",
+		"823735c4",
+		"823735c4-c8ff-4e82-9dc4-82e0e1356c9?",
+		"823735c4-c8ff-4e82-9dc4-*",
+		limitSession + "/../" + limitSession,
+	} {
+		t.Run(id, func(t *testing.T) {
+			if got, ok := (Claude{}).ServedTurn(id, Paths{ClaudeProjects: projects}); ok {
+				t.Errorf("session id %q reported a served turn at %v", id, got)
+			}
+		})
+	}
+}
+
+// docket rotates claude accounts only.
+func TestCodexFindsNoServedTurn(t *testing.T) {
+	projects := t.TempDir()
+	writeTranscript(t, projects, scratchProject, limitSession, lines(promptTurn, replyTurn))
+
+	if got, ok := (Codex{}).ServedTurn(limitSession, Paths{ClaudeProjects: projects}); ok {
+		t.Errorf("codex reported a served turn at %v", got)
+	}
+}
+
+// noResponse is the reply claude writes itself, under the model name
+// <synthetic>, when it closes a turn the model never ran. Claude Code wrote it
+// after a run of queued task notifications on 2026-11-12. It carries
+// isApiErrorMessage false.
+const noResponse = `{"isSidechain":false,"type":"assistant","timestamp":"2026-10-22T16:30:00.000Z","isApiErrorMessage":false,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"No response requested."}]}}`
+
+// This case goes beyond the plan, whose rule reads only isApiErrorMessage. The
+// model did not run, so the reply shows nothing about the account's usage.
+func TestServedTurnIsNoneForAReplyClaudeWroteItself(t *testing.T) {
+	for name, content := range map[string]string{
+		"after a refusal and claude's own message": lines(promptTurn, refusedTurn, taskNotification, noResponse),
+		"after claude's own message":               lines(promptTurn, taskNotification, noResponse),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := servedTurn(t, content); ok {
+				t.Errorf("reported a served turn at %v for a reply the model did not write", got)
+			}
+		})
+	}
+}
+
+// bulkyToolResult is wrapUpToolResult with a result of more than half the part
+// of a transcript that ServedTurn reads.
+var bulkyToolResult = strings.Replace(wrapUpToolResult, `"content":"…"`, `"content":"`+strings.Repeat("r", transcriptTail*2/3)+`"`, 1)
+
+// bulk is enough tool calls and results to push the start of their turn out of
+// the part of a transcript that ServedTurn reads.
+var bulk = slices.Repeat([]string{wrapUpToolUse, bulkyToolResult}, 3)
+
+// ServedTurn reads only the end of a transcript. A usage limit note can sit
+// before that end in the same turn, so a turn whose start docket did not read
+// does not count as served.
+func TestServedTurnIsNoneWhenTheTurnStartsBeforeTheTail(t *testing.T) {
+	unpromptedResult := strings.Replace(wrapUpToolResult, `"promptId":"`+wrapUpPromptID+`",`, "", 1)
+	for name, content := range map[string]string{
+		"a wrap-up note before the tail":         lines(slices.Concat(wrapUpStart, []string{wrapUpNote}, bulk, []string{wrapUpReply})...),
+		"a long turn with no note":               lines(slices.Concat([]string{wrapUpPrompt}, bulk, []string{wrapUpReply})...),
+		"a long turn with bookkeeping after":     lines(slices.Concat([]string{wrapUpPrompt}, bulk, []string{wrapUpReply}, bookkeeping)...),
+		"a tool result with no promptId":         lines(with(wrapUpStart, wrapUpNote, wrapUpToolUse, unpromptedResult, wrapUpReply)...),
+		"a person's message with no promptId":    lines(promptTurn, wrapUpNote, userTurn, replyTurn),
+		"a line before the turn that is cut off": lines(longReply(), wrapUpToolUse, bulkyToolResult, wrapUpReply),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := servedTurn(t, content); ok {
+				t.Errorf("reported a served turn at %v for a turn whose start docket did not read", got)
+			}
+		})
+	}
+}
+
+// The turn before the last one marks where the last one starts, even when the
+// tail does not reach the start of the file.
+func TestServedTurnReadsATurnWhoseStartIsInTheTail(t *testing.T) {
+	got, ok := servedTurn(t, lines(longReply(), wrapUpPrompt, wrapUpReply, personTurn, replyTurn))
+
+	if !ok {
+		t.Fatal("the served turn was not recognized")
+	}
+	if !got.Equal(replyAt) {
+		t.Errorf("served at %v, want the reply's timestamp %v", got, replyAt)
+	}
+}

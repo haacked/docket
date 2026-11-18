@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	osexec "os/exec"
+	"runtime"
 
 	"github.com/haacked/docket/internal/core/clone"
 	"github.com/haacked/docket/internal/core/config"
@@ -17,6 +18,7 @@ import (
 	"github.com/haacked/docket/internal/core/git"
 	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/session"
+	claudeusage "github.com/haacked/docket/internal/core/usage"
 	"github.com/haacked/docket/internal/mcp"
 	"github.com/haacked/docket/internal/tui"
 )
@@ -98,6 +100,15 @@ func run() error {
 		Git:    gitCLI,
 		Cloner: clone.New(gitCLI, paths),
 		Runner: runner,
+		Usage: &claudeusage.Client{
+			Runner:          runner,
+			Keychain:        runtime.GOOS == "darwin",
+			CredentialsFile: cfg.ClaudeCredentialsFile,
+			RefreshDir:      paths.Home,
+			// The refresh rewrites claude's credentials. A dry run writes
+			// nothing.
+			NoRefresh: opts.dryRun,
+		},
 	}
 
 	if opts.mcp {

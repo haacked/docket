@@ -26,6 +26,7 @@ import (
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/tier"
+	"github.com/haacked/docket/internal/core/usage"
 )
 
 // Service holds everything a review needs and owns every write to the index.
@@ -46,6 +47,12 @@ type Service struct {
 	// runs under, or empty when there is none. docket mcp runs in the directory
 	// of the claude session that started it.
 	CallerDir string
+	// Usage reads an account's live usage before a recorded limit makes the
+	// rotation pass over it. When it is nil, the recorded limits decide alone.
+	Usage usage.Reader
+
+	// live caches the readings Usage made.
+	live liveCache
 
 	// idleSeen maps a background id to the agent's update time when docket
 	// last read GitHub for that session while it was idle. A session stays
@@ -389,6 +396,7 @@ func (s *Service) Prepare(ctx context.Context, ref pr.Ref, engineName string, mo
 	if err := s.append(rec); err != nil {
 		return rec, plan, err
 	}
+	s.recordClear(rec)
 
 	if plan.Tier == tier.Tier1 {
 		if err := s.ensureScratch(ctx); err != nil {
@@ -505,7 +513,7 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		// that resets first all the same. A limit raised since claude reported
 		// it then costs nothing, and a limit still in force sends the review to
 		// Did not start once the poll reads the refusal.
-		choice, err := s.NextAccount()
+		choice, err := s.NextAccount(ctx)
 		if err != nil {
 			return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
 		}
@@ -697,7 +705,7 @@ func (s *Service) AfterExit(ctx context.Context, rec review.Record, childErr err
 		return s.afterBackgroundExit(ctx, rec)
 	}
 	rec = s.captureSessionID(rec)
-	rec = s.noteLimit(rec, rec.SessionID)
+	rec = s.noteUsage(rec, rec.SessionID)
 	return s.detect(ctx, rec)
 }
 
@@ -823,7 +831,7 @@ func (s *Service) AfterAsk(ctx context.Context, rec review.Record, childErr erro
 	} else if id != "" {
 		current.AskSessionID = id
 	}
-	current = s.noteLimit(current, current.AskSessionID)
+	current = s.noteUsage(current, current.AskSessionID)
 
 	switch current.State {
 	case review.StateDrafted, review.StateReviewed, review.StateUnreviewed:
@@ -882,7 +890,7 @@ func asAsk(rec review.Record) review.Record {
 // the agent still holds. Otherwise the agent would hold that session for ever
 // with no record naming it.
 func (s *Service) Rereview(ctx context.Context, rec review.Record, intent review.Intent, mode review.Mode) (review.Record, error) {
-	rearmed, err := s.rearm(rec, intent, mode)
+	rearmed, err := s.rearm(ctx, rec, intent, mode)
 	if err != nil {
 		return rec, err
 	}
@@ -904,14 +912,18 @@ func (s *Service) Rereview(ctx context.Context, rec review.Record, intent review
 		return s.recordErr(rec, err)
 	}
 	rearmed.BGID = ""
-	return rearmed, s.append(rearmed)
+	if err := s.append(rearmed); err != nil {
+		return rearmed, err
+	}
+	s.recordClear(rearmed)
+	return rearmed, nil
 }
 
 // ExplainRereview is the command a re-review would run, without recording or
 // stopping anything. It reads the pull request's state the way Rereview does, so
 // the dry run refuses what the real run refuses.
 func (s *Service) ExplainRereview(ctx context.Context, rec review.Record, intent review.Intent, mode review.Mode) (exec.CommandSpec, error) {
-	rec, err := s.rearm(rec, intent, mode)
+	rec, err := s.rearm(ctx, rec, intent, mode)
 	if err != nil {
 		return exec.CommandSpec{}, err
 	}
@@ -977,7 +989,7 @@ func (s *Service) openPR(ctx context.Context, ref pr.Ref) (gh.PRInfo, error) {
 
 // rearm is the part of a re-review that writes nothing: the checks, and the
 // fields a fresh start needs.
-func (s *Service) rearm(rec review.Record, intent review.Intent, mode review.Mode) (review.Record, error) {
+func (s *Service) rearm(ctx context.Context, rec review.Record, intent review.Intent, mode review.Mode) (review.Record, error) {
 	if intent != review.IntentAppend && intent != review.IntentOverwrite {
 		return rec, fmt.Errorf("a re-review appends or overwrites, not %q", intent)
 	}
@@ -989,7 +1001,7 @@ func (s *Service) rearm(rec review.Record, intent review.Intent, mode review.Mod
 			return rec, fmt.Errorf("%s cannot run a review in the background", rec.Engine)
 		}
 	}
-	rec, _, err := s.freshAccount(rec)
+	rec, _, err := s.freshAccount(ctx, rec)
 	if err != nil {
 		return rec, err
 	}

@@ -4,6 +4,7 @@ package engine
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/haacked/docket/internal/core/exec"
 	"github.com/haacked/docket/internal/core/review"
@@ -57,6 +58,9 @@ type Engine interface {
 	// agent refused it for the account's usage limit. paths names the account
 	// the session ran under.
 	UsageLimit(sessionID string, paths Paths) (UsageLimit, bool)
+	// ServedTurn reports when the agent last answered the session with the
+	// model's reply, when the session's last turn ended that way.
+	ServedTurn(sessionID string, paths Paths) (time.Time, bool)
 }
 
 // For returns the engine with the given name.
