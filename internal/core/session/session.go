@@ -172,7 +172,11 @@ func (s *Service) Login(ctx context.Context) (string, error) {
 // Each team that has rows also reads its members and who started each of its
 // bots' pull requests, which requests.Group needs to tell who reviews what. A
 // failed read adds its reason to Team.Errs and keeps the rows.
-func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
+//
+// With rereview set, it also looks for re-review candidates (rereviewCandidates)
+// and sets Fetched.Rereview. That costs up to three reads for each pull request
+// the user reviewed that no other search listed, so it runs only on request.
+func (s *Service) Requests(ctx context.Context, rereview bool) (requests.Fetched, error) {
 	me, err := s.peekLogin(ctx)
 	if err != nil {
 		return requests.Fetched{}, err
@@ -209,7 +213,75 @@ func (s *Service) Requests(ctx context.Context) (requests.Fetched, error) {
 		team.PRs, team.Errs = prs, errs
 		f.Teams = append(f.Teams, team)
 	}
+	if rereview {
+		f.Rereview = s.rereviewCandidates(ctx, &check, f)
+	}
 	return f, nil
+}
+
+// rereviewCandidates lists the open pull requests the user reviewed without
+// approving, that do not ask for the user's review, and whose head is not a
+// commit any real review of the user's was made on. Authors often push changes
+// and forget to ask again, so no request lists these.
+//
+// It starts from the reviewed-by search the caught-up check shares. It skips a
+// draft, a pull request another search listed, and one the caught-up check
+// found caught up before it reads anything. It reads the reviews, then the head
+// only when the latest real review is a comment or a request for changes, then
+// the timeline only when the head moved. The first failed read ends the checks,
+// because the likely cause is a rate limit. The candidates found before it
+// stay, and a pull request it did not finish never shows, because its row
+// would claim that the head moved.
+func (s *Service) rereviewCandidates(ctx context.Context, check *caughtUpCheck, f requests.Fetched) *requests.Rereview {
+	out := &requests.Rereview{}
+	reviewed, err := check.search(ctx)
+	if err != nil {
+		out.Errs = []error{err}
+		return out
+	}
+	listed := slices.Concat(refsOf(f.Mine), check.caught)
+	for _, t := range f.Teams {
+		listed = append(listed, refsOf(t.PRs)...)
+	}
+	seeds := slices.DeleteFunc(slices.Clone(reviewed), func(p requests.PR) bool {
+		return p.IsDraft || slices.ContainsFunc(listed, p.Ref.Equal)
+	})
+	for i, p := range seeds {
+		c, ok, err := s.rereviewCandidate(ctx, check.me, p)
+		if err != nil {
+			out.Errs = []error{fmt.Errorf("could not check %d of the pull requests you reviewed: %w", len(seeds)-i, err)}
+			break
+		}
+		if ok {
+			out.Candidates = append(out.Candidates, c)
+		}
+	}
+	return out
+}
+
+// rereviewCandidate reports whether p is a re-review candidate, with what
+// landed since the user's latest review when it is.
+func (s *Service) rereviewCandidate(ctx context.Context, me string, p requests.PR) (requests.Candidate, bool, error) {
+	reviews, err := s.GH.Reviews(ctx, p.Ref)
+	if err != nil {
+		return requests.Candidate{}, false, err
+	}
+	latest, ok := review.LatestReview(reviews, me)
+	if !ok || !review.Revisitable(latest) {
+		return requests.Candidate{}, false, nil
+	}
+	info, err := s.GH.PR(ctx, p.Ref)
+	if err != nil {
+		return requests.Candidate{}, false, err
+	}
+	if review.CaughtUp(reviews, me, info.HeadRefOid) {
+		return requests.Candidate{}, false, nil
+	}
+	timeline, err := s.GH.Timeline(ctx, p.Ref)
+	if err != nil {
+		return requests.Candidate{}, false, err
+	}
+	return requests.Candidate{PR: p, Changes: requests.CountChanges(timeline, latest)}, true, nil
 }
 
 // fillStarters sets StartedBy on each bot's pull request that a person started,
@@ -256,16 +328,27 @@ func (s *Service) Assign(ctx context.Context, ref pr.Ref) error {
 // two teams' searches returned is checked once.
 //
 // GitHub allows 30 searches a minute, so one reviewed-by search serves every
-// team. It runs when the first team has rows, and a failure of it stands for
-// every later team without searching again.
+// team and the re-review candidates. It runs when the first team has rows or
+// when Requests looks for candidates, and a failure of it stands for every later
+// use without searching again.
 type caughtUpCheck struct {
 	s         *Service
 	me        string
 	searched  bool
-	reviewed  []pr.Ref
+	reviewed  []requests.PR
 	searchErr error
 	skip      []pr.Ref
 	caught    []pr.Ref
+}
+
+// search runs the reviewed-by search the first time it is called and answers
+// every later call with that search's result.
+func (c *caughtUpCheck) search(ctx context.Context) ([]requests.PR, error) {
+	if !c.searched {
+		c.searched = true
+		c.reviewed, c.searchErr = c.s.GH.ReviewRequests(ctx, "reviewed-by:"+c.me+" -author:"+c.me)
+	}
+	return c.reviewed, c.searchErr
 }
 
 // drop checks only the pull requests that are both in prs and in the reviewed-by
@@ -276,17 +359,13 @@ func (c *caughtUpCheck) drop(ctx context.Context, prs []requests.PR) ([]requests
 	if len(prs) == 0 {
 		return prs, nil
 	}
-	if !c.searched {
-		c.searched = true
-		var reviewed []requests.PR
-		reviewed, c.searchErr = c.s.GH.ReviewRequests(ctx, "reviewed-by:"+c.me+" -author:"+c.me)
-		c.reviewed = refsOf(reviewed)
+	reviewed, err := c.search(ctx)
+	if err != nil {
+		return prs, err
 	}
-	if c.searchErr != nil {
-		return prs, c.searchErr
-	}
+	refs := refsOf(reviewed)
 	for _, p := range prs {
-		if slices.ContainsFunc(c.skip, p.Ref.Equal) || !slices.ContainsFunc(c.reviewed, p.Ref.Equal) {
+		if slices.ContainsFunc(c.skip, p.Ref.Equal) || !slices.ContainsFunc(refs, p.Ref.Equal) {
 			continue
 		}
 		c.skip = append(c.skip, p.Ref)

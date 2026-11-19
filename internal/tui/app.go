@@ -257,7 +257,13 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case requestsLoadedMsg:
 		a.fetched = &message.fetched
 		a.reqs.Loading = false
-		return a.regroup(), nil
+		a = a.regroup()
+		// p can ask for re-review candidates while a search without them runs.
+		if a.reqs.ShowRereview && message.fetched.Rereview == nil && a.screen == msg.Requests {
+			a.reqs.Loading = true
+			return a, a.searchRequests()
+		}
+		return a, nil
 
 	case msg.OpenTeams:
 		// A save searches again, so a search that is still running could answer
@@ -1170,11 +1176,12 @@ func (a App) browse(url string) (tea.Model, tea.Cmd) {
 }
 
 // searchRequests only reads GitHub, so a dry run may run it. The screen keeps the
-// rows it already has while the search runs.
+// rows it already has while the search runs. It looks for re-review candidates
+// only while the screen shows them.
 func (a App) searchRequests() tea.Cmd {
-	svc := a.svc
+	svc, rereview := a.svc, a.reqs.ShowRereview
 	return func() tea.Msg {
-		fetched, err := svc.Requests(context.Background())
+		fetched, err := svc.Requests(context.Background(), rereview)
 		if err != nil {
 			return errMsg{err: err}
 		}

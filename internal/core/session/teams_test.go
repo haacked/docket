@@ -100,7 +100,7 @@ func TestTheSearchAfterSaveTeamsLooksForTheSavedTeams(t *testing.T) {
 	if err := svc.SaveTeams([]string{"PostHog/team-feature-flags"}); err != nil {
 		t.Fatalf("SaveTeams: %v", err)
 	}
-	if _, err := svc.Requests(context.Background()); err != nil {
+	if _, err := svc.Requests(context.Background(), false); err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
 
@@ -187,7 +187,7 @@ func TestRequestsDuringSaveTeams(t *testing.T) {
 		}
 	})
 	wg.Go(func() {
-		if _, err := svc.Requests(context.Background()); err != nil {
+		if _, err := svc.Requests(context.Background(), false); err != nil {
 			t.Errorf("Requests: %v", err)
 		}
 	})

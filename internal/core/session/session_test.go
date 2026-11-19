@@ -82,6 +82,16 @@ type fakeGH struct {
 	// teamRequests records each RequestTeamReview call as "ref team,team".
 	teamRequests   []string
 	teamRequestErr error
+	// infoFor answers PR for one pull request, ahead of info. infoErrs fails
+	// it. infoReads counts the calls.
+	infoFor   map[pr.Ref]gh.PRInfo
+	infoErrs  map[pr.Ref]error
+	infoReads int
+	// timelines answers Timeline, keyed by pull request, and timelineErrs
+	// fails it. timelineReads counts the calls.
+	timelines     map[pr.Ref]requests.Timeline
+	timelineErrs  map[pr.Ref]error
+	timelineReads int
 }
 
 // submitCall is one POST to the reviews events endpoint.
@@ -105,7 +115,21 @@ func (f *fakeGH) Login(context.Context) (string, error) {
 	return f.login, f.loginErr
 }
 
-func (f *fakeGH) PR(context.Context, pr.Ref) (gh.PRInfo, error) { return f.info, f.infoErr }
+func (f *fakeGH) PR(_ context.Context, ref pr.Ref) (gh.PRInfo, error) {
+	f.infoReads++
+	if err, ok := f.infoErrs[ref]; ok {
+		return gh.PRInfo{}, err
+	}
+	if info, ok := f.infoFor[ref]; ok {
+		return info, f.infoErr
+	}
+	return f.info, f.infoErr
+}
+
+func (f *fakeGH) Timeline(_ context.Context, ref pr.Ref) (requests.Timeline, error) {
+	f.timelineReads++
+	return f.timelines[ref], f.timelineErrs[ref]
+}
 
 func (f *fakeGH) Reviews(_ context.Context, ref pr.Ref) ([]review.GHReview, error) {
 	f.reads++
@@ -1082,7 +1106,7 @@ func TestRequestsSearchesForTheUserAndThenEachTeamInOrder(t *testing.T) {
 		teamQuery("PostHog/team-b"):     {teamB},
 	}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1124,7 +1148,7 @@ func TestTeamSearchesLeaveOutThePullRequestsTheUserIsCaughtUpOn(t *testing.T) {
 		pushedSince.Ref: {approvedAt("older")},
 	}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1155,7 +1179,7 @@ func TestRequestsSearchesForReviewedPullRequestsOnceForAllTeams(t *testing.T) {
 		teamQuery("PostHog/team-b"): {{Ref: pr.Ref{Org: "o", Repo: "r", Number: 2}}},
 	}
 
-	if _, err := svc.Requests(context.Background()); err != nil {
+	if _, err := svc.Requests(context.Background(), false); err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
 
@@ -1171,7 +1195,7 @@ func TestRequestsSearchesForReviewedPullRequestsOnceForAllTeams(t *testing.T) {
 
 	fake.searches = nil
 	svc.Cfg.Teams = []string{"PostHog/team-c"}
-	if _, err := svc.Requests(context.Background()); err != nil {
+	if _, err := svc.Requests(context.Background(), false); err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
 	if slices.Contains(fake.searches, reviewedQuery) {
@@ -1197,7 +1221,7 @@ func TestRequestsChecksAPullRequestOnceAndNeverOneAskedOfTheUser(t *testing.T) {
 	fake.info = gh.PRInfo{HeadRefOid: "head"}
 	fake.reviews = []review.GHReview{approvedAt("head")}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1240,7 +1264,7 @@ func TestATeamWhoseCheckFailsKeepsItsRowsAndSaysWhy(t *testing.T) {
 			failure := errors.New("rate limited")
 			tc.fail(fake, failure)
 
-			f, err := svc.Requests(context.Background())
+			f, err := svc.Requests(context.Background(), false)
 			if err != nil {
 				t.Fatalf("Requests: %v", err)
 			}
@@ -1272,7 +1296,7 @@ func TestAFailedCheckStillLeavesOutThePullRequestsFoundCaughtUp(t *testing.T) {
 	failure := errors.New("rate limited")
 	fake.reviewErrs = map[pr.Ref]error{failing.Ref: failure}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1303,7 +1327,7 @@ func TestAPullRequestWhoseCheckFailedIsNotCheckedAgain(t *testing.T) {
 	fake.reviews = []review.GHReview{approvedAt("head")}
 	fake.reviewErrs = map[pr.Ref]error{failing.Ref: errors.New("rate limited")}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1332,7 +1356,7 @@ func TestAFailedReviewedSearchStandsForEveryTeam(t *testing.T) {
 	failure := errors.New("rate limited")
 	fake.requestErrs = map[string]error{reviewedQuery: failure}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1362,7 +1386,7 @@ func TestRequestsLeavesTheConfigUntouchedWhenNoLoginIsCached(t *testing.T) {
 	svc, paths := newService(t, fake, newFakeGit())
 	svc.Cfg.GitHubUser = ""
 
-	if _, err := svc.Requests(context.Background()); err != nil {
+	if _, err := svc.Requests(context.Background(), false); err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
 
@@ -1384,7 +1408,7 @@ func TestRequestsFailsWhenTheUsersSearchFails(t *testing.T) {
 	svc, _ := newService(t, fake, newFakeGit())
 	fake.requestErrs = map[string]error{"user-review-requested:haacked": errors.New("rate limited")}
 
-	if _, err := svc.Requests(context.Background()); err == nil {
+	if _, err := svc.Requests(context.Background(), false); err == nil {
 		t.Error("Requests succeeded after the user's search failed")
 	}
 }
@@ -1404,7 +1428,7 @@ func TestATeamSearchThatFailsKeepsEverySearchThatSucceeded(t *testing.T) {
 	failure := errors.New("422")
 	fake.requestErrs = map[string]error{teamQuery("PostHog/typo"): failure}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1438,7 +1462,7 @@ func TestRequestsReadsTheMembersOfEachTeamWithRows(t *testing.T) {
 	}
 	fake.members = map[string][]string{"PostHog/team-a": {"alice"}, "PostHog/team-b": {"bob"}}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1461,7 +1485,7 @@ func TestATeamWhoseMembersCannotBeReadKeepsItsRowsAndSaysWhy(t *testing.T) {
 	failure := errors.New("HTTP 403: needs read:org")
 	fake.membersErrs = map[string]error{"PostHog/team-a": failure}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1485,7 +1509,7 @@ func TestRequestsReadsWhoStartedEachBotPullRequestAPersonStarted(t *testing.T) {
 	}
 	fake.firstAssignees = map[pr.Ref]string{started.Ref: "pauldambra"}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1517,7 +1541,7 @@ func TestRequestsLeavesOutABotPullRequestTheUserStarted(t *testing.T) {
 	fake.requested = map[string][]requests.PR{teamQuery("PostHog/team-a"): {mine, theirs}}
 	fake.firstAssignees = map[pr.Ref]string{mine.Ref: "Haacked", theirs.Ref: "pauldambra"}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1536,7 +1560,7 @@ func TestATeamWhoseStarterCannotBeReadKeepsItsRowsAndSaysWhy(t *testing.T) {
 	failure := errors.New("HTTP 502")
 	fake.firstAssigneeErrs = map[pr.Ref]error{broken.Ref: failure}
 
-	f, err := svc.Requests(context.Background())
+	f, err := svc.Requests(context.Background(), false)
 	if err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
@@ -1578,7 +1602,7 @@ func TestRequestsReadsNoStarterForAPullRequestThatNamesTheUser(t *testing.T) {
 		teamQuery("PostHog/team-a"):     {both},
 	}
 
-	if _, err := svc.Requests(context.Background()); err != nil {
+	if _, err := svc.Requests(context.Background(), false); err != nil {
 		t.Fatalf("Requests: %v", err)
 	}
 

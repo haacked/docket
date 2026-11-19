@@ -522,7 +522,7 @@ func TestTheDashboardFooterPlacesTheArchivedToggleBeforeHelpAndQuit(t *testing.T
 func TestTheRequestsFooterPlacesTheTogglesBeforeHelpAndBack(t *testing.T) {
 	a := app()
 	a.screen, a.width = msg.Requests, 400
-	want := "space mark · enter start · o github · r refresh · t teams · d show drafts · c show covered · ? help · esc back · ctrl+c quit"
+	want := "space mark · enter start · o github · r refresh · t teams · d show drafts · c show covered · p show re-review · ? help · esc back · ctrl+c quit"
 	if got := ansi.Strip(a.footer()); got != want {
 		t.Errorf("footer = %q, want %q", got, want)
 	}
@@ -537,6 +537,12 @@ func TestTheRequestsFooterPlacesTheTogglesBeforeHelpAndBack(t *testing.T) {
 	want = strings.Replace(want, "c show covered", "c hide covered", 1)
 	if got := ansi.Strip(a.footer()); got != want {
 		t.Errorf("footer with covered shown = %q, want %q", got, want)
+	}
+
+	a.reqs.ShowRereview = true
+	want = strings.Replace(want, "p show re-review", "p hide re-review", 1)
+	if got := ansi.Strip(a.footer()); got != want {
+		t.Errorf("footer with re-review shown = %q, want %q", got, want)
 	}
 }
 

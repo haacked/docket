@@ -82,6 +82,7 @@ var (
 		{Key: "t", Short: "teams", Long: "choose the teams whose review requests this screen lists"},
 		{Key: "d", Long: "show or hide draft pull requests"},
 		{Key: "c", Long: "show or hide the pull requests a teammate has taken"},
+		{Key: "p", Long: "show or hide the pull requests that changed since your review and did not ask you again"},
 		{Key: "j/k ↓/↑", Long: "move the selection"},
 		{Key: "g/G", Long: "jump to the top or bottom"},
 		{Key: "?", Short: "help", Long: "toggle this help"},

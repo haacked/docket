@@ -1,4 +1,5 @@
-// Package requests arranges the pull requests that ask for the user's review into
+// Package requests arranges the pull requests that ask for the user's review,
+// and the ones that changed since the user's review without asking again, into
 // the sections the requests screen draws. It reads nothing itself, so the screen
 // can hold its types without reaching GitHub.
 package requests
@@ -30,6 +31,9 @@ type PR struct {
 	Assignees []string
 	IsDraft   bool
 	UpdatedAt time.Time
+	// AuthorInOrg marks a pull request whose author GitHub reports as a member
+	// or owner of the repository's organization.
+	AuthorInOrg bool
 }
 
 // Owner is the person who answers for the pull request and so cannot review
@@ -69,14 +73,65 @@ type Team struct {
 	Errs           []error
 }
 
+// Timeline is what a pull request's timeline says about its pushes: the SHAs
+// of its current commits in the timeline's order, and the time of each force
+// push. GitHub records no time for an ordinary push.
+type Timeline struct {
+	Commits     []string
+	ForcePushes []time.Time
+}
+
+// Changes is what landed on a pull request since the user's latest review.
+type Changes struct {
+	ReviewedAt  time.Time
+	Commits     int
+	ForcePushes int
+}
+
+// CountChanges counts what landed after latest, the user's latest review. The
+// commits that count are the ones after the reviewed commit in the timeline's
+// order. When a force push rewrote the reviewed commit away, every commit
+// counts. The force pushes that count are the ones GitHub recorded after the
+// review.
+func CountChanges(t Timeline, latest review.GHReview) Changes {
+	var c Changes
+	if latest.SubmittedAt != nil {
+		c.ReviewedAt = *latest.SubmittedAt
+	}
+	c.Commits = len(t.Commits) - (slices.Index(t.Commits, latest.CommitID) + 1)
+	for _, at := range t.ForcePushes {
+		if at.After(c.ReviewedAt) {
+			c.ForcePushes++
+		}
+	}
+	return c
+}
+
+// Candidate is an open pull request the user reviewed without approving, that
+// does not ask for the user's review again, and whose head moved since.
+type Candidate struct {
+	PR
+	Changes Changes
+}
+
+// Rereview is what one check for re-review candidates found. Errs holds the
+// failure that ended the check. Candidates then holds only the ones found
+// before it.
+type Rereview struct {
+	Candidates []Candidate
+	Errs       []error
+}
+
 // Fetched is what one refresh read from GitHub: the requests that name the user
-// and each configured team's. Login is the user the searches named. It carries no
+// and each configured team's. Login is the user the searches named. Rereview is
+// nil when the refresh did not look for re-review candidates. It carries no
 // records, so the root can regroup the screen when the index changes without
 // searching GitHub again.
 type Fetched struct {
-	Login string
-	Mine  []PR
-	Teams []Team
+	Login    string
+	Mine     []PR
+	Teams    []Team
+	Rereview *Rereview
 }
 
 // Kind is the section a pull request belongs in.
@@ -92,7 +147,16 @@ const (
 	// Covered holds the team's pull requests that a member of the team other
 	// than the owner is assigned to.
 	Covered
+	// RereviewExternal holds the re-review candidates whose author is outside
+	// the pull request's organization.
+	RereviewExternal
+	// RereviewMember holds the re-review candidates whose author is a member of
+	// the pull request's organization, or a bot that organization installed.
+	RereviewMember
 )
+
+// Rereviews reports whether the kind holds re-review candidates.
+func (k Kind) Rereviews() bool { return k == RereviewExternal || k == RereviewMember }
 
 // Row is a pull request with docket's open record for it. State and RecordID are
 // empty when docket has no open record.
@@ -113,6 +177,8 @@ type Row struct {
 	// MembersUnknown marks a row whose team's members docket could not read.
 	// Teammate is then false and Reviewer may be a member of Team.
 	MembersUnknown bool
+	// Changes is what landed since the user's review on a re-review candidate.
+	Changes Changes
 }
 
 // AskedMe reports whether the request names the user rather than a team.
@@ -126,46 +192,71 @@ type Section struct {
 
 // List is what the requests screen draws: one section of each Kind in Kind
 // order, how many teams were searched, and each team's Errs prefixed with the
-// team's slug.
+// team's slug. Rereview reports whether the refresh looked for re-review
+// candidates.
 type List struct {
 	Sections []Section
 	Teams    int
 	Errs     []error
+	Rereview bool
 }
 
 // Group sorts each pull request into the section of its Kind. A pull request
 // that asks for both the user and a team counts as asked of the user. One that
 // asks for two teams counts under the first of them. Each section lists the
 // most recently updated pull request first. NeedsReviewer lists the teammates'
-// pull requests before the rest.
+// pull requests before the rest. A re-review candidate counts only when no
+// request listed it, and its author alone picks its section.
 //
 // The owner of a pull request is usually assigned to it, so only another
 // assignee counts as its reviewer. A reviewer from outside the team
 // leaves the team's review open.
 func Group(f Fetched, records []review.Record) List {
 	var seen []pr.Ref
-	rows := make([][]Row, Covered+1)
+	rows := make([][]Row, RereviewMember+1)
+	// row returns false for a pull request an earlier search already listed.
+	row := func(p PR) (Row, bool) {
+		if slices.ContainsFunc(seen, p.Ref.Equal) {
+			return Row{}, false
+		}
+		seen = append(seen, p.Ref)
+		row := Row{PR: p, AssignedMe: has(p.Assignees, f.Login)}
+		if rec, ok := review.OpenRecord(records, p.Ref); ok {
+			row.State, row.RecordID = rec.State, rec.ID
+		}
+		return row, true
+	}
 	add := func(t Team) {
 		for _, p := range t.PRs {
-			if slices.ContainsFunc(seen, p.Ref.Equal) {
-				continue
+			if row, ok := row(p); ok {
+				row.Team, row.MembersUnknown = t.Slug, t.MembersUnknown
+				kind := classify(&row, t.Members)
+				rows[kind] = append(rows[kind], row)
 			}
-			seen = append(seen, p.Ref)
-			row := Row{PR: p, Team: t.Slug, AssignedMe: has(p.Assignees, f.Login), MembersUnknown: t.MembersUnknown}
-			if rec, ok := review.OpenRecord(records, p.Ref); ok {
-				row.State, row.RecordID = rec.State, rec.ID
-			}
-			kind := classify(&row, t.Members)
-			rows[kind] = append(rows[kind], row)
 		}
 	}
 
 	add(Team{PRs: f.Mine})
-	list := List{Teams: len(f.Teams)}
+	list := List{Teams: len(f.Teams), Rereview: f.Rereview != nil}
 	for _, t := range f.Teams {
 		add(t)
 		for _, err := range t.Errs {
 			list.Errs = append(list.Errs, fmt.Errorf("%s: %w", t.Slug, err))
+		}
+	}
+	if f.Rereview != nil {
+		for _, c := range f.Rereview.Candidates {
+			if row, ok := row(c.PR); ok {
+				row.Changes = c.Changes
+				kind := RereviewExternal
+				if c.AuthorInOrg || c.Bot {
+					kind = RereviewMember
+				}
+				rows[kind] = append(rows[kind], row)
+			}
+		}
+		for _, err := range f.Rereview.Errs {
+			list.Errs = append(list.Errs, fmt.Errorf("re-review candidates: %w", err))
 		}
 	}
 
