@@ -1,6 +1,7 @@
 package inbox
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -381,6 +382,19 @@ func TestCLeavesTheCandidatesAlone(t *testing.T) {
 	}
 }
 
+func TestTheCandidateErrorsShowOnlyWithTheCandidates(t *testing.T) {
+	l := withCandidates(0, rows(row(1, "")), rows(candidateRow(7, twoCommits)), rows(candidateRow(8, twoCommits)))
+	l.RereviewErrs = []error{errors.New("re-review candidates: rate limited")}
+	m := drawn(l)
+
+	if strings.Contains(m.View(), "rate limited") {
+		t.Errorf("the candidates' error shows with the candidates hidden:\n%s", m.View())
+	}
+	if m = shown(t, m); !strings.Contains(m.View(), "re-review candidates: rate limited") {
+		t.Errorf("the candidates' error is missing with the candidates shown:\n%s", m.View())
+	}
+}
+
 // With the toggle off, the screen draws a list that carries candidates exactly
 // as it draws the same list without them, so the default view is unchanged.
 func TestTheViewWithTheCandidatesOffIsTheViewWithoutThem(t *testing.T) {
@@ -394,6 +408,7 @@ func TestTheViewWithTheCandidatesOffIsTheViewWithoutThem(t *testing.T) {
 				requests.Section{Kind: requests.RereviewMember, Rows: rows(candidateRow(8, twoCommits))},
 			)
 			carrying.Rereview = true
+			carrying.RereviewErrs = []error{errors.New("re-review candidates: rate limited")}
 
 			for _, keys := range [][]string{nil, {"G"}, {"c", "G"}} {
 				a, b := drawn(without), drawn(carrying)

@@ -393,15 +393,14 @@ func (c *caughtUpCheck) caughtUp(ctx context.Context, ref pr.Ref) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	commits := review.ReviewedCommits(reviews, c.me)
-	if len(commits) == 0 {
+	if len(review.ReviewedCommits(reviews, c.me)) == 0 {
 		return false, nil
 	}
 	info, err := c.s.GH.PR(ctx, ref)
 	if err != nil {
 		return false, err
 	}
-	return slices.Contains(commits, info.HeadRefOid), nil
+	return review.CaughtUp(reviews, c.me, info.HeadRefOid), nil
 }
 
 func refsOf(prs []requests.PR) []pr.Ref {

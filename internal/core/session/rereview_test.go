@@ -245,6 +245,9 @@ func TestATeamsPullRequestTheUserIsCaughtUpOnIsNoCandidate(t *testing.T) {
 	if fake.timelineReads != 0 {
 		t.Errorf("read timelines %d times, want none", fake.timelineReads)
 	}
+	if fake.reads != 1 || fake.infoReads != 1 {
+		t.Errorf("read reviews %d and heads %d times, want once each, by the team check", fake.reads, fake.infoReads)
+	}
 }
 
 // The latest real review decides. A comment with a summary or a request for
@@ -456,7 +459,7 @@ func TestAFailedReadKeepsTheCandidatesFoundBeforeItAndDropsTheRest(t *testing.T)
 			if errs := f.Rereview.Errs; len(errs) != 1 || !errors.Is(errs[0], failure) {
 				t.Fatalf("errs = %v, want one that wraps %v", errs, failure)
 			}
-			if msg := f.Rereview.Errs[0].Error(); !strings.Contains(msg, "could not check") {
+			if msg := f.Rereview.Errs[0].Error(); !strings.Contains(msg, "could not check 2 of") {
 				t.Errorf("err = %q, want it to say the checks stopped", msg)
 			}
 			if fake.reads != 2 {

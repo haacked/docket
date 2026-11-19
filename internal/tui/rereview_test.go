@@ -21,13 +21,22 @@ func onRequests(rereview bool) App {
 // p can turn the candidates on while a search without them runs. That search's
 // answer then searches once more, for the candidates.
 func TestAnAnswerWithoutCandidatesSearchesAgainWhileTheyShow(t *testing.T) {
-	next, cmd := onRequests(true).Update(requestsLoadedMsg{fetched: requests.Fetched{Login: "haacked"}})
+	svc, runner := batchService(t)
+	svc.Cfg.GitHubUser = "haacked"
+	runner.Results["search/issues"] = exec.Result{Stdout: `[{"items":[]}]`}
+	a := New(svc, svc.Cfg, "", false)
+	a.screen = msg.Requests
+	a.reqs.ShowRereview = true
+
+	next, cmd := a.Update(requestsLoadedMsg{fetched: requests.Fetched{Login: "haacked"}})
 
 	if !next.(App).reqs.Loading {
 		t.Error("the screen is not waiting on the second search")
 	}
-	if cmd == nil {
-		t.Error("the answer started no second search")
+	// Update adds the spinner's tick to any command that leaves the screen
+	// busy, so only the message the command sends shows a second search ran.
+	if loaded := only[requestsLoadedMsg](t, cmd); loaded.fetched.Rereview == nil {
+		t.Error("the answer did not search again for the candidates")
 	}
 }
 

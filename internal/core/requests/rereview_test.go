@@ -240,7 +240,8 @@ func TestGroupPrefixesTheCandidateErrorsAfterTheTeams(t *testing.T) {
 	team, check := errors.New("422"), errors.New("rate limited")
 	f := Fetched{Login: me, Teams: []Team{{Slug: "o/team", Errs: []error{team}}}, Rereview: &Rereview{Errs: []error{check}}}
 
-	errs := Group(f, nil).Errs
+	list := Group(f, nil)
+	errs := slices.Concat(list.Errs, list.RereviewErrs)
 
 	var got []string
 	for _, err := range errs {

@@ -192,13 +192,16 @@ type Section struct {
 
 // List is what the requests screen draws: one section of each Kind in Kind
 // order, how many teams were searched, and each team's Errs prefixed with the
-// team's slug. Rereview reports whether the refresh looked for re-review
+// team's slug. RereviewErrs holds the re-review check's Errs with a prefix. It
+// is separate from Errs because the screen draws it only while it shows the
 // candidates.
+// Rereview reports whether the refresh looked for re-review candidates.
 type List struct {
-	Sections []Section
-	Teams    int
-	Errs     []error
-	Rereview bool
+	Sections     []Section
+	Teams        int
+	Errs         []error
+	RereviewErrs []error
+	Rereview     bool
 }
 
 // Group sorts each pull request into the section of its Kind. A pull request
@@ -256,7 +259,7 @@ func Group(f Fetched, records []review.Record) List {
 			}
 		}
 		for _, err := range f.Rereview.Errs {
-			list.Errs = append(list.Errs, fmt.Errorf("re-review candidates: %w", err))
+			list.RereviewErrs = append(list.RereviewErrs, fmt.Errorf("re-review candidates: %w", err))
 		}
 	}
 

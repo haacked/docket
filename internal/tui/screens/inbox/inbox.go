@@ -41,8 +41,8 @@ type Model struct {
 	ShowCovered bool
 	// ShowRereview is false until the user presses p, so the list starts
 	// without the pull requests that changed since the user's review. Showing
-	// them the first time searches GitHub again, because finding them costs
-	// reads the default list does not make.
+	// them searches GitHub again when the list carries none, because finding
+	// them costs reads the default list does not make.
 	ShowRereview bool
 	Cursor       int
 	// Marked holds the URLs the user marked with space. A key on the URL rather
@@ -344,8 +344,12 @@ func (m Model) View() string {
 		return m.Spinner.Render("Searching GitHub for review requests")
 	}
 
+	errs := m.all.Errs
+	if m.ShowRereview {
+		errs = slices.Concat(errs, m.all.RereviewErrs)
+	}
 	var lines []string
-	for _, err := range m.all.Errs {
+	for _, err := range errs {
 		lines = append(lines, m.Styles.Dim.Render(format.Truncate(format.OneLine(err), format.Width(m.Width))))
 	}
 	if len(lines) > 0 {
