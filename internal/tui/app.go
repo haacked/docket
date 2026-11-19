@@ -232,6 +232,10 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			a.newrev = a.newrev.Reset()
 		}
 		a.err = nil
+		if a.screen == msg.Requests && a.lacksCandidates() {
+			a.reqs.Loading = true
+			return a, a.searchRequests()
+		}
 		return a, nil
 
 	case msg.OpenHelp:
@@ -259,7 +263,8 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		a.reqs.Loading = false
 		a = a.regroup()
 		// p can ask for re-review candidates while a search without them runs.
-		if a.reqs.ShowRereview && message.fetched.Rereview == nil && a.screen == msg.Requests {
+		// When the requests screen is not showing, going back to it searches.
+		if a.screen == msg.Requests && a.lacksCandidates() {
 			a.reqs.Loading = true
 			return a, a.searchRequests()
 		}
@@ -1406,6 +1411,12 @@ func explainOne(svc *session.Service, ref pr.Ref, engineName string, intent revi
 		return fmt.Sprintf("%s: %v", ref, err), err
 	}
 	return ref.String() + ": " + explainLine(plan, spec), nil
+}
+
+// lacksCandidates reports whether the requests screen shows re-review
+// candidates that no search has looked for, and no search is running.
+func (a App) lacksCandidates() bool {
+	return a.reqs.ShowRereview && !a.reqs.Loading && (a.fetched == nil || a.fetched.Rereview == nil)
 }
 
 // regroup rebuilds the requests screen from the last search and the records as

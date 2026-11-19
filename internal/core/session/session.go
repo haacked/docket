@@ -274,7 +274,8 @@ func (s *Service) rereviewCandidate(ctx context.Context, me string, p requests.P
 	if err != nil {
 		return requests.Candidate{}, false, err
 	}
-	if review.CaughtUp(reviews, me, info.HeadRefOid) {
+	// The pull request can merge or close after the search lists it as open.
+	if info.State.Closed() || review.CaughtUp(reviews, me, info.HeadRefOid) {
 		return requests.Candidate{}, false, nil
 	}
 	timeline, err := s.GH.Timeline(ctx, p.Ref)

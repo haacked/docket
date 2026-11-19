@@ -111,3 +111,58 @@ func TestPOnTheRequestsScreenSearchesForTheCandidates(t *testing.T) {
 		t.Error("the search after p did not look for candidates")
 	}
 }
+
+// p can ask for the candidates while a search runs, and the user can open help
+// before that search answers. The answer then arrives on the help screen, and
+// going back to the requests screen searches for the candidates.
+func TestReturningToTheRequestsScreenSearchesForTheCandidatesItStillLacks(t *testing.T) {
+	svc, runner := batchService(t)
+	svc.Cfg.GitHubUser = "haacked"
+	runner.Results["search/issues"] = exec.Result{Stdout: `[{"items":[]}]`}
+	a := New(svc, svc.Cfg, "", false)
+	a.screen = msg.Help
+	a.reqs.ShowRereview = true
+
+	next, cmd := a.Update(requestsLoadedMsg{fetched: requests.Fetched{Login: "haacked"}})
+	if cmd != nil {
+		if _, ok := cmd().(requestsLoadedMsg); ok {
+			t.Fatal("the answer searched again while the help screen showed")
+		}
+	}
+
+	next, cmd = next.(App).Update(msg.Goto{Screen: msg.Requests})
+
+	if !next.(App).reqs.Loading {
+		t.Error("the screen is not waiting on the search for the candidates")
+	}
+	if loaded := only[requestsLoadedMsg](t, cmd); loaded.fetched.Rereview == nil {
+		t.Error("going back did not search for the candidates")
+	}
+}
+
+// Going back to the requests screen searches nothing when it already has the
+// candidates or does not show them.
+func TestReturningToTheRequestsScreenSearchesOnlyForMissingCandidates(t *testing.T) {
+	tests := []struct {
+		name     string
+		rereview bool
+		fetched  requests.Fetched
+	}{
+		{"the candidates are hidden", false, requests.Fetched{Login: "haacked"}},
+		{"the candidates are loaded", true, requests.Fetched{Login: "haacked", Rereview: &requests.Rereview{}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := app()
+			a.screen = msg.Help
+			a.reqs.ShowRereview = tt.rereview
+			a.fetched = &tt.fetched
+
+			next, cmd := a.Update(msg.Goto{Screen: msg.Requests})
+
+			if next.(App).reqs.Loading || cmd != nil {
+				t.Error("going back started a search")
+			}
+		})
+	}
+}

@@ -560,3 +560,30 @@ func TestTheTeamCheckAndTheCandidatesAgreeOnWhetherTheHeadWasReviewed(t *testing
 		})
 	}
 }
+
+// The search lists only open pull requests, but one can merge or close before
+// docket reads its head. The read says so, and the pull request is then no
+// candidate.
+func TestAPullRequestThatClosedAfterTheSearchIsNoCandidate(t *testing.T) {
+	for _, state := range []review.PRState{review.PRMerged, review.PRClosed} {
+		t.Run(string(state), func(t *testing.T) {
+			svc, fake := candidateService(t)
+			seed := seedPR(candRef(1), true)
+			fake.requested[reviewedQuery] = []requests.PR{seed}
+			changedSince(fake, seed.Ref)
+			fake.infoFor[seed.Ref] = gh.PRInfo{HeadRefName: "branch", HeadRefOid: "new", State: state}
+
+			f, err := svc.Requests(context.Background(), true)
+			if err != nil {
+				t.Fatalf("Requests: %v", err)
+			}
+
+			if got := candidateRefs(f); len(got) != 0 {
+				t.Errorf("candidates = %v, want none", got)
+			}
+			if fake.timelineReads != 0 {
+				t.Errorf("read timelines %d times, want none", fake.timelineReads)
+			}
+		})
+	}
+}
