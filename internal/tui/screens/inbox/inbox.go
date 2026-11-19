@@ -39,7 +39,12 @@ type Model struct {
 	// the pull requests that a member of the team other than the owner is
 	// assigned to.
 	ShowCovered bool
-	Cursor      int
+	// ShowRereview is false until the user presses p, so the list starts
+	// without the pull requests that changed since the user's review. Showing
+	// them searches GitHub again when the list carries none, because finding
+	// them costs reads the default list does not make.
+	ShowRereview bool
+	Cursor       int
 	// Marked holds the URLs the user marked with space. A key on the URL rather
 	// than the cursor position keeps each mark on its pull request when a
 	// refresh reorders the rows.
@@ -130,7 +135,13 @@ func (m Model) hiddenIn(i int) int {
 
 // shows reports whether the screen draws the rows of s.
 func (m Model) shows(s requests.Section) bool {
-	return s.Kind != requests.Covered || m.ShowCovered
+	switch {
+	case s.Kind == requests.Covered:
+		return m.ShowCovered
+	case s.Kind.Rereviews():
+		return m.ShowRereview
+	}
+	return true
 }
 
 // SetExisting switches the screen to asking what to do with the marked pull
@@ -239,6 +250,13 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 	case "c":
 		m.ShowCovered = !m.ShowCovered
 		return m.SetList(m.all), nil
+	case "p":
+		m.ShowRereview = !m.ShowRereview
+		m = m.SetList(m.all)
+		if m.ShowRereview && !m.all.Rereview && !m.Loading {
+			return m, msg.Send(msg.RefreshRequests{})
+		}
+		return m, nil
 	case "t":
 		return m, msg.Send(msg.OpenTeams{})
 	case "esc":
@@ -326,8 +344,12 @@ func (m Model) View() string {
 		return m.Spinner.Render("Searching GitHub for review requests")
 	}
 
+	errs := m.all.Errs
+	if m.ShowRereview {
+		errs = slices.Concat(errs, m.all.RereviewErrs)
+	}
 	var lines []string
-	for _, err := range m.all.Errs {
+	for _, err := range errs {
 		lines = append(lines, m.Styles.Dim.Render(format.Truncate(format.OneLine(err), format.Width(m.Width))))
 	}
 	if len(lines) > 0 {
@@ -338,9 +360,10 @@ func (m Model) View() string {
 	for i, s := range m.Sections {
 		count, hidden := len(s.Rows), m.hiddenIn(i)
 		// Only a team's request can need a reviewer or be covered.
-		noTeam := s.Kind != requests.Yours && m.all.Teams == 0
+		noTeam := (s.Kind == requests.NeedsReviewer || s.Kind == requests.Covered) && m.all.Teams == 0
 		emptyCovered := s.Kind == requests.Covered && count == 0 && hidden == 0
-		if noTeam || emptyCovered {
+		unsearched := s.Kind.Rereviews() && (!m.ShowRereview || !m.all.Rereview)
+		if noTeam || emptyCovered || unsearched {
 			continue
 		}
 		lines = append(lines, m.heading(s, count, hidden))
@@ -391,6 +414,10 @@ func title(kind requests.Kind) string {
 		return "Yours"
 	case requests.NeedsReviewer:
 		return "Needs a reviewer"
+	case requests.RereviewExternal:
+		return "Changed since your review: outside contributors"
+	case requests.RereviewMember:
+		return "Changed since your review: org members"
 	}
 	return "Covered by a teammate"
 }
@@ -500,7 +527,12 @@ func (m Model) row(kind requests.Kind, row requests.Row, selected bool) string {
 	if row.StartedBy != "" {
 		author += " for " + row.StartedBy
 	}
-	meta := []string{author, m.age(row.UpdatedAt)}
+	meta := []string{author}
+	if kind.Rereviews() {
+		meta = append(meta, changes(row.Changes), "reviewed "+m.age(row.Changes.ReviewedAt))
+	} else {
+		meta = append(meta, m.age(row.UpdatedAt))
+	}
 	if row.IsDraft {
 		meta = append(meta, "draft")
 	}
@@ -516,6 +548,27 @@ func (m Model) row(kind requests.Kind, row requests.Row, selected bool) string {
 		return style.Render(left)
 	}
 	return style.Render(left) + " " + m.Styles.Dim.Render(fitted)
+}
+
+// changes says what landed on a re-review candidate since the user's review.
+// GitHub records no time for an ordinary push, so it counts the commits after
+// the reviewed one and the force pushes after the review.
+func changes(c requests.Changes) string {
+	var parts []string
+	if c.Commits > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", c.Commits, format.Plural(c.Commits, "commit")))
+	}
+	if c.ForcePushes > 0 {
+		pushes := "force push"
+		if c.ForcePushes != 1 {
+			pushes += "es"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", c.ForcePushes, pushes))
+	}
+	if len(parts) == 0 {
+		return "head moved"
+	}
+	return strings.Join(parts, " · ")
 }
 
 // why says what put the row in its section, beyond what the section's heading

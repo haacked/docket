@@ -74,6 +74,10 @@ func (f *fakeGitHub) SubmitReview(_ context.Context, _ pr.Ref, id int64, event, 
 
 func (f *fakeGitHub) ReviewRequests(context.Context, string) ([]requests.PR, error) { return nil, nil }
 
+func (f *fakeGitHub) Timeline(context.Context, pr.Ref) (requests.Timeline, error) {
+	return requests.Timeline{}, nil
+}
+
 func (f *fakeGitHub) Teams(context.Context) ([]string, error) { return nil, nil }
 
 func (f *fakeGitHub) TeamMembers(context.Context, string) ([]string, error) { return nil, nil }

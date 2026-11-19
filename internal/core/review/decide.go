@@ -24,8 +24,13 @@ type GHUser struct {
 // without an event, which is what review-code's draft does.
 const StatePending = "PENDING"
 
-// StateCommented is the state of a review submitted with the comment event.
-const StateCommented = "COMMENTED"
+// The states of a submitted review.
+const (
+	StateCommented        = "COMMENTED"
+	StateChangesRequested = "CHANGES_REQUESTED"
+	StateApproved         = "APPROVED"
+	StateDismissed        = "DISMISSED"
+)
 
 // SubmitTolerance absorbs clock skew between this machine and GitHub when
 // comparing submitted_at against the session's start.
@@ -94,20 +99,55 @@ func PendingReviewID(reviews []GHReview, me string) int64 {
 	return id
 }
 
-// ReviewedCommits lists the commits my submitted reviews of the pull request
-// were made on. A pending review does not count, because it is a draft nobody
-// else has seen. A comment review with no body does not count either. GitHub
-// records a reply in a review thread that way, on whatever the head was when the
-// reply went up, so it says nothing about whether I read that commit's changes.
+// ReviewedCommits lists the commits my real reviews of the pull request were
+// made on.
 func ReviewedCommits(reviews []GHReview, me string) []string {
 	var commits []string
 	for _, r := range reviews {
-		bare := strings.EqualFold(r.State, StateCommented) && strings.TrimSpace(r.Body) == ""
-		if strings.EqualFold(r.User.Login, me) && !r.pending() && !bare && r.CommitID != "" {
+		if r.real(me) {
 			commits = append(commits, r.CommitID)
 		}
 	}
 	return commits
+}
+
+// CaughtUp reports whether one of my real reviews was made on head.
+func CaughtUp(reviews []GHReview, me, head string) bool {
+	return slices.Contains(ReviewedCommits(reviews, me), head)
+}
+
+// LatestReview is my real review that GitHub submitted last. A review with no
+// submitted_at does not count, because nothing says when it was made.
+func LatestReview(reviews []GHReview, me string) (GHReview, bool) {
+	var latest GHReview
+	found := false
+	for _, r := range reviews {
+		if !r.real(me) || r.SubmittedAt == nil {
+			continue
+		}
+		if !found || r.SubmittedAt.After(*latest.SubmittedAt) {
+			latest, found = r, true
+		}
+	}
+	return latest, found
+}
+
+// Revisitable reports whether the review left the pull request unapproved: a
+// comment or a request for changes. A dismissed review does not count, because
+// GitHub does not say whether it was an approval.
+func Revisitable(r GHReview) bool {
+	return strings.EqualFold(r.State, StateCommented) || strings.EqualFold(r.State, StateChangesRequested)
+}
+
+// real reports whether the review is one of mine that someone else has seen and
+// that says I read a commit. A pending review does not count, because it is a
+// draft nobody else has seen. A comment review with no body does not count
+// either. GitHub records a reply in a review thread that way, on whatever the
+// head was when the reply went up, so it says nothing about whether I read that
+// commit's changes.
+func (r GHReview) real(me string) bool {
+	bare := strings.EqualFold(r.State, StateCommented) && strings.TrimSpace(r.Body) == ""
+	return strings.EqualFold(r.User.Login, me) && !r.pending() && !bare && r.CommitID != ""
 }
 
 func (r GHReview) pending() bool { return strings.EqualFold(r.State, StatePending) }

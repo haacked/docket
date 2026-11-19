@@ -112,7 +112,7 @@ func TestGroupAlwaysReturnsOneSectionOfEachKindInKindOrder(t *testing.T) {
 			for _, s := range list.Sections {
 				kinds = append(kinds, s.Kind)
 			}
-			if want := []Kind{Yours, NeedsReviewer, Covered}; !slices.Equal(kinds, want) {
+			if want := []Kind{Yours, NeedsReviewer, Covered, RereviewExternal, RereviewMember}; !slices.Equal(kinds, want) {
 				t.Errorf("section kinds = %v, want %v", kinds, want)
 			}
 		})

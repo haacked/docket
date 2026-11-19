@@ -10,7 +10,7 @@ import (
 
 // toggles is the state of the show and hide keys whose footer labels follow it.
 type toggles struct {
-	archived, drafts, covered bool
+	archived, drafts, covered, rereview bool
 }
 
 // helpFor is the footer's keys for a screen, built from the same per-screen
@@ -31,9 +31,9 @@ func helpFor(screen msg.Screen, shown toggles, choosing bool) []help.Entry {
 		return append(help.Footer(help.Notes), help.Quit)
 	case msg.Requests:
 		// ? and esc are the table's last two footer entries. The toggles go
-		// in before them, where "d" and "c" sit in the table.
+		// in before them, where "d", "c", and "p" sit in the table.
 		entries := help.Footer(help.Requests)
-		return append(slices.Insert(entries, len(entries)-2, toggle("d", "drafts", shown.drafts), toggle("c", "covered", shown.covered)), help.Quit)
+		return append(slices.Insert(entries, len(entries)-2, toggle("d", "drafts", shown.drafts), toggle("c", "covered", shown.covered), toggle("p", "re-review", shown.rereview)), help.Quit)
 	case msg.Teams:
 		return append(help.Footer(help.Teams), help.Quit)
 	case msg.Help:
@@ -61,7 +61,7 @@ func toggle(key, rows string, shown bool) help.Entry {
 // style the full help screen gives them, so they stand out from their labels.
 func (a App) footer() string {
 	var hints []string
-	shown := toggles{archived: a.dash.ShowArchived, drafts: a.reqs.ShowDrafts, covered: a.reqs.ShowCovered}
+	shown := toggles{archived: a.dash.ShowArchived, drafts: a.reqs.ShowDrafts, covered: a.reqs.ShowCovered, rereview: a.reqs.ShowRereview}
 	for _, e := range helpFor(a.screen, shown, a.choosing()) {
 		hints = append(hints, a.styles.Label.Render(e.Key)+" "+a.styles.Footer.Render(e.Short))
 	}

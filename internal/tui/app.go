@@ -232,6 +232,10 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			a.newrev = a.newrev.Reset()
 		}
 		a.err = nil
+		if a.screen == msg.Requests && a.lacksCandidates() {
+			a.reqs.Loading = true
+			return a, a.searchRequests()
+		}
 		return a, nil
 
 	case msg.OpenHelp:
@@ -257,7 +261,14 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case requestsLoadedMsg:
 		a.fetched = &message.fetched
 		a.reqs.Loading = false
-		return a.regroup(), nil
+		a = a.regroup()
+		// p can ask for re-review candidates while a search without them runs.
+		// When the requests screen is not showing, going back to it searches.
+		if a.screen == msg.Requests && a.lacksCandidates() {
+			a.reqs.Loading = true
+			return a, a.searchRequests()
+		}
+		return a, nil
 
 	case msg.OpenTeams:
 		// A save searches again, so a search that is still running could answer
@@ -1170,11 +1181,12 @@ func (a App) browse(url string) (tea.Model, tea.Cmd) {
 }
 
 // searchRequests only reads GitHub, so a dry run may run it. The screen keeps the
-// rows it already has while the search runs.
+// rows it already has while the search runs. It looks for re-review candidates
+// only while the screen shows them.
 func (a App) searchRequests() tea.Cmd {
-	svc := a.svc
+	svc, rereview := a.svc, a.reqs.ShowRereview
 	return func() tea.Msg {
-		fetched, err := svc.Requests(context.Background())
+		fetched, err := svc.Requests(context.Background(), rereview)
 		if err != nil {
 			return errMsg{err: err}
 		}
@@ -1399,6 +1411,12 @@ func explainOne(svc *session.Service, ref pr.Ref, engineName string, intent revi
 		return fmt.Sprintf("%s: %v", ref, err), err
 	}
 	return ref.String() + ": " + explainLine(plan, spec), nil
+}
+
+// lacksCandidates reports whether the requests screen shows re-review
+// candidates that no search has looked for, and no search is running.
+func (a App) lacksCandidates() bool {
+	return a.reqs.ShowRereview && !a.reqs.Loading && (a.fetched == nil || a.fetched.Rereview == nil)
 }
 
 // regroup rebuilds the requests screen from the last search and the records as

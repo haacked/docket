@@ -39,6 +39,7 @@ type GitHub interface {
 	Reviews(ctx context.Context, ref pr.Ref) ([]review.GHReview, error)
 	SubmitReview(ctx context.Context, ref pr.Ref, reviewID int64, event, body string) error
 	ReviewRequests(ctx context.Context, query string) ([]requests.PR, error)
+	Timeline(ctx context.Context, ref pr.Ref) (requests.Timeline, error)
 	Teams(ctx context.Context) ([]string, error)
 	TeamMembers(ctx context.Context, team string) ([]string, error)
 	FirstAssignee(ctx context.Context, ref pr.Ref, assigner string) (string, error)
@@ -144,6 +145,9 @@ type searchItem struct {
 		Login string `json:"login"`
 	} `json:"assignees"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// AuthorAssociation is the author's relation to the repository, such as
+	// MEMBER, OWNER, COLLABORATOR, CONTRIBUTOR, or NONE.
+	AuthorAssociation string `json:"author_association"`
 }
 
 // ReviewRequests lists the open pull requests that match a search query, such as
@@ -151,7 +155,9 @@ type searchItem struct {
 // "team-review-requested:org/team -author:haacked", or
 // "reviewed-by:haacked -author:haacked". It uses the REST search endpoint
 // because gh search prs goes through GraphQL, which refused with a rate-limit
-// error while the REST search still answered.
+// error while the REST search still answered. AuthorInOrg is true when GitHub
+// reports the author as a MEMBER or OWNER of the repository's organization.
+// GitHub hides private membership from a viewer outside the organization.
 func (c *CLI) ReviewRequests(ctx context.Context, query string) ([]requests.PR, error) {
 	res, err := c.run(ctx,
 		"api", "-X", "GET", "--paginate", "--slurp", "search/issues",
@@ -193,10 +199,46 @@ func (c *CLI) ReviewRequests(ctx context.Context, query string) ([]requests.PR, 
 				Assignees:     assignees,
 				IsDraft:       item.Draft,
 				UpdatedAt:     item.UpdatedAt,
+				AuthorInOrg:   item.AuthorAssociation == "MEMBER" || item.AuthorAssociation == "OWNER",
 			})
 		}
 	}
 	return prs, nil
+}
+
+// Timeline reads the pull request's timeline for its current commits and its
+// force pushes. A committed event carries the commit's own dates and no push
+// time. A rebase rewrites those dates. A head_ref_force_pushed event's
+// created_at is GitHub's record of when the push happened.
+func (c *CLI) Timeline(ctx context.Context, ref pr.Ref) (requests.Timeline, error) {
+	path := fmt.Sprintf("repos/%s/%s/issues/%d/timeline", ref.Org, ref.Repo, ref.Number)
+	res, err := c.run(ctx, "api", "-X", "GET", "--paginate", "--slurp", path, "-f", "per_page=100")
+	if err != nil {
+		return requests.Timeline{}, fmt.Errorf("gh api timeline of %s: %w", ref, err)
+	}
+	out := strings.TrimSpace(res.Stdout)
+	if out == "" {
+		return requests.Timeline{}, nil
+	}
+
+	var pages [][]struct {
+		Event     string    `json:"event"`
+		SHA       string    `json:"sha"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	if err := json.Unmarshal([]byte(out), &pages); err != nil {
+		return requests.Timeline{}, fmt.Errorf("parse the timeline of %s: %w", ref, err)
+	}
+	var t requests.Timeline
+	for _, e := range slices.Concat(pages...) {
+		switch e.Event {
+		case "committed":
+			t.Commits = append(t.Commits, e.SHA)
+		case "head_ref_force_pushed":
+			t.ForcePushes = append(t.ForcePushes, e.CreatedAt)
+		}
+	}
+	return t, nil
 }
 
 // Teams lists the "org/team" slugs of every team the user belongs to. GitHub
