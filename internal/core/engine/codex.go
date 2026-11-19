@@ -100,6 +100,9 @@ const (
 // UsageLimit finds nothing. docket rotates claude accounts only.
 func (Codex) UsageLimit(string, Paths) (UsageLimit, bool) { return UsageLimit{}, false }
 
+// ServedTurn finds nothing. docket rotates claude accounts only.
+func (Codex) ServedTurn(string, Paths) (time.Time, bool) { return time.Time{}, false }
+
 // CaptureSessionID finds the session codex just recorded for this record and
 // returns its id. A session matches when it ran in the record's directory and
 // began no earlier than the record did. The oldest match wins.

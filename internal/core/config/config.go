@@ -156,6 +156,12 @@ func (c Config) ClaudeLoginFile(configDir string) string {
 	return c.ClaudeDefaultDir + ".json"
 }
 
+// ClaudeCredentialsFile is the .credentials.json where claude keeps the OAuth
+// token of configDir when it does not keep it in the keychain.
+func (c Config) ClaudeCredentialsFile(configDir string) string {
+	return c.claudeDir(configDir, ".credentials.json")
+}
+
 func (c Config) claudeDir(configDir, name string) string {
 	dir := cmp.Or(configDir, c.ClaudeDefaultDir)
 	if dir == "" {

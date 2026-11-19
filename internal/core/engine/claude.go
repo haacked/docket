@@ -62,6 +62,14 @@ func claudeCommand(paths Paths, dir string, args ...string) exec.CommandSpec {
 	return spec
 }
 
+// RefreshCredentialsSpec makes claude refresh the expired OAuth token of the
+// account configDir names. claude refreshes it when `mcp get` looks up the
+// claude.ai connectors. The server name does not need to exist. dir is where the
+// command runs. claude reads that directory's .mcp.json.
+func RefreshCredentialsSpec(configDir, dir string) exec.CommandSpec {
+	return claudeCommand(Paths{ClaudeConfig: configDir}, dir, "mcp", "get", "claude-usage-refresh")
+}
+
 // CaptureSessionID has nothing to find. NewSessionID already minted the id and
 // Start passed it to claude.
 func (Claude) CaptureSessionID(review.Record, Paths) (string, error) { return "", nil }

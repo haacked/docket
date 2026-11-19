@@ -451,7 +451,7 @@ func TestAFreshStartLeavesACodexRecordWhereItIs(t *testing.T) {
 	}
 	rec := review.Record{Engine: "codex", ClaudeConfigDir: r.primary, AskSessionID: "codex-thread"}
 
-	got, _, err := r.svc.freshAccount(rec)
+	got, _, err := r.svc.freshAccount(context.Background(), rec)
 	if err != nil {
 		t.Fatalf("freshAccount: %v", err)
 	}
@@ -585,7 +585,7 @@ func TestAFreshStartMovesOffADirWhoseLoginIsLimitedUnderAnotherDir(t *testing.T)
 		t.Fatal(err)
 	}
 
-	got, choice, err := svc.freshAccount(review.Record{Engine: "claude", ClaudeConfigDir: twin})
+	got, choice, err := svc.freshAccount(context.Background(), review.Record{Engine: "claude", ClaudeConfigDir: twin})
 	if err != nil {
 		t.Fatalf("freshAccount: %v", err)
 	}

@@ -1080,7 +1080,7 @@ func (a App) reload() tea.Cmd {
 func (a App) loadAccount() tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
-		choice, err := svc.NextAccount()
+		choice, err := svc.NextAccount(context.Background())
 		return accountMsg{choice: choice, names: svc.AccountNames(), err: err}
 	}
 }
