@@ -65,7 +65,7 @@ func (s *Service) NextAccount(ctx context.Context) (account.Choice, error) {
 // change when a reading that kept an account ahead of it limited expires, so
 // Recheck is no later than that.
 func (s *Service) pick(ctx context.Context, limits []account.Limit) account.Choice {
-	accounts := s.Cfg.ClaudeAccounts()
+	accounts := s.Config().ClaudeAccounts()
 	logins := make(map[string]account.Login, len(accounts))
 	for _, dir := range accounts {
 		logins[dir] = s.claudeLogin(dir)
@@ -206,14 +206,14 @@ func (s *Service) appendClear(dir string, at time.Time, limits []account.Limit) 
 
 // claudeLogin is the login the account dir is signed in to now.
 func (s *Service) claudeLogin(dir string) account.Login {
-	return account.ReadLogin(s.Cfg.ClaudeLoginFile(dir))
+	return account.ReadLogin(s.Config().ClaudeLoginFile(dir))
 }
 
 // AccountNames names each account in the rotation by who it is signed in as.
 // It leaves out an account whose profile docket cannot read.
 func (s *Service) AccountNames() account.Names {
 	names := account.Names{}
-	for _, dir := range s.Cfg.ClaudeAccounts() {
+	for _, dir := range s.Config().ClaudeAccounts() {
 		if label := s.profile(dir).Label(); label != "" {
 			names[dir] = label
 		}
@@ -223,7 +223,7 @@ func (s *Service) AccountNames() account.Names {
 
 // profile is who the account dir is signed in as now.
 func (s *Service) profile(dir string) account.Profile {
-	return account.ReadProfile(s.Cfg.ClaudeLoginFile(dir))
+	return account.ReadProfile(s.Config().ClaudeLoginFile(dir))
 }
 
 // freshAccount puts rec on the claude account a fresh start of it runs under,

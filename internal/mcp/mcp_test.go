@@ -871,3 +871,34 @@ func TestSubmitReviewRejectsAnEventGitHubDoesNotTake(t *testing.T) {
 		t.Errorf("submits = %v, want none", f.gh.submits)
 	}
 }
+
+// The server has no tick, so each tool call reads an edit to config.toml before
+// it runs.
+func TestAToolCallReadsAnEditToConfigFirst(t *testing.T) {
+	f := newFixture(t)
+	account := t.TempDir()
+	body := "github_user = \"" + me + "\"\nclaude_config_dir = \"" + account + "\"\n"
+	if err := os.WriteFile(f.svc.Paths.Config, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f.started(t)
+
+	records := f.records(t)
+	if len(records) != 1 || records[0].ClaudeConfigDir != account {
+		t.Errorf("records = %+v, want one under the account config.toml names now", records)
+	}
+}
+
+func TestAToolCallKeepsTheOldSettingsWhenConfigDoesNotLoad(t *testing.T) {
+	f := newFixture(t)
+	if err := os.WriteFile(f.svc.Paths.Config, []byte("claude_config_dir = \"relative\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f.started(t)
+
+	if records := f.records(t); len(records) != 1 || records[0].ClaudeConfigDir != "" {
+		t.Errorf("records = %+v, want one started under the account docket read before", records)
+	}
+}

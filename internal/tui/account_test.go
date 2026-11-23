@@ -71,7 +71,6 @@ func TestTheTitleNamesNoAccountBeforeTheFirstRead(t *testing.T) {
 // docket instance records shows up with the index append that follows it.
 func TestAReloadReadsTheNextAccount(t *testing.T) {
 	svc, paths := serviceOverIndex(t)
-	svc.Paths = paths
 	svc.Cfg = config.Config{ClaudeConfigDir: "/opt/claude-a", ClaudeFallbackConfigDirs: []string{"/opt/claude-b"}}
 	now := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
 	svc.Now = func() time.Time { return now }
@@ -103,8 +102,8 @@ func TestTheIndexTickReadsTheAccountOnceARecheckPasses(t *testing.T) {
 
 	model, cmd := a.Update(indexTickMsg{})
 
-	if n := countCmds(cmd); n != 3 {
-		t.Errorf("the tick ran %d commands, want the index check, the next tick, and the account read", n)
+	if n := countCmds(cmd); n != 4 {
+		t.Errorf("the tick ran %d commands, want the index check, the config check, the next tick, and the account read", n)
 	}
 	if got := model.(App).next.choice.Recheck; !got.IsZero() {
 		t.Errorf("recheck = %v, want zero while the read runs, so the next tick does not read again", got)
@@ -118,8 +117,8 @@ func TestTheIndexTickLeavesTheAccountBeforeItsRecheck(t *testing.T) {
 
 	_, cmd := a.Update(indexTickMsg{})
 
-	if n := countCmds(cmd); n != 2 {
-		t.Errorf("the tick ran %d commands, want only the index check and the next tick", n)
+	if n := countCmds(cmd); n != 3 {
+		t.Errorf("the tick ran %d commands, want only the index check, the config check, and the next tick", n)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/haacked/docket/internal/core/filemark"
 	"github.com/haacked/docket/internal/core/review"
 )
 
@@ -196,42 +197,18 @@ func (s *Store) compactLocked(records []review.Record) error {
 	return nil
 }
 
-// StatMark is a cheap fingerprint of the index file's state on disk, used to
-// detect that another process appended or compacted without taking the
-// shared lock. On a filesystem with second-granularity mtimes, a write
-// landing in the same second as the previous check can leave ModTime
-// unchanged while Size differs, which is why Changed compares both.
-type StatMark struct {
-	ModTime time.Time
-	Size    int64
+// Stat reads the index file's current Mark. It takes no lock, so polling it
+// does not contend with another process's Append. A missing index reports the
+// zero Mark rather than an error, matching Events' treatment of one.
+func (s *Store) Stat() (filemark.Mark, error) {
+	return filemark.Of(s.path)
 }
 
-func (s StatMark) equal(other StatMark) bool {
-	return s.Size == other.Size && s.ModTime.Equal(other.ModTime)
-}
-
-// Stat reads the index file's current StatMark. It takes no lock, so polling
-// it does not contend with another process's Append. A missing index reports
-// the zero StatMark rather than an error, matching Events' treatment of one.
-func (s *Store) Stat() (StatMark, error) {
-	info, err := os.Stat(s.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return StatMark{}, nil
-		}
-		return StatMark{}, fmt.Errorf("stat %s: %w", s.path, err)
-	}
-	return StatMark{ModTime: info.ModTime(), Size: info.Size()}, nil
-}
-
-// Changed reports whether the index file's StatMark differs from prev. It
-// returns the current StatMark to compare against next time.
-func (s *Store) Changed(prev StatMark) (StatMark, bool, error) {
-	cur, err := s.Stat()
-	if err != nil {
-		return prev, false, err
-	}
-	return cur, !cur.equal(prev), nil
+// Changed reports whether the index file's Mark differs from prev, which
+// detects that another process appended or compacted without taking the shared
+// lock. It returns the current Mark to compare against next time.
+func (s *Store) Changed(prev filemark.Mark) (filemark.Mark, bool, error) {
+	return filemark.Changed(s.path, prev)
 }
 
 func (s *Store) lock(exclusive bool) (func(), error) {

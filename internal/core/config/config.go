@@ -295,6 +295,22 @@ func accountDir(dir, defaultDir string) string {
 	return dir
 }
 
+// Reloaded is c with the keys a running docket reloads taken from fresh, which
+// is config.toml read again. Those keys are claude_config_dir,
+// claude_fallback_config_dirs, teams, github_user, and default_repo. Every
+// other field keeps its value from startup. review_code_dir and
+// codex_sessions_dir locate the notes, worktrees, and sessions of open
+// records. --engine overrides default_engine after Load. The new review screen
+// reads default_run only when docket starts.
+func (c Config) Reloaded(fresh Config) Config {
+	c.ClaudeConfigDir = fresh.ClaudeConfigDir
+	c.ClaudeFallbackConfigDirs = fresh.ClaudeFallbackConfigDirs
+	c.Teams = fresh.Teams
+	c.GitHubUser = fresh.GitHubUser
+	c.DefaultRepo = fresh.DefaultRepo
+	return c
+}
+
 // SaveKey sets one key in config.toml and keeps every other key as the file has
 // it. A default the file leaves out stays out of it. An edit to another key made
 // while docket runs survives. The rewrite drops the file's comments.

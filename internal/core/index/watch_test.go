@@ -4,8 +4,8 @@ package index_test
 // notice that another process appended to (or compacted) the shared index
 // file, without taking the shared flock on every check:
 //
-//	func (s *Store) Stat() (StatMark, error)
-//	func (s *Store) Changed(prev StatMark) (StatMark, bool, error)
+//	func (s *Store) Stat() (filemark.Mark, error)
+//	func (s *Store) Changed(prev filemark.Mark) (filemark.Mark, bool, error)
 //
 // Changed compares both ModTime and Size against prev. Compact swaps the file
 // in with a rename. On a filesystem with second-granularity mtimes, a
@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/haacked/docket/internal/core/index"
+	"github.com/haacked/docket/internal/core/filemark"
 )
 
 func TestStatOnAFreshIndexEstablishesABaselineWithoutError(t *testing.T) {
@@ -32,8 +32,8 @@ func TestStatOnAFreshIndexEstablishesABaselineWithoutError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat() on a store with no index file returned error %v", err)
 	}
-	if mark != (index.StatMark{}) {
-		t.Errorf("Stat() on a missing index = %+v, want the zero StatMark", mark)
+	if mark != (filemark.Mark{}) {
+		t.Errorf("Stat() on a missing index = %+v, want the zero Mark", mark)
 	}
 }
 
@@ -58,7 +58,7 @@ func TestChangedLeavesTheMarkAloneOnAStatFailure(t *testing.T) {
 		t.Fatalf("seed %s: %v", parent, err)
 	}
 	store := newStore(t, filepath.Join(parent, "index.jsonl"))
-	prev := index.StatMark{Size: 7}
+	prev := filemark.Mark{Size: 7}
 
 	got, changed, err := store.Changed(prev)
 

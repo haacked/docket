@@ -23,7 +23,7 @@ import (
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/engine"
 	"github.com/haacked/docket/internal/core/exec"
-	"github.com/haacked/docket/internal/core/index"
+	"github.com/haacked/docket/internal/core/filemark"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
@@ -82,10 +82,13 @@ type App struct {
 	polling bool
 	// indexStamp is the index file's state as of the last watch check, so the
 	// next one can tell whether another docket process appended to it.
-	indexStamp index.StatMark
+	indexStamp filemark.Mark
 	// next is the last answer to which claude account a new review runs under,
 	// or nil before the first read answers. The title line shows it.
 	next *accountMsg
+	// configErr means the status line shows a reload of config.toml that
+	// failed.
+	configErr bool
 }
 
 // New builds the root model. A non-empty initialInput opens the new review screen
@@ -610,7 +613,7 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// A zero stamp means this load came from reconcile or refreshAll,
 		// which carry none. Leaving indexStamp alone there is what keeps the
 		// next watch tick from wrongly treating their writes as already seen.
-		if message.stamp != (index.StatMark{}) {
+		if message.stamp != (filemark.Mark{}) {
 			a.indexStamp = message.stamp
 		}
 		// Another process, such as docket mcp, can start a background review
@@ -657,7 +660,7 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a.applyPoll(message)
 
 	case indexTickMsg:
-		cmds := []tea.Cmd{a.checkIndex(), a.armIndexTick()}
+		cmds := []tea.Cmd{a.checkIndex(), a.checkConfig(), a.armIndexTick()}
 		// A limit on an account ahead of the pick has reset. Clearing the time
 		// keeps the next tick from reading the account again before this read
 		// answers.
@@ -672,6 +675,24 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case indexChangedMsg:
 		a.indexStamp = message.stamp
 		return a, a.reload()
+
+	case configReloadedMsg:
+		// This does not go through errMsg, because errMsg clears the busy
+		// markers of work still in flight. It does not set a.err, because a
+		// poll that works clears a.err.
+		if message.err != nil {
+			a.status = message.err.Error()
+			a.configErr = true
+			return a, nil
+		}
+		// A reload arrives on a timer, so it replaces only its own error. The
+		// status line can hold a batch's failures, which show nowhere else.
+		if a.configErr {
+			a.status = "Reloaded config.toml"
+			a.configErr = false
+		}
+		a.newrev.DefaultRepo = a.liveConfig().DefaultRepo
+		return a, a.loadAccount()
 
 	case detectedMsg:
 		delete(a.dash.Busy, message.record.ID)
@@ -971,9 +992,10 @@ func (a App) login() string {
 	return a.liveConfig().GitHubUser
 }
 
-// liveConfig is the service's Config. The service caches the login and saves
-// the teams into its own copy. The copy taken at startup sees neither. The
-// fallback serves tests, which build the root without a service.
+// liveConfig is the service's Config. The service caches the login, saves the
+// teams, and reloads config.toml into its own copy. The copy taken at startup
+// sees none of those. The fallback serves tests, which build the root without a
+// service.
 func (a App) liveConfig() config.Config {
 	if a.svc != nil {
 		return a.svc.Config()
@@ -1451,7 +1473,7 @@ func (a App) startReview(start msg.StartReview) (tea.Model, tea.Cmd) {
 // dry run does it too and shows the same choice. A dry run then stops at the
 // command that would run.
 func (a App) prepare(input, engineName string, mode review.Mode, intent review.Intent) tea.Cmd {
-	svc, defaultRepo, dryRun := a.svc, a.cfg.DefaultRepo, a.dryRun
+	svc, defaultRepo, dryRun := a.svc, a.liveConfig().DefaultRepo, a.dryRun
 	return func() tea.Msg {
 		ctx := context.Background()
 		ref, err := pr.ParseRef(input, defaultRepo)
@@ -1681,6 +1703,18 @@ func (a App) checkIndex() tea.Cmd {
 			return nil
 		}
 		return indexChangedMsg{stamp: stamp}
+	}
+}
+
+// checkConfig reloads config.toml when it changed since the last check.
+func (a App) checkConfig() tea.Cmd {
+	svc := a.svc
+	return func() tea.Msg {
+		loaded, err := svc.ReloadConfig()
+		if err == nil && !loaded {
+			return nil
+		}
+		return configReloadedMsg{err: err}
 	}
 }
 

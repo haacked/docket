@@ -68,7 +68,7 @@ func serviceOverIndex(t *testing.T) (*session.Service, config.Paths) {
 		t.Fatalf("EnsureDirs: %v", err)
 	}
 	store := index.New(paths.Index, paths.Lock)
-	return &session.Service{Store: store}, paths
+	return &session.Service{Store: store, Paths: paths}, paths
 }
 
 func startedEvent(t *testing.T, id, title string, at time.Time) review.Event {
