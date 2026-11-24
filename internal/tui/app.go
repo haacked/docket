@@ -86,8 +86,10 @@ type App struct {
 	// next is the last answer to which claude account a new review runs under,
 	// or nil before the first read answers. The title line shows it.
 	next *accountMsg
-	// configErr is the line a failed reload of config.toml put on the status,
-	// or empty when there is none.
+	// configErr is why the last reload of config.toml failed, or empty when it
+	// worked. The status line shows it in a part of its own. A reload therefore
+	// never rewrites the status, which can hold a batch's failures that show
+	// nowhere else.
 	configErr string
 }
 
@@ -680,15 +682,10 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// This does not go through errMsg, because errMsg clears the busy
 		// markers of work still in flight. It does not set a.err, because a
 		// poll that works clears a.err.
-		// A reload arrives on a timer, and the status line can hold a batch's
-		// failures, which show nowhere else.
-		a, alone := a.dropConfigErr()
+		a.configErr = ""
 		if message.err != nil {
 			a.configErr = message.err.Error()
-			return a.report(a.configErr, true), nil
-		}
-		if alone {
-			a.status = "Reloaded config.toml"
+			return a, nil
 		}
 		a.newrev.DefaultRepo = a.liveConfig().DefaultRepo
 		return a, a.loadAccount()
@@ -955,6 +952,9 @@ func (a App) statusLine() string {
 	if a.status != "" {
 		parts = append(parts, a.styles.Dim.Render(a.status))
 	}
+	if a.configErr != "" {
+		parts = append(parts, a.styles.Err.Render(a.configErr))
+	}
 	return strings.Join(parts, a.styles.Dim.Render(" · "))
 }
 
@@ -1019,23 +1019,6 @@ func (a App) report(line string, after bool) App {
 	}
 	a.status = line
 	return a
-}
-
-// dropConfigErr takes the line of a failed reload off the status, and reports
-// whether that line was the whole status. It leaves a status that no longer ends
-// with the line as it is.
-func (a App) dropConfigErr() (App, bool) {
-	line := a.configErr
-	a.configErr = ""
-	if line == "" {
-		return a, false
-	}
-	if a.status == line {
-		a.status = ""
-		return a, true
-	}
-	a.status = strings.TrimSuffix(a.status, "\n"+line)
-	return a, false
 }
 
 // resetBusy records a failure for the status line and clears every screen's busy
@@ -1489,10 +1472,12 @@ func (a App) startReview(start msg.StartReview) (tea.Model, tea.Cmd) {
 // dry run does it too and shows the same choice. A dry run then stops at the
 // command that would run.
 func (a App) prepare(input, engineName string, mode review.Mode, intent review.Intent) tea.Cmd {
-	svc, defaultRepo, dryRun := a.svc, a.liveConfig().DefaultRepo, a.dryRun
+	svc, dryRun := a.svc, a.dryRun
 	return func() tea.Msg {
 		ctx := context.Background()
-		ref, err := pr.ParseRef(input, defaultRepo)
+		// The new review screen resolves a bare number against default_repo
+		// before it sends the input.
+		ref, err := pr.ParseRef(input, "")
 		if err != nil {
 			return errMsg{err: err}
 		}

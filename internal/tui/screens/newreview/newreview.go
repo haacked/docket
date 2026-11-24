@@ -192,12 +192,12 @@ func (m Model) Update(message tea.Msg) (Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			value := strings.TrimSpace(m.Input.Value())
-			if _, err := m.ref(); err != nil {
+			ref, err := m.ref()
+			if err != nil {
 				return m, nil
 			}
 			m.Busy = "resolving"
-			return m, msg.Send(msg.StartReview{Input: value, Engine: m.Engine, Background: m.background()})
+			return m, msg.Send(msg.StartReview{Input: ref.String(), Engine: m.Engine, Background: m.background()})
 		}
 	}
 
@@ -238,9 +238,6 @@ func (m Model) choose(key tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	m.Busy = "preparing"
 	return m, msg.Send(msg.StartReview{
-		// This sends the resolved pull request rather than the typed text. A bare
-		// number would be parsed again against default_repo, which a reload of
-		// config.toml can change while the question is open.
 		Input:  found.Ref,
 		Engine: m.engine(),
 		// A question-and-answer session needs the terminal. There is no draft for
@@ -251,6 +248,10 @@ func (m Model) choose(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	})
 }
 
+// ref is the pull request the input names. The screen sends it resolved,
+// because the root would otherwise parse a bare number against its own
+// default_repo, which a reload of config.toml can change before this screen
+// hears of it.
 func (m Model) ref() (pr.Ref, error) {
 	return pr.ParseRef(m.Input.Value(), m.DefaultRepo)
 }

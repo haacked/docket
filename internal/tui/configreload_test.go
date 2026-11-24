@@ -6,8 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/haacked/docket/internal/core/config"
-	"github.com/haacked/docket/internal/core/review"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestCheckConfigReportsAnEditOnceAndNothingAfter(t *testing.T) {
@@ -56,123 +55,58 @@ func TestAReloadPointsTheNewReviewScreenAtTheNewRepoAndReadsTheAccount(t *testin
 	}
 }
 
+const batchReport = "Started 2 of 3. PostHog/posthog#1 failed: HTTP 502"
+
 // A failed reload must not clear a marker of work still in flight, which is
 // what errMsg would do.
-func TestAFailedReloadKeepsTheBusyMarkersAndSaysTheOldSettingsStay(t *testing.T) {
+func TestAFailedReloadKeepsTheBusyMarkers(t *testing.T) {
 	a := app()
 	a.dash.Busy["rec-1"] = "submitting"
 
-	model, _ := a.Update(configReloadedMsg{err: errors.New("config.toml: default_run is \"sometimes\". docket keeps the settings it read before")})
-
-	next := model.(App)
-	if next.dash.Busy["rec-1"] != "submitting" {
-		t.Errorf("busy = %v, want the submit's marker kept", next.dash.Busy)
-	}
-	if !strings.Contains(next.status, "sometimes") || !strings.Contains(next.status, "keeps the settings it read before") {
-		t.Errorf("status = %q, want the error and that the old settings stay", next.status)
-	}
-}
-
-// The status line can hold a batch's failures, which show nowhere else, and a
-// reload arrives on a timer with no keystroke behind it.
-func TestAReloadLeavesTheStatusLineAlone(t *testing.T) {
-	svc, _ := serviceOverIndex(t)
-	a := New(svc, svc.Cfg, "", false)
-	a.status = "Started 2 of 3. PostHog/posthog#1 failed: HTTP 502"
-
-	model, _ := a.Update(configReloadedMsg{})
-
-	if got := model.(App).status; got != a.status {
-		t.Errorf("status = %q, want %q kept", got, a.status)
-	}
-}
-
-func TestAReloadAfterAFailedOneReplacesTheError(t *testing.T) {
-	svc, _ := serviceOverIndex(t)
-	a := New(svc, svc.Cfg, "", false)
 	model, _ := a.Update(configReloadedMsg{err: errors.New("config.toml: bad")})
 
-	model, _ = model.(App).Update(configReloadedMsg{})
-
-	next := model.(App)
-	if next.status != "Reloaded config.toml" {
-		t.Errorf("status = %q, want the error replaced", next.status)
-	}
-	if next.configErr != "" {
-		t.Errorf("configErr = %q after a reload that worked, want it cleared", next.configErr)
+	if busy := model.(App).dash.Busy; busy["rec-1"] != "submitting" {
+		t.Errorf("busy = %v, want the submit's marker kept", busy)
 	}
 }
 
-const batchReport = "Started 2 of 3. PostHog/posthog#1 failed: HTTP 502"
-
-func TestAFailedReloadAddsItsErrorAfterABatchsFailures(t *testing.T) {
-	a := app()
-	a.status = batchReport
-
-	model, _ := a.Update(configReloadedMsg{err: errors.New("config.toml: bad")})
-
-	if got, want := model.(App).status, batchReport+"\nconfig.toml: bad"; got != want {
-		t.Errorf("status = %q, want %q", got, want)
+// A reload arrives on a timer with no keystroke behind it, and the status can
+// hold a batch's failures, which show nowhere else. So the reload's error has a
+// part of the status line to itself and leaves the status alone.
+func TestAReloadShowsItsErrorBesideTheStatus(t *testing.T) {
+	tests := []struct {
+		name    string
+		reloads []string
+		want    string
+	}{
+		{name: "a reload that works", reloads: []string{""}, want: ""},
+		{name: "a failed reload", reloads: []string{"config.toml: bad"}, want: "config.toml: bad"},
+		{name: "a fix after a failure", reloads: []string{"config.toml: bad", ""}, want: ""},
+		{name: "a second failure", reloads: []string{"config.toml: bad", "config.toml: worse"}, want: "config.toml: worse"},
 	}
-}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := app()
+			a.status = batchReport
 
-func TestAReloadTakesOnlyItsOwnErrorOffABatchsFailures(t *testing.T) {
-	svc, _ := serviceOverIndex(t)
-	a := New(svc, svc.Cfg, "", false)
-	a.status = batchReport
-	model, _ := a.Update(configReloadedMsg{err: errors.New("config.toml: bad")})
+			for _, failure := range tc.reloads {
+				var err error
+				if failure != "" {
+					err = errors.New(failure)
+				}
+				model, _ := a.Update(configReloadedMsg{err: err})
+				a = model.(App)
+			}
 
-	model, _ = model.(App).Update(configReloadedMsg{})
-
-	if got := model.(App).status; got != batchReport {
-		t.Errorf("status = %q, want %q", got, batchReport)
-	}
-}
-
-func TestASecondFailedReloadReplacesTheFirstError(t *testing.T) {
-	a := app()
-	a.status = batchReport
-	model, _ := a.Update(configReloadedMsg{err: errors.New("config.toml: bad")})
-
-	model, _ = model.(App).Update(configReloadedMsg{err: errors.New("config.toml: worse")})
-
-	if got, want := model.(App).status, batchReport+"\nconfig.toml: worse"; got != want {
-		t.Errorf("status = %q, want %q", got, want)
-	}
-}
-
-// A batch can report between the failed reload and the one that works, and its
-// failures show nowhere else.
-func TestAReloadLeavesAStatusWrittenAfterItsError(t *testing.T) {
-	svc, _ := serviceOverIndex(t)
-	a := New(svc, svc.Cfg, "", false)
-	model, _ := a.Update(configReloadedMsg{err: errors.New("config.toml: bad")})
-	failed := model.(App)
-	failed.status = batchReport
-
-	model, _ = failed.Update(configReloadedMsg{})
-
-	next := model.(App)
-	if next.status != batchReport {
-		t.Errorf("status = %q, want %q kept", next.status, batchReport)
-	}
-	if next.configErr != "" {
-		t.Errorf("configErr = %q after a reload that worked, want it cleared", next.configErr)
-	}
-}
-
-// The new review screen accepts a bare number against the reloaded
-// default_repo, so prepare has to parse it against the same one.
-func TestPrepareParsesABareNumberAgainstTheReloadedRepo(t *testing.T) {
-	svc, _ := batchService(t)
-	svc.Cfg.GitHubUser = "haacked"
-	a := New(svc, config.Config{DefaultEngine: "claude"}, "", true)
-	svc.Cfg.DefaultRepo = "haacked/docket"
-
-	got := a.prepare("7", "claude", review.ModeBackground, review.IntentReview)()
-
-	status, ok := got.(statusMsg)
-	if !ok || !strings.Contains(status.text, "Would run") {
-		t.Errorf("prepare = %#v, want the dry run's command for haacked/docket#7", got)
+			if a.status != batchReport {
+				t.Errorf("status = %q, want %q kept", a.status, batchReport)
+			}
+			if a.configErr != tc.want {
+				t.Errorf("configErr = %q, want %q", a.configErr, tc.want)
+			}
+			if line := ansi.Strip(a.statusLine()); !strings.Contains(line, batchReport) || !strings.Contains(line, tc.want) {
+				t.Errorf("status line = %q, want the batch's report and %q", line, tc.want)
+			}
+		})
 	}
 }
