@@ -258,3 +258,28 @@ func TestReloadConfigWritesNothing(t *testing.T) {
 		t.Errorf("limits.jsonl exists after a reload: %v", err)
 	}
 }
+
+func TestReloadConfigReportsAStatFailureOnceAndItsRecovery(t *testing.T) {
+	svc, path := serviceWithAccounts(t)
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	loaded, err := svc.ReloadConfig()
+	if err == nil || loaded || !strings.Contains(err.Error(), "keeps the settings it read before") {
+		t.Fatalf("ReloadConfig = %v, %v, want the stat's failure", loaded, err)
+	}
+	if loaded, err := svc.ReloadConfig(); err != nil || loaded {
+		t.Errorf("the next ReloadConfig = %v, %v, want the failure reported once", loaded, err)
+	}
+
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustReload(t, svc)
+	if got := svc.Config().ClaudeAccounts(); !slices.Equal(got, []string{"/opt/a", "/opt/b", "/opt/c"}) {
+		t.Errorf("accounts = %v, want the file's", got)
+	}
+}

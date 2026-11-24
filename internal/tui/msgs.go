@@ -137,9 +137,12 @@ type bgPolledMsg struct {
 // accountMsg carries the claude account a new review runs under, and how
 // docket shows each account in the rotation.
 type accountMsg struct {
-	choice account.Choice
-	names  account.Names
-	err    error
+	// rotation is the order of the accounts when the read began. A reload of
+	// config.toml can change the order while a read runs.
+	rotation []string
+	choice   account.Choice
+	names    account.Names
+	err      error
 }
 
 // indexTickMsg asks the root to check whether another docket process appended

@@ -64,9 +64,9 @@ type Service struct {
 	idleMu   sync.Mutex
 	idleSeen map[string]time.Time
 
-	// cfgMu guards config.toml, Cfg, and cfgMark. The poll can cache the login
-	// while the teams screen saves the teams and a reload reads the file.
-	// Without the lock, the rename that lands last drops the other write's key,
+	// cfgMu guards config.toml, Cfg, cfgMark, and cfgStatErr. The poll can
+	// cache the login while the teams screen saves the teams and a reload reads
+	// the file. Without the lock, the rename that lands last drops the other write's key,
 	// and a search can read the teams mid-save. The lock covers this process
 	// only. Two docket instances that write config.toml at the same moment can
 	// still drop each other's key.
@@ -75,6 +75,9 @@ type Service struct {
 	// zero, so the first ReloadConfig reads the file whatever happened to it
 	// after startup.
 	cfgMark filemark.Mark
+	// cfgStatErr is the last stat of config.toml that failed, or empty when
+	// the last stat worked.
+	cfgStatErr string
 }
 
 // Config is a copy of Cfg taken under the lock that its writers hold.
@@ -91,23 +94,49 @@ func (s *Service) Config() config.Config {
 //
 // An empty or missing file leaves Cfg and the Mark as they were. An editor that
 // truncates the file before it writes shows docket an empty file, which would
-// otherwise start reviews under the default account alone. A stat that fails
-// also leaves Cfg as it was and reports nothing, as the index watcher does. It
-// writes nothing, so a dry run may call it.
+// otherwise start reviews under the default account alone. ReloadConfig decides
+// that on the bytes it parses, because the file can change after the stat.
+//
+// A stat that fails leaves Cfg as it was and returns the error once for each
+// distinct failure. The first stat that works after a failure reads the file
+// even when its Mark has not changed, so the caller learns that the failure
+// has passed. It writes nothing, so a dry run may call it.
 func (s *Service) ReloadConfig() (loaded bool, err error) {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 	mark, changed, err := filemark.Changed(s.Paths.Config, s.cfgMark)
-	if err != nil || !changed || mark.Size == 0 {
+	if err != nil {
+		if err.Error() == s.cfgStatErr {
+			return false, nil
+		}
+		s.cfgStatErr = err.Error()
+		return false, keptSettings(err)
+	}
+	if s.cfgStatErr != "" {
+		s.cfgStatErr = ""
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	data, err := os.ReadFile(s.Paths.Config)
+	if os.IsNotExist(err) || err == nil && len(data) == 0 {
 		return false, nil
 	}
 	s.cfgMark = mark
-	fresh, err := config.Load(s.Paths.Config)
 	if err != nil {
-		return false, fmt.Errorf("%w. docket keeps the settings it read before", err)
+		return false, keptSettings(err)
+	}
+	fresh, err := config.Parse(s.Paths.Config, data)
+	if err != nil {
+		return false, keptSettings(err)
 	}
 	s.Cfg = s.Cfg.Reloaded(fresh)
 	return true, nil
+}
+
+func keptSettings(err error) error {
+	return fmt.Errorf("%w. docket keeps the settings it read before", err)
 }
 
 // Plan is what Prepare worked out, for the UI to show before launching.

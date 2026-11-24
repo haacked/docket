@@ -623,6 +623,11 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return a.armPoll()
 
 	case accountMsg:
+		// A read that began before a reload describes the old rotation. The
+		// reload started a read of its own, so this one is dropped.
+		if !slices.Equal(message.rotation, a.liveConfig().ClaudeAccounts()) {
+			return a, nil
+		}
 		a.next = &message
 		a.dash.Accounts = message.names
 		return a, nil
@@ -1101,8 +1106,12 @@ func (a App) reload() tea.Cmd {
 func (a App) loadAccount() tea.Cmd {
 	svc := a.svc
 	return func() tea.Msg {
+		// The rotation is read before the pick, so a reload in between drops
+		// a read that may have picked from the new rotation, and never keeps
+		// one that picked from the old.
+		rotation := svc.Config().ClaudeAccounts()
 		choice, err := svc.NextAccount(context.Background())
-		return accountMsg{choice: choice, names: svc.AccountNames(), err: err}
+		return accountMsg{rotation: rotation, choice: choice, names: svc.AccountNames(), err: err}
 	}
 }
 
