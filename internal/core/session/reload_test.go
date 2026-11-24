@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -97,7 +98,8 @@ codex_sessions_dir = "/elsewhere/codex"
 default_engine = "codex"
 default_run = "terminal"
 default_repo = "PostHog/posthog"
-github_user = "haacked"
+github_user = "someone-else"
+teams = ["PostHog/team-feature-flags"]
 `)
 
 	mustReload(t, svc)
@@ -112,6 +114,30 @@ github_user = "haacked"
 	if after.DefaultRepo != "PostHog/posthog" {
 		t.Errorf("default_repo = %q, want the file's", after.DefaultRepo)
 	}
+	if after.GitHubUser != "someone-else" || !slices.Equal(after.Teams, []string{"PostHog/team-feature-flags"}) {
+		t.Errorf("github_user, teams = %q, %v, want the file's", after.GitHubUser, after.Teams)
+	}
+}
+
+// The index tick reloads on its own goroutine while an account read runs on
+// another. Run under -race, this test fails when either reads or writes Cfg
+// without the lock.
+func TestNextAccountDuringReloadConfig(t *testing.T) {
+	svc, path := serviceWithAccounts(t)
+	writeConfig(t, path, accountsTOML("/opt/c", "/opt/b", "/opt/a"))
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		if _, err := svc.ReloadConfig(); err != nil {
+			t.Errorf("ReloadConfig: %v", err)
+		}
+	})
+	wg.Go(func() {
+		if _, err := svc.NextAccount(context.Background()); err != nil {
+			t.Errorf("NextAccount: %v", err)
+		}
+	})
+	wg.Wait()
 }
 
 func TestReloadConfigKeepsTheOldSettingsWhenTheFileDoesNotLoad(t *testing.T) {

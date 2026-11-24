@@ -86,9 +86,9 @@ type App struct {
 	// next is the last answer to which claude account a new review runs under,
 	// or nil before the first read answers. The title line shows it.
 	next *accountMsg
-	// configErr means the status line shows a reload of config.toml that
-	// failed.
-	configErr bool
+	// configErr is the line a failed reload of config.toml put on the status,
+	// or empty when there is none.
+	configErr string
 }
 
 // New builds the root model. A non-empty initialInput opens the new review screen
@@ -680,16 +680,15 @@ func (a App) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// This does not go through errMsg, because errMsg clears the busy
 		// markers of work still in flight. It does not set a.err, because a
 		// poll that works clears a.err.
+		// A reload arrives on a timer, and the status line can hold a batch's
+		// failures, which show nowhere else.
+		a, alone := a.dropConfigErr()
 		if message.err != nil {
-			a.status = message.err.Error()
-			a.configErr = true
-			return a, nil
+			a.configErr = message.err.Error()
+			return a.report(a.configErr, true), nil
 		}
-		// A reload arrives on a timer, so it replaces only its own error. The
-		// status line can hold a batch's failures, which show nowhere else.
-		if a.configErr {
+		if alone {
 			a.status = "Reloaded config.toml"
-			a.configErr = false
 		}
 		a.newrev.DefaultRepo = a.liveConfig().DefaultRepo
 		return a, a.loadAccount()
@@ -1020,6 +1019,23 @@ func (a App) report(line string, after bool) App {
 	}
 	a.status = line
 	return a
+}
+
+// dropConfigErr takes the line of a failed reload off the status, and reports
+// whether that line was the whole status. It leaves a status that no longer ends
+// with the line as it is.
+func (a App) dropConfigErr() (App, bool) {
+	line := a.configErr
+	a.configErr = ""
+	if line == "" {
+		return a, false
+	}
+	if a.status == line {
+		a.status = ""
+		return a, true
+	}
+	a.status = strings.TrimSuffix(a.status, "\n"+line)
+	return a, false
 }
 
 // resetBusy records a failure for the status line and clears every screen's busy

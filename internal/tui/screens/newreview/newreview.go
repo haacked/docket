@@ -238,7 +238,10 @@ func (m Model) choose(key tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	m.Busy = "preparing"
 	return m, msg.Send(msg.StartReview{
-		Input:  strings.TrimSpace(m.Input.Value()),
+		// This sends the resolved pull request rather than the typed text. A bare
+		// number would be parsed again against default_repo, which a reload of
+		// config.toml can change while the question is open.
+		Input:  found.Ref,
 		Engine: m.engine(),
 		// A question-and-answer session needs the terminal. There is no draft for
 		// a background one to finish.

@@ -5,6 +5,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/haacked/docket/internal/core/config"
+	"github.com/haacked/docket/internal/core/review"
 )
 
 func TestCheckConfigReportsAnEditOnceAndNothingAfter(t *testing.T) {
@@ -95,7 +98,81 @@ func TestAReloadAfterAFailedOneReplacesTheError(t *testing.T) {
 	if next.status != "Reloaded config.toml" {
 		t.Errorf("status = %q, want the error replaced", next.status)
 	}
-	if next.configErr {
-		t.Error("configErr is still set after a reload that worked")
+	if next.configErr != "" {
+		t.Errorf("configErr = %q after a reload that worked, want it cleared", next.configErr)
+	}
+}
+
+const batchReport = "Started 2 of 3. PostHog/posthog#1 failed: HTTP 502"
+
+func TestAFailedReloadAddsItsErrorAfterABatchsFailures(t *testing.T) {
+	a := app()
+	a.status = batchReport
+
+	model, _ := a.Update(configReloadedMsg{err: errors.New("config.toml: bad")})
+
+	if got, want := model.(App).status, batchReport+"\nconfig.toml: bad"; got != want {
+		t.Errorf("status = %q, want %q", got, want)
+	}
+}
+
+func TestAReloadTakesOnlyItsOwnErrorOffABatchsFailures(t *testing.T) {
+	svc, _ := serviceOverIndex(t)
+	a := New(svc, svc.Cfg, "", false)
+	a.status = batchReport
+	model, _ := a.Update(configReloadedMsg{err: errors.New("config.toml: bad")})
+
+	model, _ = model.(App).Update(configReloadedMsg{})
+
+	if got := model.(App).status; got != batchReport {
+		t.Errorf("status = %q, want %q", got, batchReport)
+	}
+}
+
+func TestASecondFailedReloadReplacesTheFirstError(t *testing.T) {
+	a := app()
+	a.status = batchReport
+	model, _ := a.Update(configReloadedMsg{err: errors.New("config.toml: bad")})
+
+	model, _ = model.(App).Update(configReloadedMsg{err: errors.New("config.toml: worse")})
+
+	if got, want := model.(App).status, batchReport+"\nconfig.toml: worse"; got != want {
+		t.Errorf("status = %q, want %q", got, want)
+	}
+}
+
+// A batch can report between the failed reload and the one that works, and its
+// failures show nowhere else.
+func TestAReloadLeavesAStatusWrittenAfterItsError(t *testing.T) {
+	svc, _ := serviceOverIndex(t)
+	a := New(svc, svc.Cfg, "", false)
+	model, _ := a.Update(configReloadedMsg{err: errors.New("config.toml: bad")})
+	failed := model.(App)
+	failed.status = batchReport
+
+	model, _ = failed.Update(configReloadedMsg{})
+
+	next := model.(App)
+	if next.status != batchReport {
+		t.Errorf("status = %q, want %q kept", next.status, batchReport)
+	}
+	if next.configErr != "" {
+		t.Errorf("configErr = %q after a reload that worked, want it cleared", next.configErr)
+	}
+}
+
+// The new review screen accepts a bare number against the reloaded
+// default_repo, so prepare has to parse it against the same one.
+func TestPrepareParsesABareNumberAgainstTheReloadedRepo(t *testing.T) {
+	svc, _ := batchService(t)
+	svc.Cfg.GitHubUser = "haacked"
+	a := New(svc, config.Config{DefaultEngine: "claude"}, "", true)
+	svc.Cfg.DefaultRepo = "haacked/docket"
+
+	got := a.prepare("7", "claude", review.ModeBackground, review.IntentReview)()
+
+	status, ok := got.(statusMsg)
+	if !ok || !strings.Contains(status.text, "Would run") {
+		t.Errorf("prepare = %#v, want the dry run's command for haacked/docket#7", got)
 	}
 }

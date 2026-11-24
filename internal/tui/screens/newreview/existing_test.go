@@ -72,7 +72,7 @@ func TestEachChoiceResendsTheReviewWithItsIntent(t *testing.T) {
 		t.Run(tt.key, func(t *testing.T) {
 			m, cmd := choosing().Update(press(tt.key))
 
-			want := msg.StartReview{Input: typedURL, Engine: "claude", Intent: tt.intent}
+			want := msg.StartReview{Input: "haacked/docket#4", Engine: "claude", Intent: tt.intent}
 			if got := sent(t, cmd); got != want {
 				t.Errorf("got %#v, want %#v", got, want)
 			}
