@@ -189,19 +189,17 @@ func (p Paths) CloneDir(org, repo string, number int) string {
 
 // Load reads config.toml and fills in defaults. A missing file is not an error.
 func Load(path string) (Config, error) {
-	cfg := Config{
-		ReviewCodeDir:    DefaultReviewCodeDir,
-		CodexSessionsDir: DefaultCodexSessionsDir,
-		DefaultEngine:    EngineClaude,
-		DefaultRun:       RunBackground,
-	}
 	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return checkDirs(path, expand(cfg))
-		}
-		return cfg, fmt.Errorf("read %s: %w", path, err)
+	if err != nil && !os.IsNotExist(err) {
+		return defaults(), fmt.Errorf("read %s: %w", path, err)
 	}
+	return Parse(path, data)
+}
+
+// Parse is Load for the contents of the file at path, which it names in its
+// errors. Empty data reads as a file that sets no key.
+func Parse(path string, data []byte) (Config, error) {
+	cfg := defaults()
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse %s: %w", path, err)
 	}
@@ -213,6 +211,15 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("%s: default_run is %q, want %q or %q", path, cfg.DefaultRun, RunBackground, RunTerminal)
 	}
 	return checkDirs(path, expand(cfg))
+}
+
+func defaults() Config {
+	return Config{
+		ReviewCodeDir:    DefaultReviewCodeDir,
+		CodexSessionsDir: DefaultCodexSessionsDir,
+		DefaultEngine:    EngineClaude,
+		DefaultRun:       RunBackground,
+	}
 }
 
 // checkDirs refuses the directories docket and the agents would resolve
@@ -293,6 +300,22 @@ func accountDir(dir, defaultDir string) string {
 		return ""
 	}
 	return dir
+}
+
+// Reloaded is c with the keys a running docket reloads taken from fresh, which
+// is config.toml read again. Those keys are claude_config_dir,
+// claude_fallback_config_dirs, teams, github_user, and default_repo. Every
+// other field keeps its value from startup. review_code_dir and
+// codex_sessions_dir locate the notes, worktrees, and sessions of open
+// records. --engine overrides default_engine after Load. The new review screen
+// reads default_run only when docket starts.
+func (c Config) Reloaded(fresh Config) Config {
+	c.ClaudeConfigDir = fresh.ClaudeConfigDir
+	c.ClaudeFallbackConfigDirs = fresh.ClaudeFallbackConfigDirs
+	c.Teams = fresh.Teams
+	c.GitHubUser = fresh.GitHubUser
+	c.DefaultRepo = fresh.DefaultRepo
+	return c
 }
 
 // SaveKey sets one key in config.toml and keeps every other key as the file has

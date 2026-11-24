@@ -3,7 +3,7 @@ package tui
 import (
 	"github.com/haacked/docket/internal/core/account"
 	"github.com/haacked/docket/internal/core/exec"
-	"github.com/haacked/docket/internal/core/index"
+	"github.com/haacked/docket/internal/core/filemark"
 	"github.com/haacked/docket/internal/core/pr"
 	"github.com/haacked/docket/internal/core/requests"
 	"github.com/haacked/docket/internal/core/review"
@@ -19,7 +19,7 @@ import (
 // make a stamp taken there misrepresent what they actually saw.
 type recordsLoadedMsg struct {
 	records []review.Record
-	stamp   index.StatMark
+	stamp   filemark.Mark
 }
 
 // refreshedMsg answers a refresh of every record: the index after every record
@@ -137,18 +137,25 @@ type bgPolledMsg struct {
 // accountMsg carries the claude account a new review runs under, and how
 // docket shows each account in the rotation.
 type accountMsg struct {
-	choice account.Choice
-	names  account.Names
-	err    error
+	// rotation is the order of the accounts when the read began. A reload of
+	// config.toml can change the order while a read runs.
+	rotation []string
+	choice   account.Choice
+	names    account.Names
+	err      error
 }
 
 // indexTickMsg asks the root to check whether another docket process appended
 // to the index since the last check.
 type indexTickMsg struct{}
 
-// indexChangedMsg reports that the index changed. It carries the StatMark to
+// indexChangedMsg reports that the index changed. It carries the Mark to
 // compare against next time.
-type indexChangedMsg struct{ stamp index.StatMark }
+type indexChangedMsg struct{ stamp filemark.Mark }
+
+// configReloadedMsg reports that docket read config.toml again, or why the
+// file did not load.
+type configReloadedMsg struct{ err error }
 
 // requestsLoadedMsg carries what one search of GitHub for review requests found.
 type requestsLoadedMsg struct{ fetched requests.Fetched }

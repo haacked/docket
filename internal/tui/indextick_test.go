@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/haacked/docket/internal/core/config"
+	"github.com/haacked/docket/internal/core/filemark"
 	"github.com/haacked/docket/internal/core/index"
 	"github.com/haacked/docket/internal/core/review"
 	"github.com/haacked/docket/internal/core/session"
@@ -124,21 +125,21 @@ func TestLoadedCarriesNoStampUnlikeLoadRecords(t *testing.T) {
 	if !ok {
 		t.Fatalf("loaded() produced %#v, want a recordsLoadedMsg", got)
 	}
-	if msg.stamp != (index.StatMark{}) {
+	if msg.stamp != (filemark.Mark{}) {
 		t.Errorf("loaded() carried a non-zero stamp %+v, want the zero value", msg.stamp)
 	}
 }
 
 // Calling a tea.Batch command returns the tea.BatchMsg of its children
 // without running them, so this is safe against the nil-svc app().
-func TestIndexTickBatchesTheCheckAndTheNextArm(t *testing.T) {
+func TestIndexTickBatchesTheChecksAndTheNextArm(t *testing.T) {
 	_, cmd := app().Update(indexTickMsg{})
 	if cmd == nil {
 		t.Fatal("indexTickMsg produced no command")
 	}
 
 	batch, ok := cmd().(tea.BatchMsg)
-	if !ok || len(batch) != 2 {
-		t.Fatalf("indexTickMsg produced %#v, want a batch of the check and the next tick", cmd())
+	if !ok || len(batch) != 3 {
+		t.Fatalf("indexTickMsg produced %#v, want a batch of the index check, the config check, and the next tick", cmd())
 	}
 }

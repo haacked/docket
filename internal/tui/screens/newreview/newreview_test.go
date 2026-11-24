@@ -19,14 +19,14 @@ func typed(m Model, text string) Model {
 	return m
 }
 
-func TestEnterStartsAReviewOfWhatWasTyped(t *testing.T) {
+func TestEnterStartsAReviewOfThePullRequestTyped(t *testing.T) {
 	m := typed(model(), "https://github.com/haacked/docket/pull/7")
 
 	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("enter produced no command")
 	}
-	want := msg.StartReview{Input: "https://github.com/haacked/docket/pull/7", Engine: "claude"}
+	want := msg.StartReview{Input: "haacked/docket#7", Engine: "claude"}
 	if got := cmd(); got != want {
 		t.Errorf("got %#v, want %#v", got, want)
 	}
@@ -58,8 +58,8 @@ func TestABareNumberWorksWithADefaultRepo(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("enter produced no command")
 	}
-	if got := cmd().(msg.StartReview).Input; got != "123" {
-		t.Errorf("input = %q, want %q", got, "123")
+	if got := cmd().(msg.StartReview).Input; got != "haacked/docket#123" {
+		t.Errorf("input = %q, want %q", got, "haacked/docket#123")
 	}
 }
 
@@ -123,7 +123,7 @@ func TestBackgroundTogglesAndReachesTheIntent(t *testing.T) {
 		t.Fatal("enter produced no command")
 	}
 	want := msg.StartReview{
-		Input:      "https://github.com/haacked/docket/pull/7",
+		Input:      "haacked/docket#7",
 		Engine:     "claude",
 		Background: true,
 	}

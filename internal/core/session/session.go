@@ -18,6 +18,7 @@ import (
 	"github.com/haacked/docket/internal/core/config"
 	"github.com/haacked/docket/internal/core/engine"
 	"github.com/haacked/docket/internal/core/exec"
+	"github.com/haacked/docket/internal/core/filemark"
 	"github.com/haacked/docket/internal/core/gh"
 	"github.com/haacked/docket/internal/core/git"
 	"github.com/haacked/docket/internal/core/index"
@@ -31,6 +32,8 @@ import (
 
 // Service holds everything a review needs and owns every write to the index.
 type Service struct {
+	// Cfg is config.toml as last read. ReloadConfig replaces the keys that
+	// config.Reloaded names, so read it through Config.
 	Cfg    config.Config
 	Paths  config.Paths
 	Store  *index.Store
@@ -61,13 +64,20 @@ type Service struct {
 	idleMu   sync.Mutex
 	idleSeen map[string]time.Time
 
-	// cfgMu guards config.toml and the fields of Cfg that change after startup:
-	// the login and the teams. The poll can cache the login while the teams
-	// screen saves the teams. Without the lock, the rename that lands last drops
-	// the other write's key, and a search can read the teams mid-save. The lock
-	// covers this process only. Two docket instances that write config.toml at
-	// the same moment can still drop each other's key.
+	// cfgMu guards config.toml, Cfg, cfgMark, and cfgStatErr. The poll can
+	// cache the login while the teams screen saves the teams and a reload reads
+	// the file. Without the lock, the rename that lands last drops the other write's key,
+	// and a search can read the teams mid-save. The lock covers this process
+	// only. Two docket instances that write config.toml at the same moment can
+	// still drop each other's key.
 	cfgMu sync.Mutex
+	// cfgMark is config.toml's Mark as ReloadConfig last read it. It starts
+	// zero, so the first ReloadConfig reads the file whatever happened to it
+	// after startup.
+	cfgMark filemark.Mark
+	// cfgStatErr is the last stat of config.toml that failed, or empty when
+	// the last stat worked.
+	cfgStatErr string
 }
 
 // Config is a copy of Cfg taken under the lock that its writers hold.
@@ -75,6 +85,55 @@ func (s *Service) Config() config.Config {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 	return s.Cfg
+}
+
+// ReloadConfig reads config.toml again when its Mark has changed since the
+// last read, takes the keys config.Reloaded names from it, and reports whether
+// it read the file. A file that does not load leaves Cfg as it was and returns
+// the error. The Mark still moves on, so each edit reports its error once.
+//
+// An empty or missing file leaves Cfg and the Mark as they were. An editor that
+// truncates the file before it writes shows docket an empty file, which would
+// otherwise start reviews under the default account alone. ReloadConfig decides
+// that on the bytes it parses, because the file can change after the stat.
+//
+// A stat that fails leaves Cfg as it was and returns the error once for each
+// distinct failure. After a failure, every stat that works reads the file even
+// when its Mark has not changed, until a read finds the file and the caller
+// learns that the failure has passed. It writes nothing, so a dry run may call it.
+func (s *Service) ReloadConfig() (loaded bool, err error) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	mark, changed, err := filemark.Changed(s.Paths.Config, s.cfgMark)
+	if err != nil {
+		if err.Error() == s.cfgStatErr {
+			return false, nil
+		}
+		s.cfgStatErr = err.Error()
+		return false, keptSettings(err)
+	}
+	if !changed && s.cfgStatErr == "" {
+		return false, nil
+	}
+	data, err := os.ReadFile(s.Paths.Config)
+	if os.IsNotExist(err) || err == nil && len(data) == 0 {
+		return false, nil
+	}
+	s.cfgStatErr = ""
+	s.cfgMark = mark
+	if err != nil {
+		return false, keptSettings(err)
+	}
+	fresh, err := config.Parse(s.Paths.Config, data)
+	if err != nil {
+		return false, keptSettings(err)
+	}
+	s.Cfg = s.Cfg.Reloaded(fresh)
+	return true, nil
+}
+
+func keptSettings(err error) error {
+	return fmt.Errorf("%w. docket keeps the settings it read before", err)
 }
 
 // Plan is what Prepare worked out, for the UI to show before launching.
@@ -115,12 +174,13 @@ func (s *Service) newID() string {
 // enginePaths are the paths for a record whose claude sessions run under
 // claudeConfig, which is the record's ClaudeConfigDir.
 func (s *Service) enginePaths(claudeConfig string) engine.Paths {
+	cfg := s.Config()
 	return engine.Paths{
-		Grant:          s.Cfg.AgentDirs(),
-		CodexSessions:  s.Cfg.CodexSessionsDir,
+		Grant:          cfg.AgentDirs(),
+		CodexSessions:  cfg.CodexSessionsDir,
 		ClaudeConfig:   claudeConfig,
-		ClaudeJobs:     s.Cfg.ClaudeJobsDir(claudeConfig),
-		ClaudeProjects: s.Cfg.ClaudeProjectsDir(claudeConfig),
+		ClaudeJobs:     cfg.ClaudeJobsDir(claudeConfig),
+		ClaudeProjects: cfg.ClaudeProjectsDir(claudeConfig),
 	}
 }
 
@@ -553,7 +613,7 @@ func (s *Service) Existing(ctx context.Context, ref pr.Ref) (review.Found, error
 	}
 
 	var found review.Found
-	if info, err := os.Stat(s.Cfg.NotesPath(ref.Org, ref.Repo, ref.Number)); err == nil {
+	if info, err := os.Stat(s.Config().NotesPath(ref.Org, ref.Repo, ref.Number)); err == nil {
 		found.NotesAt = info.ModTime()
 	}
 
@@ -586,7 +646,8 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 	if err != nil {
 		return review.Record{}, Plan{}, gh.PRInfo{}, nil, err
 	}
-	claudeDir := s.Cfg.ClaudeConfigDir
+	cfg := s.Config()
+	claudeDir := cfg.ClaudeConfigDir
 	if config.UsesClaudeAccount(eng.Name()) {
 		// Every account can be over its limit. The review starts under the one
 		// that resets first all the same. A limit raised since claude reported
@@ -599,7 +660,7 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 		claudeDir = choice.Account
 	}
 
-	entries := reposconf.ParseFile(s.Cfg.ReposConfPath())
+	entries := reposconf.ParseFile(cfg.ReposConfPath())
 	decided, localClone := tier.Decide(ref, entries, func(path string) bool {
 		return s.Git.IsRepo(ctx, path)
 	})
@@ -607,11 +668,11 @@ func (s *Service) resolve(ctx context.Context, ref pr.Ref, engineName string, mo
 	plan := Plan{
 		Tier:       decided,
 		LocalClone: localClone,
-		NotesPath:  s.Cfg.NotesPath(ref.Org, ref.Repo, ref.Number),
+		NotesPath:  cfg.NotesPath(ref.Org, ref.Repo, ref.Number),
 	}
 	if decided == tier.Tier1 {
 		plan.Dir = s.Paths.Scratch
-		plan.Worktree = s.Cfg.WorktreeDir(ref.Org, ref.Repo, ref.Number)
+		plan.Worktree = cfg.WorktreeDir(ref.Org, ref.Repo, ref.Number)
 	} else {
 		plan.Dir = s.Cloner.Dir(ref)
 	}
@@ -1256,7 +1317,7 @@ func (s *Service) decide(ctx context.Context, rec review.Record) (review.Record,
 	}
 
 	rec.PRState = read.info.State
-	rec.NotesPath = s.Cfg.NotesPath(rec.Ref.Org, rec.Ref.Repo, rec.Ref.Number)
+	rec.NotesPath = s.Config().NotesPath(rec.Ref.Org, rec.Ref.Repo, rec.Ref.Number)
 	state, reviewID := review.Decide(reviews, me, rec.StartedAt, rec.PriorReviewIDs)
 	// Decide cannot produce reviewed. It reads an adopted row with nothing new on
 	// GitHub as unreviewed. Taking that state would drop the reviewed state that

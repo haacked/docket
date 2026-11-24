@@ -13,6 +13,22 @@ import (
 	"github.com/haacked/docket/internal/core/config"
 )
 
+// defaultRotation is the rotation of the config app() builds.
+var defaultRotation = config.Config{}.ClaudeAccounts()
+
+// A read that began before a reload of config.toml describes the old rotation,
+// and it can answer after the read the reload started.
+func TestAnAccountReadForAnOldRotationIsDropped(t *testing.T) {
+	a := New(nil, config.Config{DefaultEngine: "claude"}, "", false)
+	model, _ := a.Update(accountMsg{rotation: defaultRotation, choice: account.Choice{Account: "/opt/claude-b"}})
+
+	model, _ = model.(App).Update(accountMsg{rotation: []string{"/opt/claude-a", "/opt/claude-b"}, choice: account.Choice{Account: "/opt/claude-a"}})
+
+	if got := model.(App).next.choice.Account; got != "/opt/claude-b" {
+		t.Errorf("next = %q, want /opt/claude-b from the current rotation", got)
+	}
+}
+
 func titleLine(a App) string {
 	above, _ := a.chrome()
 	return ansi.Strip(strings.TrimSuffix(above, "\n"))
@@ -24,19 +40,19 @@ func TestTheTitleNamesTheAccountANewReviewRunsUnder(t *testing.T) {
 		next accountMsg
 		want string
 	}{
-		{name: "the default account", next: accountMsg{}, want: "docket · claude account default"},
-		{name: "a named account", next: accountMsg{choice: account.Choice{Account: "/opt/claude-max"}}, want: "docket · claude account /opt/claude-max"},
+		{name: "the default account", next: accountMsg{rotation: defaultRotation}, want: "docket · claude account default"},
+		{name: "a named account", next: accountMsg{rotation: defaultRotation, choice: account.Choice{Account: "/opt/claude-max"}}, want: "docket · claude account /opt/claude-max"},
 		{
 			name: "an account signed in",
-			next: accountMsg{choice: account.Choice{Account: "/opt/claude-max"}, names: account.Names{"/opt/claude-max": "me@home.example Max"}},
+			next: accountMsg{rotation: defaultRotation, choice: account.Choice{Account: "/opt/claude-max"}, names: account.Names{"/opt/claude-max": "me@home.example Max"}},
 			want: "docket · claude account me@home.example Max",
 		},
 		{
 			name: "every account limited",
-			next: accountMsg{choice: account.Choice{Account: "/opt/claude-max", Until: time.Date(2026, 10, 28, 15, 4, 0, 0, time.Local)}},
+			next: accountMsg{rotation: defaultRotation, choice: account.Choice{Account: "/opt/claude-max", Until: time.Date(2026, 10, 28, 15, 4, 0, 0, time.Local)}},
 			want: "docket · every claude account is over its limit until Oct 28 3:04 PM",
 		},
-		{name: "an unreadable log", next: accountMsg{err: errors.New("read limits.jsonl: permission denied")}, want: "docket · claude account unknown: read limits.jsonl: permission denied"},
+		{name: "an unreadable log", next: accountMsg{rotation: defaultRotation, err: errors.New("read limits.jsonl: permission denied")}, want: "docket · claude account unknown: read limits.jsonl: permission denied"},
 	}
 	for _, tc := range tests {
 		a := New(nil, config.Config{DefaultEngine: "claude"}, "", false)
@@ -52,7 +68,7 @@ func TestTheDashboardNamesAccountsByTheirProfiles(t *testing.T) {
 	a := New(nil, config.Config{DefaultEngine: "claude"}, "", false)
 	names := account.Names{"/opt/claude-max": "me@home.example Max"}
 
-	model, _ := a.Update(accountMsg{names: names})
+	model, _ := a.Update(accountMsg{rotation: defaultRotation, names: names})
 
 	if got := model.(App).dash.Accounts.Of("/opt/claude-max"); got != "me@home.example Max" {
 		t.Errorf("the dashboard names the account %q, want its profile", got)
@@ -71,7 +87,6 @@ func TestTheTitleNamesNoAccountBeforeTheFirstRead(t *testing.T) {
 // docket instance records shows up with the index append that follows it.
 func TestAReloadReadsTheNextAccount(t *testing.T) {
 	svc, paths := serviceOverIndex(t)
-	svc.Paths = paths
 	svc.Cfg = config.Config{ClaudeConfigDir: "/opt/claude-a", ClaudeFallbackConfigDirs: []string{"/opt/claude-b"}}
 	now := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
 	svc.Now = func() time.Time { return now }
@@ -98,13 +113,13 @@ func TestAReloadReadsTheNextAccount(t *testing.T) {
 
 func TestTheIndexTickReadsTheAccountOnceARecheckPasses(t *testing.T) {
 	a := New(nil, config.Config{DefaultEngine: "claude"}, "", false)
-	model, _ := a.Update(accountMsg{choice: account.Choice{Account: "/opt/claude-b", Recheck: time.Now().Add(-time.Second)}})
+	model, _ := a.Update(accountMsg{rotation: defaultRotation, choice: account.Choice{Account: "/opt/claude-b", Recheck: time.Now().Add(-time.Second)}})
 	a = model.(App)
 
 	model, cmd := a.Update(indexTickMsg{})
 
-	if n := countCmds(cmd); n != 3 {
-		t.Errorf("the tick ran %d commands, want the index check, the next tick, and the account read", n)
+	if n := countCmds(cmd); n != 4 {
+		t.Errorf("the tick ran %d commands, want the index check, the config check, the next tick, and the account read", n)
 	}
 	if got := model.(App).next.choice.Recheck; !got.IsZero() {
 		t.Errorf("recheck = %v, want zero while the read runs, so the next tick does not read again", got)
@@ -113,13 +128,13 @@ func TestTheIndexTickReadsTheAccountOnceARecheckPasses(t *testing.T) {
 
 func TestTheIndexTickLeavesTheAccountBeforeItsRecheck(t *testing.T) {
 	a := New(nil, config.Config{DefaultEngine: "claude"}, "", false)
-	model, _ := a.Update(accountMsg{choice: account.Choice{Account: "/opt/claude-b", Recheck: time.Now().Add(time.Hour)}})
+	model, _ := a.Update(accountMsg{rotation: defaultRotation, choice: account.Choice{Account: "/opt/claude-b", Recheck: time.Now().Add(time.Hour)}})
 	a = model.(App)
 
 	_, cmd := a.Update(indexTickMsg{})
 
-	if n := countCmds(cmd); n != 2 {
-		t.Errorf("the tick ran %d commands, want only the index check and the next tick", n)
+	if n := countCmds(cmd); n != 3 {
+		t.Errorf("the tick ran %d commands, want only the index check, the config check, and the next tick", n)
 	}
 }
 

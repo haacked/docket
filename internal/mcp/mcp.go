@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -118,6 +119,18 @@ type server struct {
 	mu sync.Mutex
 }
 
+// begin takes mu for one tool call and reloads config.toml, because the server
+// has no tick to notice an edit. It returns the unlock. A file that does not
+// load keeps the settings read before and does not fail the call. The error
+// goes to stderr, which claude keeps in its log of the server.
+func (s *server) begin() func() {
+	s.mu.Lock()
+	if _, err := s.svc.ReloadConfig(); err != nil {
+		fmt.Fprintf(os.Stderr, "docket: %v\n", err)
+	}
+	return s.mu.Unlock
+}
+
 // New builds the server. Every review it starts runs under engineName.
 // engineName must have a background mode, because the server has no terminal
 // to give a session.
@@ -173,8 +186,7 @@ func version() string {
 }
 
 func (s *server) list(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, listOutput, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.begin()()
 	ctx = context.WithoutCancel(ctx)
 
 	records, statuses, err := s.svc.PollBackground(ctx)
@@ -194,8 +206,7 @@ func (s *server) list(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (
 }
 
 func (s *server) start(ctx context.Context, _ *sdk.CallToolRequest, in startInput) (*sdk.CallToolResult, startOutput, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.begin()()
 	ctx = context.WithoutCancel(ctx)
 
 	ref, err := in.ref(s.svc.Config().DefaultRepo)
@@ -342,8 +353,7 @@ func (s *server) poll(ctx context.Context, rec review.Record) (review.Record, er
 }
 
 func (s *server) submit(ctx context.Context, _ *sdk.CallToolRequest, in submitInput) (*sdk.CallToolResult, Review, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.begin()()
 	ctx = context.WithoutCancel(ctx)
 
 	ref, err := in.ref(s.svc.Config().DefaultRepo)
