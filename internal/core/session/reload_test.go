@@ -283,3 +283,40 @@ func TestReloadConfigReportsAStatFailureOnceAndItsRecovery(t *testing.T) {
 		t.Errorf("accounts = %v, want the file's", got)
 	}
 }
+
+// A stat failure stays on show until docket reads the file again, even when
+// the file was missing for a moment after the failure passed.
+func TestReloadConfigClearsAStatFailureOnceTheFileIsBack(t *testing.T) {
+	svc, path := serviceWithAccounts(t)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, err := svc.ReloadConfig(); err == nil {
+		t.Fatal("ReloadConfig returned no error for a stat that failed")
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aside := path + ".aside"
+	if err := os.Rename(path, aside); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, err := svc.ReloadConfig(); err != nil || loaded {
+		t.Fatalf("ReloadConfig of a missing file = %v, %v, want nothing read", loaded, err)
+	}
+
+	if err := os.Rename(aside, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	mustReload(t, svc)
+}

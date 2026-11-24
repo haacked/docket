@@ -98,9 +98,9 @@ func (s *Service) Config() config.Config {
 // that on the bytes it parses, because the file can change after the stat.
 //
 // A stat that fails leaves Cfg as it was and returns the error once for each
-// distinct failure. The first stat that works after a failure reads the file
-// even when its Mark has not changed, so the caller learns that the failure
-// has passed. It writes nothing, so a dry run may call it.
+// distinct failure. After a failure, every stat that works reads the file even
+// when its Mark has not changed, until a read finds the file and the caller
+// learns that the failure has passed. It writes nothing, so a dry run may call it.
 func (s *Service) ReloadConfig() (loaded bool, err error) {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
@@ -112,17 +112,14 @@ func (s *Service) ReloadConfig() (loaded bool, err error) {
 		s.cfgStatErr = err.Error()
 		return false, keptSettings(err)
 	}
-	if s.cfgStatErr != "" {
-		s.cfgStatErr = ""
-		changed = true
-	}
-	if !changed {
+	if !changed && s.cfgStatErr == "" {
 		return false, nil
 	}
 	data, err := os.ReadFile(s.Paths.Config)
 	if os.IsNotExist(err) || err == nil && len(data) == 0 {
 		return false, nil
 	}
+	s.cfgStatErr = ""
 	s.cfgMark = mark
 	if err != nil {
 		return false, keptSettings(err)
